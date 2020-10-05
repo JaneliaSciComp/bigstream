@@ -13,6 +13,9 @@ setuptools.setup(
     install_requires=[
         'numpy',
         'scipy',
+        'scikit-image',
+        'opencv-python',
+
         'dask[complete]',
         'dask-jobqueue',
         'zarr',

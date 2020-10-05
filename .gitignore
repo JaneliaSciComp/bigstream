@@ -1,6 +1,6 @@
 # ignore build files
 build/
-stream.egg-info/
+bigstream.egg-info/
 dist/
 
 # ignore compiled files
@@ -8,4 +8,5 @@ dist/
 
 # ignore swap files
 *~
+*.swp
 

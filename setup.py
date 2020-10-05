@@ -15,9 +15,9 @@ setuptools.setup(
         'scipy',
         'scikit-image',
         'opencv-python',
-
         'dask[complete]',
         'dask-jobqueue',
+
         'zarr',
         'numcodecs',
     ]

@@ -1,0 +1,11 @@
+# ignore build files
+build/
+stream.egg-info/
+dist/
+
+# ignore compiled files
+*.pyc
+
+# ignore swap files
+*~
+

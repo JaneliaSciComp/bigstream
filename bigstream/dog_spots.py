@@ -54,7 +54,7 @@ def dog_filter_3d(
     return np.hstack((coord, intensities, small_sigma_array, big_sigma_array))
 
 
-def prune_neighbors(spots, overlap, distance):
+def prune_neighbors(spots, overlap=0.01, distance=6):
     """
     """
 

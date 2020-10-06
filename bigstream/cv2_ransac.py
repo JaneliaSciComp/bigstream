@@ -6,6 +6,7 @@ def stats(arr):
     """
     """
 
+    arr = arr.astype(np.float64)
     means = np.mean(arr, axis=1)
     sqr_means = np.mean(np.square(arr), axis=1)
     stddevs = np.sqrt( sqr_means - np.square(means) )
@@ -29,7 +30,9 @@ def pairwise_correlation(A, B):
     b_cent = b_con - b_mean[..., None]
 
     # compute pairwise correlations
-    return np.matmul(a_cent, b_cent.T) / a_std[..., None] / b_std[None, ...] / a_cent.shape[1]
+    correlations = np.matmul(a_cent, b_cent.T) / a_std[..., None] / b_std[None, ...] / a_cent.shape[1]
+    correlations[np.isnan(correlations)] = 0
+    return correlations
 
 
 def match_points(A, B, scores, threshold):
@@ -46,7 +49,7 @@ def match_points(A, B, scores, threshold):
     keeps = scores[(a_indcs, best_indcs)] > threshold
 
     # return positions of corresponding points
-    return a_pos[keeps], b_pos[best_indcs[keeps]]
+    return a_pos[keeps, :3], b_pos[best_indcs[keeps], :3]
 
 
 def ransac_align_points(pA, pB, threshold):

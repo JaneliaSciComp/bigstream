@@ -10,6 +10,7 @@ def difference_of_gaussians_3d(image, big_sigma, small_sigma):
     """
     """
 
+    # TODO: TEST IF SEPARATE GAUSSIAN CONVOLUTIONS IS FASTER THAN ARBITRARY CONVOLVE
     x = int(round(2*big_sigma))
     x = np.arange(-x, x+.5, 1)
     x = np.moveaxis(np.array(np.meshgrid(x, x, x)), 0, -1)
@@ -27,7 +28,7 @@ def local_max_points(image, min_distance=3, threshold=None):
         mask = np.logical_and(image == image_max, image >= threshold)
     else:
         mask = image == image_max
-    return column_stack(np.nonzero(mask))
+    return np.column_stack(np.nonzero(mask))
 
 
 def dog_filter_3d(
@@ -79,7 +80,7 @@ def get_context(image, position, radius):
     """
     """
 
-    p, r = position, radius  # shorthand
+    p, r = np.array(position).astype(int), radius  # shorthand
     w = image[p[0]-r:p[0]+r+1, p[1]-r:p[1]+r+1, p[2]-r:p[2]+r+1]
     if np.product(w.shape) != (2*r+1)**3:  # just ignore near the edge
         w = None

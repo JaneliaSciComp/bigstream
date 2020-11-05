@@ -1,22 +1,17 @@
 import numpy as np
-from scipy.ndimage import convolve
-from scipy.ndimage.filters import maximum_filter
-from scipy.stats import multivariate_normal
+from scipy.ndimage import gaussian_filter, maximum_filter
 from scipy.spatial import cKDTree
 from skimage.feature.blob import _blob_overlap
 
 
-def difference_of_gaussians_3d(image, big_sigma, small_sigma):
+def difference_of_gaussians_3d(image, spacing, big_sigma, small_sigma):
     """
     """
 
-    # TODO: TEST IF SEPARATE GAUSSIAN CONVOLUTIONS IS FASTER THAN ARBITRARY CONVOLVE
-    x = int(round(2*big_sigma))
-    x = np.arange(-x, x+.5, 1)
-    x = np.moveaxis(np.array(np.meshgrid(x, x, x)), 0, -1)
-    g1 = multivariate_normal.pdf(x, mean=[0,]*3, cov=np.diag([small_sigma,]*3))
-    g2 = multivariate_normal.pdf(x, mean=[0,]*3, cov=np.diag([big_sigma,]*3))
-    return convolve(image, g1 - g2)
+    spacing = np.array(spacing)
+    g1 = gaussian_filter(image, small_sigma/spacing)
+    g2 = gaussian_filter(image, big_sigma/spacing)
+    return g1 - g2
 
 
 def local_max_points(image, min_distance=3, threshold=None):
@@ -33,8 +28,9 @@ def local_max_points(image, min_distance=3, threshold=None):
 
 def dog_filter_3d(
     image,
-    big_sigma=1.6,
-    small_sigma=1,
+    image_spacing,
+    big_sigma=6.0,
+    small_sigma=3.5,
     threshold=2.0,
     min_distance=5,
     ):
@@ -42,7 +38,7 @@ def dog_filter_3d(
     """
 
     # get dog locations with intensity greater than threshold
-    dog = difference_of_gaussians_3d(image, big_sigma, small_sigma)
+    dog = difference_of_gaussians_3d(image, image_spacing, big_sigma, small_sigma)
     coord = local_max_points(dog, min_distance=min_distance)
     intensities = image[coord[:,0], coord[:,1], coord[:,2]]
     filtered = intensities > threshold
@@ -80,7 +76,7 @@ def get_context(image, position, radius):
     """
     """
 
-    p, r = np.array(position).astype(int), radius  # shorthand
+    p, r = np.round(position).astype(int), radius  # shorthand
     w = image[p[0]-r:p[0]+r+1, p[1]-r:p[1]+r+1, p[2]-r:p[2]+r+1]
     if np.product(w.shape) != (2*r+1)**3:  # just ignore near the edge
         w = None

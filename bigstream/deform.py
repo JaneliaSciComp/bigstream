@@ -4,6 +4,7 @@ from bigstream import distributed
 import dask.array as da
 import zarr
 from numcodecs import Blosc
+from itertools import product
 
 
 def deformable_align(
@@ -36,24 +37,64 @@ def deformable_align(
     return register.get_warp()
 
 
-def slice_dict(xy_overlap, z_overlap):
+def slices_and_weights(overlaps):
     """
     """
 
-    a = slice(None, None)
-    b = slice(-xy_overlap, None)
-    c = slice(None, xy_overlap)
-    d = slice(-z_overlap, None)
-    e = slice(None, z_overlap)
+    # all neighbor offsets
+    N = np.array(list(product((-1, 0, 1), repeat=3)))
 
-    SD =   { '100':{'000':(b, a, a), '100':(c, a, a)},
-             '010':{'000':(a, b, a), '010':(a, c, a)},
-             '001':{'000':(a, a, d), '001':(a, a, e)},
-             '110':{'000':(b, b, a), '100':(c, b, a), '010':(b, c, a), '110':(c, c, a)},
-             '101':{'000':(b, a, d), '001':(b, a, e), '100':(c, a, d), '101':(c, a, e)},
-             '011':{'000':(a, b, d), '010':(a, c, d), '001':(a, b, e), '011':(a, c, e)},
-             '111':{'000':(b, b, d), '100':(c, b, d), '010':(b, c, d), '001':(b, b, e),
-                    '111':(c, c, e), '011':(b, c, e), '101':(c, b, e), '110':(c, c, d)} }
+    # elemental weight arrays and functions for combining them
+    x = [np.linspace(.5, 1, o) for o in overlaps]
+    y = [np.linspace(.5, 0, o) for o in overlaps]
+    opr = lambda a, b, i: np.expand_dims(np.outer(a, b), i)
+    tpr = lambda a, b, c: np.einsum('i,j,k->ijk', a, b, c)
+
+    # construct slices and weights
+    S, W = {}, {}
+    for n in N:
+
+        # get all neighbors
+        neighbors = True
+        for i in range(3):
+            if   n[i] == -1: neighbors *= (N[:, i] == -1) + (N[:, i] == 0)
+            elif n[i] ==  0: neighbors *= (N[:, i] == 0)
+            elif n[i] ==  1: neighbors *= (N[:, i] == 1)  + (N[:, i] == 0)
+        neighbors = N[neighbors]
+
+        # determine slices for all neighbors
+        s = {}
+        for nn in neighbors:
+            slices = []
+            for i in range(3):
+                o = overlaps[i]
+                if   n[i] ==  0: slices.append(slice(None, None))
+                elif n[i] ==  1 and nn[i] ==  0: slices.append(slice(-3*o, -2*o))
+                elif n[i] ==  1 and nn[i] ==  1: slices.append(slice(  -o, None))
+                elif n[i] == -1 and nn[i] ==  0: slices.append(slice( 2*o,  3*o))
+                elif n[i] == -1 and nn[i] == -1: slices.append(slice(None,    o))
+            s[tuple(nn)] = tuple(slices)
+        S[tuple(n)] = s
+
+        # determine linear blending weights for all neighbors
+        w = {}
+        for nn in neighbors:
+            elemental_weights = []
+
+            if   np.sum(np.abs(nn)) == 1:
+                new_dims = tuple(i if x == 0 for i, x in enumerate(n))
+                
+                
+            elif np.sum(np.abs(nn)) == 2:
+            elif np.sum(np.abs(nn)) == 3:
+            
+
+
+    return S, W
+
+
+
+
 
     w   = np.linspace(0, 1, xy_overlap)
     x   = np.linspace(1, 0, xy_overlap)
@@ -71,25 +112,43 @@ def slice_dict(xy_overlap, z_overlap):
              '111':{'000':trp(x,x,z), '100':trp(w,x,z), '010':trp(x,w,z), '001':trp(x,x,y),
                     '111':trp(w,w,y), '011':trp(x,w,y), '101':trp(w,x,y), '110':trp(w,w,z)} }
 
-    return SD, W
+    return S, W
 
 
 def merge_neighbors(block, overlaps, block_info=None):
     """
     """
 
-    # get the block index
-    block_index = block_info[0]['chunk-location']
+    # get all position information
+    array_shape = block_info[None]['shape']
+    array_index = block_info[None]['array-location']
+    block_shape = block_info[None]['chunk-shape']
+    block_index = block_info[None]['chunk-location']
 
-    # iterate over dimensions
+    # get the slices and weights needed for averaging
+    S, W = slice_dict(overlaps)
+
+    # probably need to iterate over binary strings instead and take sums for ones/twos/threes
+    # ONES: iterate over dimensions
     for axis in range(3):
-
         # average on the low end
         if block_index[axis] != 0:
-
-
         # average on the high end
-        # TODO: criteria for being an end block?
+        if array_index[axis] + block_shape[axis] < array_shape[axis]:
+
+    # TWOS: iterate over dimensions
+    for axis in range(3):
+        # average on the low end
+        if block_index[axis] != 0:
+        # average on the high end
+        if array_index[axis] + block_shape[axis] < array_shape[axis]:
+
+    # THREES: iterate over dimensions
+    for axis in range(3):
+        # average on the low end
+        if block_index[axis] != 0:
+        # average on the high end
+        if array_index[axis] + block_shape[axis] < array_shape[axis]:
 
 
         # TODO: do double and triple overlap regions separately?

@@ -1,6 +1,6 @@
 import numpy as np
-from bigstream import dog_spots
-from bigstream import cv2_ransac
+from bigstream import features
+from bigstream import ransac
 from bigstream import distributed
 import dask.array as da
 
@@ -17,8 +17,8 @@ def dog_ransac_affine(
     """
 
     # get spots
-    fixed_spots = dog_spots.dog_filter_3d(fixed)
-    moving_spots = dog_spots.dog_filter_3d(moving)
+    fixed_spots = features.dog_filter_3d(fixed, fixed_vox)
+    moving_spots = features.dog_filter_3d(moving, moving_vox)
 
     # need a practical number of spots
     spot_limit = 100000
@@ -31,8 +31,8 @@ def dog_ransac_affine(
 
 
     # filter overlapping blobs
-    fixed_spots = dog_spots.prune_neighbors(fixed_spots)
-    moving_spots = dog_spots.prune_neighbors(moving_spots)
+    fixed_spots = features.prune_neighbors(fixed_spots)
+    moving_spots = features.prune_neighbors(moving_spots)
 
     # sort
     sort_idx = np.argsort(fixed_spots[:, 3])[::-1]
@@ -41,17 +41,17 @@ def dog_ransac_affine(
     moving_spots = moving_spots[sort_idx, :][:nspots]
 
     # get contexts
-    fixed_spots = dog_spots.get_all_context(fixed, fixed_spots, cc_radius)
-    moving_spots = dog_spots.get_all_context(moving, moving_spots, cc_radius)
+    fixed_spots = features.get_all_context(fixed, fixed_spots, cc_radius)
+    moving_spots = features.get_all_context(moving, moving_spots, cc_radius)
 
     # get point correspondences
-    correlations = cv2_ransac.pairwise_correlation(fixed_spots, moving_spots)
-    fixed_spots, moving_spots = cv2_ransac.match_points(
+    correlations = ransac.pairwise_correlation(fixed_spots, moving_spots)
+    fixed_spots, moving_spots = ransac.match_points(
         fixed_spots, moving_spots, correlations, match_threshold,
     )
 
     # align
-    return cv2_ransac.ransac_align_points(fixed_spots, moving_spots, align_threshold)
+    return ransac.ransac_align_points(fixed_spots, moving_spots, align_threshold)
 
 
 def interpolate_affines(affines):

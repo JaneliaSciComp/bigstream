@@ -30,4 +30,10 @@ def interpolate_image(image, X, order=1):
     return map_coordinates(image, X, order=order, mode='constant')
 
 
+def apply_global_affine(fix, mov, fix_spacing, mov_spacing, affine, order=1):
+    """
+    """
 
+    grid = position_grid(fix.shape) * fix_spacing
+    coords = affine_to_grid(affine, grid)
+    return interpolate_image(mov, coords, order=order) 

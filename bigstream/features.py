@@ -44,7 +44,7 @@ def dog_filter_3d(
     filtered = intensities > threshold
 
     # concat all results and return
-    coord = coord[filtered]
+    coord = coord[filtered] * image_spacing  # points are in physical units
     intensities = intensities[filtered][..., np.newaxis]
     small_sigma_array = np.full((sum(filtered), 1), small_sigma)
     big_sigma_array = np.full((sum(filtered), 1), big_sigma)
@@ -83,12 +83,13 @@ def get_context(image, position, radius):
     return w
 
 
-def get_all_context(image, spots, radius):
+def get_all_context(image, spots, vox, radius):
     """
     """
 
     output = []
     for spot in spots:
+        spot[:3] = spot[:3] / vox  # points were in physical units, need voxel units
         context = get_context(image, spot, radius)
         if context is not None:
             output.append([spot, context])

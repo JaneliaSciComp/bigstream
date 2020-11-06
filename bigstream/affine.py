@@ -41,8 +41,8 @@ def dog_ransac_affine(
     moving_spots = moving_spots[sort_idx, :][:nspots]
 
     # get contexts
-    fixed_spots = features.get_all_context(fixed, fixed_spots, cc_radius)
-    moving_spots = features.get_all_context(moving, moving_spots, cc_radius)
+    fixed_spots = features.get_all_context(fixed, fixed_spots, fixed_vox, cc_radius)
+    moving_spots = features.get_all_context(moving, moving_spots, moving_vox, cc_radius)
 
     # get point correspondences
     correlations = ransac.pairwise_correlation(fixed_spots, moving_spots)

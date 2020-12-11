@@ -89,8 +89,8 @@ def dog_ransac_affine_distributed(
         ds.scaleCluster(njobs=nblocks)
 
         # wrap images as dask arrays
-        fixed_da = da.from_array(fixed, chunks=blocksize).transpose(2,1,0)
-        moving_da = da.from_array(moving, chunks=blocksize).transpose(2,1,0)
+        fixed_da = da.from_array(fixed, chunks=blocksize)
+        moving_da = da.from_array(moving, chunks=blocksize)
 
         # wrap affine function
         def my_dog_ransac_affine(x, y):

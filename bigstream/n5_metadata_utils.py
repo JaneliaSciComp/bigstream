@@ -1,4 +1,5 @@
-import z5py
+
+# TODO: replace json access to metadata with zarr attributes
 import json
 import numpy as np
 

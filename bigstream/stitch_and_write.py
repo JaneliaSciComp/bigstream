@@ -3,8 +3,7 @@ import numpy as np
 import glob
 import nrrd
 from os.path import dirname, isfile
-import z5py
-import json
+import zarr
 import gc
 import n5_metadata_utils as n5mu
 from itertools import product
@@ -35,17 +34,17 @@ def read_fields(neighbors, suffix):
 # WRITERS
 def create_n5_dataset(n5_path, subpath, sh, xy_overlap, z_overlap):
     sh = tuple([x.item() for x in sh])
-    n5im = z5py.File(n5_path, use_zarr_format=False)
+    n5im = zarr.open(store=zarr.N5Store(n5_path), mode='w')
     try:
         n5im.create_dataset('/c0'+subpath, shape=sh[::-1], 
                             chunks=(z_overlap, xy_overlap, xy_overlap),
-                            dtype=np.float32, level=9)
+                            dtype=np.float32)
         n5im.create_dataset('/c1'+subpath, shape=sh[::-1],
                             chunks=(z_overlap, xy_overlap, xy_overlap),
-                            dtype=np.float32, level=9)
+                            dtype=np.float32)
         n5im.create_dataset('/c2'+subpath, shape=sh[::-1],
                             chunks=(z_overlap, xy_overlap, xy_overlap),
-                            dtype=np.float32, level=9)
+                            dtype=np.float32)
     except Exception as e:
         # TODO: should only pass if it's a "File already exists" exception
         pass

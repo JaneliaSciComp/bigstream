@@ -1,6 +1,5 @@
-import z5py
+import zarr
 import numpy as np
-import json
 import sys
 import n5_metadata_utils as n5mu
 from scipy.ndimage import map_coordinates
@@ -27,26 +26,24 @@ def interpolate_image(img, X, order=1):
 
 
 def read_n5_data(n5_path, subpath):
-    im = z5py.File(n5_path, use_zarr_format=False)[subpath][:, :, :]
-    return np.moveaxis(im, (0, 2), (2, 0))
+    im = zarr.open(store=zarr.N5Store(n5_path), mode='r')[subpath]
+    return im[...].transpose(2, 1, 0)  # zarr loads zyx order
 
 
 def write_n5(n5_path, subpath, im):
-    im = np.moveaxis(im, (0, 2), (2, 0))
-    out = z5py.File(n5_path, use_zarr_format=False)
+    im = im.transpose(2, 1, 0)  # zarr writes zyx order
+    out = zarr.open(store=zarr.N5Store(n5_path), mode='w')
     out.create_dataset(subpath, shape=im.shape, chunks=(70, 128, 128), dtype=im.dtype)
     out[subpath][:, :, :] = im
 
 
 def read_n5_transform(n5_path, subpath):
-    with open(n5_path + '/c0' + subpath + '/attributes.json') as atts:
-        atts = json.load(atts)
-    grid = tuple(atts['dimensions'])
+    txm_n5 = zarr.open(store=zarr.N5Store(n5_path), mode='r')
+    grid = txm_n5['/c0'+subpath].shape[::-1]
     txm = np.empty(grid + (3,))
-    txm_n5 = z5py.File(n5_path, use_zarr_format=False)
-    txm[..., 0] = np.moveaxis(txm_n5['/c0'+subpath][:, :, :], (0, 2), (2, 0))
-    txm[..., 1] = np.moveaxis(txm_n5['/c1'+subpath][:, :, :], (0, 2), (2, 0))
-    txm[..., 2] = np.moveaxis(txm_n5['/c2'+subpath][:, :, :], (0, 2), (2, 0))
+    txm[..., 0] = txm_n5['/c0'+subpath][...].transpose(2, 1, 0)
+    txm[..., 1] = txm_n5['/c1'+subpath][...].transpose(2, 1, 0)
+    txm[..., 2] = txm_n5['/c2'+subpath][...].transpose(2, 1, 0)
     return txm
 
 

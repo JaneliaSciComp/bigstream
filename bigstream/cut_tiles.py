@@ -1,7 +1,5 @@
 #!/groups/scicompsoft/home/fleishmang/bin/miniconda3/bin/python3
 
-import z5py
-import json
 import sys
 import numpy as np
 import n5_metadata_utils as n5mu

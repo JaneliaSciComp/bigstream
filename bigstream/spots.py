@@ -6,7 +6,6 @@
 
 # Modified by GF for local testing
 
-import z5py, json
 from scipy import spatial
 from scipy.ndimage import convolve, map_coordinates
 from scipy.ndimage.filters import maximum_filter
@@ -105,8 +104,8 @@ radius        = np.uint16(sys.argv[5])
 spotNum       = np.uint16(sys.argv[6])
 
 # get the data
-# z5py formats data (z, y, x) by default
-z5im = z5py.File(img_path, use_zarr_format=False)[img_subpath]
+# zarr reads data as zyx
+zarr_im = zarr.open(store=zarr.N5Store(img_path), mode='r')[img_subpath]
 vox = n5mu.read_voxel_spacing(img_path, img_subpath).astype(np.float64)
 if mode != 'coarse':
     offset, extent = read_coords(mode)
@@ -114,9 +113,9 @@ if mode != 'coarse':
     ee = oo + np.round(extent/vox).astype(np.int16)
     oo_rad = np.maximum(0, oo-radius)
     ee_rad = ee + radius
-    im = z5im[oo_rad[2]:ee_rad[2], oo_rad[1]:ee_rad[1], oo_rad[0]:ee_rad[0]]
+    im = zarr_im[oo_rad[2]:ee_rad[2], oo_rad[1]:ee_rad[1], oo_rad[0]:ee_rad[0]]
 else:
-    im = z5im[:, :, :]
+    im = zarr_im[:, :, :]
 im = np.moveaxis(im, (0, 2), (2, 0))
 im = im.astype(np.float64)
 

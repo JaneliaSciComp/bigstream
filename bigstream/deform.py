@@ -1,10 +1,7 @@
 import sys
-# temporary hack for importing greedypy module
-sys.path += ['/groups/scicompsoft/home/fleishmang/source/greedypy']
-import json
 import numpy as np
 import n5_metadata_utils as n5mu
-import greedypy as gp
+import greedypy.greedypy as gp
 
 
 def read_coords(path):

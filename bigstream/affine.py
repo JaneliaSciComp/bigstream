@@ -8,8 +8,8 @@ import dask.array as da
 def dog_ransac_affine(
     fixed, moving,
     fixed_vox, moving_vox,
-    cc_radius,
     nspots,
+    cc_radius,
     match_threshold,
     align_threshold,
 ):
@@ -65,8 +65,8 @@ def interpolate_affines(affines):
 def dog_ransac_affine_distributed(
     fixed, moving,
     fixed_vox, moving_vox,
-    cc_radius,
     nspots,
+    cc_radius,
     match_threshold,
     align_threshold,
     blocksize=[256,]*3,
@@ -96,7 +96,7 @@ def dog_ransac_affine_distributed(
         def my_dog_ransac_affine(x, y):
             affine = dog_ransac_affine(
                 x, y, fixed_vox, moving_vox,
-                cc_radius, nspots, match_threshold, align_threshold,
+                nspots, cc_radius, match_threshold, align_threshold,
             )
             return affine.reshape((1,1,1,3,4))
 

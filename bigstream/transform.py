@@ -137,14 +137,16 @@ def global_affine_to_position_field(shape, spacing, affine, output, blocksize=[2
         return coords_disk
 
 
-def local_affine_to_position_field(shape, spacing, local_affines, output, blocksize=[256,]*3):
+def local_affine_to_position_field(shape, spacing, local_affines, output,
+    blocksize=[256,]*3, block_multiplier=[1,]*3,
+    ):
     """
     """
 
     with distributed.distributedState() as ds:
 
         # get number of jobs needed
-        block_grid = np.ceil(np.array(shape) / blocksize).astype(int)
+        block_grid = local_affines.shape[:3]
         nblocks = np.prod(block_grid)
 
         # set up the cluster
@@ -158,6 +160,8 @@ def local_affine_to_position_field(shape, spacing, local_affines, output, blocks
         # augment the blocksize by the fixed overlap size
         pads = [2*int(round(x/8)) for x in blocksize]
         blocksize_with_overlap = np.array(blocksize) + pads
+        blocksize_with_overlap = blocksize_with_overlap * block_multiplier
+        
 
         # get a grid used for each affine
         grid = position_grid_dask(blocksize_with_overlap, list(blocksize_with_overlap))
@@ -175,8 +179,9 @@ def local_affine_to_position_field(shape, spacing, local_affines, output, blocks
         # stitch affine position fields
         coords = stitch.stitch_fields(coords, blocksize)
 
-        # crop to original shape
+        # crop to original shape and rechunk
         coords = coords[:shape[0], :shape[1], :shape[2]]
+        coords = coords.rechunk(tuple(blocksize + [1,]))
 
         # convert to position field
         coords = coords + position_grid_dask(shape, blocksize) * spacing.astype(np.float32)

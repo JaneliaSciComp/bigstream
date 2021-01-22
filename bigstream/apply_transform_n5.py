@@ -32,7 +32,7 @@ def read_n5_data(n5_path, subpath):
 
 def write_n5(n5_path, subpath, im):
     im = im.transpose(2, 1, 0)  # zarr writes zyx order
-    out = zarr.open(store=zarr.N5Store(n5_path), mode='w')
+    out = zarr.open(store=zarr.N5Store(n5_path), mode='a')
     out.create_dataset(subpath, shape=im.shape, chunks=(70, 128, 128), dtype=im.dtype)
     out[subpath][:, :, :] = im
 

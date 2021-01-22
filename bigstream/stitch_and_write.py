@@ -34,7 +34,7 @@ def read_fields(neighbors, suffix):
 # WRITERS
 def create_n5_dataset(n5_path, subpath, sh, xy_overlap, z_overlap):
     sh = tuple([x.item() for x in sh])
-    n5im = zarr.open(store=zarr.N5Store(n5_path), mode='w')
+    n5im = zarr.open(store=zarr.N5Store(n5_path), mode='a')
     try:
         n5im.create_dataset('/c0'+subpath, shape=sh[::-1], 
                             chunks=(z_overlap, xy_overlap, xy_overlap),

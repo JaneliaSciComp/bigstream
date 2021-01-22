@@ -2,11 +2,11 @@
 
 
 # the fixed n5 image
-fixed="/nrs/multifish/Yuhan/LHA3/R3_LHA3/export.n5"
+fixed="/nrs/scicompsoft/goinac/multifish/ex1/LHA3_R3/stitching_kr/export.n5"
 # the moving n5 image
-moving="/nrs/multifish/Yuhan/LHA3/R5_LHA3/export.n5"
+moving="/nrs/scicompsoft/goinac/multifish/ex1/LHA3_R5/stitching_kr/export.n5"
 # the folder where you'd like all outputs to be written
-outdir="/groups/multifish/multifish/fleishmang/alignments/LHA_R5_TO_R3"
+outdir="/nrs/scicompsoft/goinac/multifish/ex1/greg_test"
 
 
 # the channel used to drive registration
@@ -33,7 +33,7 @@ auto_mask="0"
 
 
 # DO NOT EDIT BELOW THIS LINE
-big_stream='/groups/multifish/multifish/fleishmang/stream/stream.sh'
+big_stream='/nrs/scicompsoft/goinac/multifish/ex1/greg_test/bigstream/bigstream/stream.sh'
 bash "$big_stream" "$fixed" "$moving" "$outdir" "$channel" \
      "$aff_scale" "$def_scale" "$xy_stride" "$z_stride" \
      "$spots_cc_radius" "$spots_spot_number" \

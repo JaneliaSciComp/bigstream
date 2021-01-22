@@ -10,6 +10,7 @@ from scipy import spatial
 from scipy.ndimage import convolve, map_coordinates
 from scipy.ndimage.filters import maximum_filter
 from scipy.stats import multivariate_normal
+import zarr
 import numpy as np
 import sys
 import pickle

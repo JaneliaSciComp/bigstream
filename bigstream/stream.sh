@@ -2,9 +2,10 @@
 
 
 function get_job_dependency {
-  dependencies=$( echo ${1?} | tr "," "\n" )
-  for dep in ${dependencies[@]}; do
-      bjobs_lines=`bjobs -J "${dep}"`
+  unset dependency_string
+  IFS="," read -a dependencies <<< "${1?}"
+  for dep in "${dependencies[@]}"; do
+      bjobs_lines=`bjobs -J "$dep"`
       jobids=`echo "$bjobs_lines" | cut -f 1 -d' ' | tail -n +2 | uniq`
       for jobid in ${jobids[@]}; do
         dependency_string="${dependency_string}ended($jobid)&&"

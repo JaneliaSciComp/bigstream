@@ -40,8 +40,8 @@ function initialize_environment {
   affdir="${outdir}/aff";     mkdir -p $affdir
   tiledir="${outdir}/tiles";  mkdir -p $tiledir
   BILLING='multifish'
-  PYTHON='/groups/scicompsoft/home/fleishmang/bin/miniconda3/bin/python3'
-  SCRIPTS='/groups/multifish/multifish/fleishmang/stream'
+  PYTHON='/groups/scicompsoft/home/fleishmang/bin/miniconda3/envs/bigstream_test/bin/python'
+  SCRIPTS='/nrs/scicompsoft/goinac/multifish/ex1/greg_test/bigstream/bigstream'
   CUT_TILES="$PYTHON ${SCRIPTS}/cut_tiles.py"
   SPOTS="$PYTHON ${SCRIPTS}/spots.py"
   RANSAC="$PYTHON ${SCRIPTS}/ransac.py"
@@ -115,6 +115,11 @@ for tile in $( ls -d ${tiledir}/*[0-9] ); do
   $RANSAC ${tile}/fixed_spots.pkl ${tile}/moving_spots.pkl ${tile}/ransac_affine.mat \
           $ransac_cc_cutoff $ransac_dist_threshold
 done
+
+while [[ ! -f ${tiledir}/0/ransac_affine.mat ]]; do
+    sleep 1
+done
+sleep 5
 
 submit "interpolate_affines" 'ransac*' 1 \
 $INTERPOLATE_AFFINES $tiledir

@@ -17,12 +17,12 @@ function get_job_dependency {
 
 
 function submit {
-    name=${1?};       shift
-    dependency=${1?}; shift
-    cores=${1?};      shift
+    name="${1?}";       shift
+    dependency="${1?}"; shift
+    cores="${1?}";      shift
     execute="$@"
 
-    [[ -z "$dependency" ]] || dependency=$(get_job_dependency $dependency)
+    [[ -z "$dependency" ]] || dependency=$(get_job_dependency "$dependency")
     [[ -z "$dependency" ]] || dependency="-w $dependency"
 
     bsub -J $name \

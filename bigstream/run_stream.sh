@@ -8,10 +8,6 @@ moving="/nrs/scicompsoft/goinac/multifish/ex1/LHA3_R5/stitching_kr/export.n5"
 # the folder where you'd like all outputs to be written
 outdir="/nrs/scicompsoft/goinac/multifish/ex1/greg_test"
 
-# REQUIRED
-# project code
-pcode=""
-
 
 # the channel used to drive registration
 channel="c2"

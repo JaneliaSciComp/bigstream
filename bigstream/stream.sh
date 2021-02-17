@@ -39,7 +39,7 @@ function initialize_environment {
   logdir="${outdir}/logs";    mkdir -p $logdir
   affdir="${outdir}/aff";     mkdir -p $affdir
   tiledir="${outdir}/tiles";  mkdir -p $tiledir
-  BILLING='multifish'
+  BILLING="$pcode"
   PYTHON='/groups/scicompsoft/home/fleishmang/bin/miniconda3/envs/bigstream_test/bin/python'
   SCRIPTS='/nrs/scicompsoft/goinac/multifish/ex1/greg_test/bigstream/bigstream'
   CUT_TILES="$PYTHON ${SCRIPTS}/cut_tiles.py"
@@ -66,6 +66,7 @@ ransac_cc_cutoff=${1?}; shift
 ransac_dist_threshold=${1?}; shift
 deform_iterations=${1?}; shift
 deform_auto_mask=${1?}; shift
+pcode=${1?}; shift
 
 xy_overlap=$(( $xy_stride / 8 ))
 z_overlap=$(( $z_stride / 8 ))

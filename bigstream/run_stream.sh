@@ -8,6 +8,10 @@ moving="/nrs/scicompsoft/goinac/multifish/ex1/LHA3_R5/stitching_kr/export.n5"
 # the folder where you'd like all outputs to be written
 outdir="/nrs/scicompsoft/goinac/multifish/ex1/greg_test"
 
+# REQUIRED
+# project code
+pcode=""
+
 
 # the channel used to drive registration
 channel="c2"
@@ -38,5 +42,5 @@ bash "$big_stream" "$fixed" "$moving" "$outdir" "$channel" \
      "$aff_scale" "$def_scale" "$xy_stride" "$z_stride" \
      "$spots_cc_radius" "$spots_spot_number" \
      "$ransac_cc_cutoff" "$ransac_dist_threshold" \
-     "$deform_iterations" "$auto_mask"
+     "$deform_iterations" "$auto_mask" "$pcode"
 

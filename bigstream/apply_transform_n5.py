@@ -84,6 +84,6 @@ if __name__ == '__main__':
         warped_points[:, 1]    = interpolate_image(grid[..., 1], points[:, :3]/vox)
         warped_points[:, 2]    = interpolate_image(grid[..., 2], points[:, :3]/vox)
         warped_points[:, -1]   = points[:, -1]
-        np.savetxt(out_path, warped_points)
+        np.savetxt(out_path, warped_points, delimiter=',')
 
 

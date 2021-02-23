@@ -200,6 +200,7 @@ if __name__ == '__main__':
         lcc = read_fields(neighbors, suffix='/final_lcc.nrrd')
         for key in lcc.keys():
             lcc[key][lcc[key] > 1.0] = 1.0  # typically in noisy regions
+            lcc[key][np.isnan(lcc[key])] = 0.0  # where lcc could not be evaluated
         warps = read_fields(neighbors, suffix='/warp.nrrd')
         updated_warp += reconcile_warps(lcc, warps, xy_overlap, z_overlap)
         del warps; gc.collect()  # need space for inv_warps

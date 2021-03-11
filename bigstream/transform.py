@@ -2,10 +2,10 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 import zarr
 from numcodecs import Blosc
-from bigstream import distributed
 from bigstream import stitch
 import dask.array as da
 from scipy.ndimage import zoom
+from ClusterWrap.clusters import janelia_lsf_cluster
 
 
 def position_grid(shape, dtype=np.uint16):
@@ -105,20 +105,18 @@ def interpolate_image_dask(fix, mov, X, blocksize, margin, order=1, block_info=N
     return np.expand_dims(result, -1)
 
 
-def global_affine_to_position_field(shape, spacing, affine, output, blocksize=[256,]*3):
+def global_affine_to_position_field(
+    shape, spacing, affine, output, blocksize=[256,]*3, cluster_kwargs={},
+):
     """
     """
 
-    with distributed.distributedState() as ds:
+    # get number of jobs needed
+    block_grid = np.ceil(np.array(shape) / blocksize).astype(int)
+    nblocks = np.prod(block_grid)
 
-        # get number of jobs needed
-        block_grid = np.ceil(np.array(shape) / blocksize).astype(int)
-        nblocks = np.prod(block_grid)
-
-        # set up the cluster
-        ds.initializeLSFCluster(job_extra=["-P multifish"])
-        ds.initializeClient()
-        ds.scaleCluster(njobs=nblocks)
+    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+        cluster.scale_cluster(nblocks)
 
         # compute affine transform as position coordinates, lazy dask arrays
         grid = position_grid_dask(shape, blocksize) * spacing.astype(np.float32)
@@ -138,30 +136,25 @@ def global_affine_to_position_field(shape, spacing, affine, output, blocksize=[2
 
 
 def local_affine_to_position_field(shape, spacing, local_affines, output,
-    blocksize=[256,]*3, block_multiplier=[1,]*3,
+    blocksize=[256,]*3, block_multiplier=[1,]*3, cluster_kwargs={},
     ):
     """
     """
 
-    with distributed.distributedState() as ds:
+    # get number of jobs needed
+    block_grid = local_affines.shape[:3]
+    nblocks = np.prod(block_grid)
 
-        # get number of jobs needed
-        block_grid = local_affines.shape[:3]
-        nblocks = np.prod(block_grid)
+    # need lots of RAM per worker
+    cluster_kwargs["cores"] = 4
 
-        # set up the cluster
-        ds.initializeLSFCluster(
-            job_extra=["-P multifish"],
-            cores=4, memory="64GB", ncpus=4, threads_per_worker=8, mem=64000,
-        )
-        ds.initializeClient()
-        ds.scaleCluster(njobs=nblocks)
+    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+        cluster.scale_cluster(nblocks)
 
         # augment the blocksize by the fixed overlap size
         pads = [2*int(round(x/8)) for x in blocksize]
         blocksize_with_overlap = np.array(blocksize) + pads
         blocksize_with_overlap = blocksize_with_overlap * block_multiplier
-        
 
         # get a grid used for each affine
         grid = position_grid_dask(blocksize_with_overlap, list(blocksize_with_overlap))
@@ -207,20 +200,17 @@ def apply_position_field(
     transform_spacing=None,
     transpose=[False,]*3,
     depth=(32, 32, 32),
+    cluster_kwargs={},
 ):
     """
     """
 
-    with distributed.distributedState() as ds:
+    # get number of jobs needed
+    block_grid = np.ceil(np.array(mov.shape) / blocksize).astype(int)
+    nblocks = np.prod(block_grid)
 
-        # get number of jobs needed
-        block_grid = np.ceil(np.array(mov.shape) / blocksize).astype(int)
-        nblocks = np.prod(block_grid)
-
-        # set up the cluster
-        ds.initializeLSFCluster(job_extra=["-P multifish"])
-        ds.initializeClient()
-        ds.scaleCluster(njobs=nblocks)
+    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+        cluster.scale_cluster(nblocks)
 
         # determine mov/fix relative chunking
         m_blocksize = blocksize * fix_spacing / mov_spacing
@@ -285,20 +275,20 @@ def apply_position_field(
         return aligned_disk
 
 
-def compose_position_fields(fields, spacing, output, blocksize=[256,]*3, displacement=None):
+def compose_position_fields(
+    fields, spacing, output,
+    blocksize=[256,]*3, displacement=None,
+    cluster_kwargs={},
+):
     """
     """
 
-    with distributed.distributedState() as ds:
+    # get number of jobs needed
+    block_grid = np.ceil(np.array(fields[0].shape[:-1]) / blocksize).astype(int)
+    nblocks = np.prod(block_grid)
 
-        # get number of jobs needed
-        block_grid = np.ceil(np.array(fields[0].shape[:-1]) / blocksize).astype(int)
-        nblocks = np.prod(block_grid)
-
-        # set up the cluster
-        ds.initializeLSFCluster(job_extra=["-P multifish"])
-        ds.initializeClient()
-        ds.scaleCluster(njobs=nblocks)
+    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+        cluster.scale_cluster(nblocks)
     
         # wrap fields as dask arrays
         fields_da = da.stack([da.from_array(f, chunks=blocksize+[3,]) for f in fields])

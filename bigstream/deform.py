@@ -1,14 +1,13 @@
 import numpy as np
 import greedypy.greedypy_registration_method as gprm
-from bigstream import distributed
 from bigstream import stitch
 from bigstream import transform
 import dask.array as da
 import zarr
 from numcodecs import Blosc
 from itertools import product
+from ClusterWrap.clusters import janelia_lsf_cluster
 
-# TODO: old params, smooth_sigmas=[1, 0]; step=5.0
 
 def deformable_align(
     fixed, moving,
@@ -56,26 +55,22 @@ def deformable_align_distributed(
     smooth_sigmas,
     step,
     blocksize=[256,]*3,
-    cluster_extra=["-P multifish"],
     transpose=False,
+    cluster_kwargs={},
 ):
     """
     """
 
+    # get number of blocks required
+    block_grid = np.ceil(np.array(fixed.shape) / blocksize)
+    nblocks = np.prod(block_grid)
+
+    # we need bigger workers for deformable alignments
+    cluster_kwargs["cores"] = 4
+
     # distributed computations done in cluster context
-    with distributed.distributedState() as ds:
-
-        # get number of blocks required
-        block_grid = np.ceil(np.array(fixed.shape) / blocksize)
-        nblocks = np.prod(block_grid)
-
-        # set up the cluster
-        ds.initializeLSFCluster(
-            job_extra=cluster_extra,
-            cores=4, memory="64GB", ncpus=4, threads_per_worker=8, mem=64000,
-        )
-        ds.initializeClient()
-        ds.scaleCluster(njobs=nblocks)
+    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+        cluster.scale_cluster(nblocks)
 
         # wrap images as dask arrays
         fixed_da = da.from_array(fixed)

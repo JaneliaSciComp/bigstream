@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="bigstream",
-    version="0.0.2",
+    version="0.0.3",
     author="Greg M. Fleishman",
     author_email="greg.nli10me@gmail.com",
     description="Tools for distributed alignment of massive images",
@@ -17,11 +17,7 @@ setuptools.setup(
         'opencv-python',
         'dask',
         'dask[array]',
-        'dask[bag]',
-        'dask[dataframe]',
-        'dask[delayed]',
-        'dask[distributed]',
-        'dask-jobqueue',
+        'ClusterWrap',
         'greedypy',
         'zarr',
         'numcodecs',

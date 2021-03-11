@@ -1,8 +1,8 @@
 import numpy as np
 from bigstream import features
 from bigstream import ransac
-from bigstream import distributed
 import dask.array as da
+from ClusterWrap.clusters import janelia_lsf_cluster
 
 
 def dog_ransac_affine(
@@ -28,7 +28,6 @@ def dog_ransac_affine(
     if moving_spots.shape[0] > spot_limit:
         sort_idx = np.argsort(moving_spots[:, 3])[::-1]
         moving_spots = moving_spots[sort_idx, :][:spot_limit]
-
 
     # filter overlapping blobs
     fixed_spots = features.prune_neighbors(fixed_spots)
@@ -70,7 +69,7 @@ def dog_ransac_affine_distributed(
     match_threshold,
     align_threshold,
     blocksize=[256,]*3,
-    cluster_extra=["-P multifish",]
+    cluster_kwargs={},
 ):
     """
     """
@@ -80,13 +79,8 @@ def dog_ransac_affine_distributed(
     nblocks = np.prod(block_grid)
 
     # distributed computations done in cluster context
-    # TODO: generalize w.r.t. workstations and cluster managers
-    with distributed.distributedState() as ds:
-
-        # set up the cluster
-        ds.initializeLSFCluster(job_extra=cluster_extra)
-        ds.initializeClient()
-        ds.scaleCluster(njobs=nblocks)
+    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+        cluster.scale_cluster(nblocks)
 
         # wrap images as dask arrays
         fixed_da = da.from_array(fixed, chunks=blocksize)

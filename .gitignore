@@ -10,3 +10,5 @@ dist/
 *~
 *.swp
 
+# ignore notebook temporaries
+*.ipynb_checkpoints

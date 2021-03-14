@@ -7,7 +7,7 @@ import dask.array as da
 from scipy.ndimage import zoom
 from ClusterWrap.clusters import janelia_lsf_cluster
 
-WORKER_BUFFER = 4
+WORKER_BUFFER = 8
 
 def position_grid(shape, dtype=np.uint16):
     """
@@ -169,50 +169,6 @@ def local_affines_to_position_field(
         # if user wants to return compute graph w/o executing
         if lazy:
             return coords
-
-
-def _get_origins_and_spans(
-    transform,
-    mov_spacing,
-    transpose,
-    blocksize,
-):
-    """
-    """
-
-    # wrap transform as dask array, define chunks
-    transform_da = transform
-    if not isinstance(transform_da, da.Array):
-        transform_da = da.from_array(transform)
-    if transpose:
-        transform_da = transform_da.transpose(2,1,0,3)
-        transform_da = transform_da[..., ::-1]
-    transform_da = transform_da.rechunk(tuple(blocksize + [3,]))
-
-    # function for getting per block origins and spans
-    def get_origin_and_span(t_block, mov_spacing):
-        mins = t_block.min(axis=(0,1,2))
-        maxs = t_block.max(axis=(0,1,2))
-        os = np.empty((2,3))
-        os[0] = np.maximum(0, mins - 3*mov_spacing)
-        os[1] = maxs - mins + 6*mov_spacing
-        return os.reshape((1,1,1,2,3))
- 
-    # get number of jobs needed
-    nblocks = np.prod(transform_da.numblocks)
-
-    # start cluster
-    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
-        cluster.scale_cluster(nblocks + 4)
-
-        # get per block origins and spans
-        return da.map_blocks(
-            get_origin_and_span,
-            transform_da, mov_spacing=mov_spacing,
-            dtype=np.float32,
-            new_axis=[4,],
-            chunks=(1,1,1,2,3),
-        ).compute()
 
 
 def apply_position_field(

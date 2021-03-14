@@ -4,7 +4,7 @@ from bigstream import ransac
 import dask.array as da
 from ClusterWrap.clusters import janelia_lsf_cluster
 
-WORKER_BUFFER = 4
+WORKER_BUFFER = 8
 
 
 def ransac_affine(

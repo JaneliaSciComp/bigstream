@@ -7,6 +7,7 @@ import dask.array as da
 from scipy.ndimage import zoom
 from ClusterWrap.clusters import janelia_lsf_cluster
 
+WORKER_BUFFER = 4
 
 def position_grid(shape, dtype=np.uint16):
     """
@@ -80,93 +81,68 @@ def affine_to_grid_dask(matrix, grid, displacement=False):
     return result
 
 
-def interpolate_image_dask(fix, mov, X, blocksize, margin, order=1, block_info=None):
-    """
-    """
-
-    # resample transform to match reference dimensions
-    if fix.shape[:3] != X.shape[:3]:
-        X_ = np.empty(fix.shape[:3] + (3,), dtype=X.dtype)
-        for i in range(3):
-            X_[..., i] = zoom(X[..., i], np.array(fix.shape[:3])/X.shape[:3], order=1)
-        X = X_
-
-    # subtract offset from coordinates
-    block_idx = block_info[1]['chunk-location'][:3]
-    offset = np.array(block_idx) * blocksize - margin
-    X = X - np.array(offset)
-
-    # reformat: map_overlap requires matching ndims, remove before interpolation
-    mov = mov.squeeze()
-    X = np.moveaxis(X, -1, 0)
-
-    # interpolate, add degenerate dimension back, and return
-    result = map_coordinates(mov, X, order=order, mode='constant')
-    return np.expand_dims(result, -1)
-
-
-def global_affine_to_position_field(
-    shape, spacing, affine, output, blocksize=[256,]*3, cluster_kwargs={},
+def local_affines_to_position_field(
+    shape, spacing, blocksize,
+    local_affines,
+    global_affine=None,
+    write_path=None,
+    lazy=True,
+    cluster_kwargs={},
 ):
-    """
-    """
-
-    # get number of jobs needed
-    block_grid = np.ceil(np.array(shape) / blocksize).astype(int)
-    nblocks = np.prod(block_grid)
-
-    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
-        cluster.scale_cluster(nblocks)
-
-        # compute affine transform as position coordinates, lazy dask arrays
-        grid = position_grid_dask(shape, blocksize) * spacing.astype(np.float32)
-        coords = affine_to_grid_dask(affine, grid)
-        coords = da.around(coords, decimals=2)
-
-        # write in parallel as 4D array to zarr file
-        compressor = Blosc(cname='zstd', clevel=9, shuffle=Blosc.BITSHUFFLE)
-        coords_disk = zarr.open(output, 'w',
-            shape=coords.shape, chunks=tuple(blocksize + [3,]),
-            dtype=coords.dtype, compressor=compressor,
-        )
-        da.to_zarr(coords, coords_disk)
-
-        # return pointer to zarr file
-        return coords_disk
-
-
-def local_affine_to_position_field(shape, spacing, local_affines, output,
-    blocksize=[256,]*3, block_multiplier=[1,]*3, cluster_kwargs={},
-    ):
     """
     """
 
     # get number of jobs needed
     block_grid = local_affines.shape[:3]
     nblocks = np.prod(block_grid)
+    overlap = [int(round(x/8)) for x in blocksize]
 
-    # need lots of RAM per worker
-    cluster_kwargs["cores"] = 4
+    # compose with global affine
+    total_affines = np.copy(local_affines)
+    if global_affine is not None:
+        g = np.eye(4)
+        g[:3, :] = global_affine
+        for i in range(nblocks):
+            x, y, z = np.unravel_index(i, block_grid)
+            l = np.eye(4)
+            l[:3, :] = total_affines[x, y, z]
+            total_affines[x, y, z] = np.matmul(g, l)[:3, :]
 
+    # create cluster
     with janelia_lsf_cluster(**cluster_kwargs) as cluster:
-        cluster.scale_cluster(nblocks)
+        if write_path is not None or not lazy:
+            cluster.scale_cluster(nblocks + WORKER_BUFFER)
 
-        # augment the blocksize by the fixed overlap size
-        pads = [2*int(round(x/8)) for x in blocksize]
-        blocksize_with_overlap = np.array(blocksize) + pads
-        blocksize_with_overlap = blocksize_with_overlap * block_multiplier
+        # create position grid
+        grid_da = position_grid_dask(
+            np.array(blocksize)*block_grid,
+            blocksize,
+        )
+        grid_da = grid_da * spacing.astype(np.float32)
+        grid_da = grid_da[..., None]  # needed for map_overlap
 
-        # get a grid used for each affine
-        grid = position_grid_dask(blocksize_with_overlap, list(blocksize_with_overlap))
-        grid = grid * spacing.astype(np.float32)
+        # wrap total_affines as dask array
+        total_affines_da = da.from_array(
+            total_affines.astype(np.float32),
+            chunks=(1, 1, 1, 3, 4),
+        )
 
-        # wrap local_affines as dask array
-        local_affines_da = da.from_array(local_affines, chunks=(1, 1, 1, 3, 4))
+        # strip off dummy axis from position grid block
+        def wrapped_affine_to_grid_dask(x, y):
+            y = y.squeeze()
+            return affine_to_grid_dask(x, y)
 
-        # compute affine transforms as position coordinates, lazy dask arrays
-        coords = da.map_blocks(
-            affine_to_grid_dask, local_affines_da, grid=grid, displacement=True,
-            new_axis=[5,6], chunks=(1,1,1,)+tuple(grid.shape), dtype=np.float32,
+        # compute affine transforms as position coordinates
+        coords = da.map_overlap(
+            wrapped_affine_to_grid_dask,
+            total_affines_da, grid_da,
+            depth=[0, tuple(overlap)+(0,)],
+            boundary=0,
+            trim=False,
+            align_arrays=False,
+            dtype=np.float32,
+            new_axis=[5,6],
+            chunks=(1,1,1,)+tuple(x+2*y for x, y in zip(blocksize, overlap))+(3,),
         )
 
         # stitch affine position fields
@@ -174,107 +150,229 @@ def local_affine_to_position_field(shape, spacing, local_affines, output,
 
         # crop to original shape and rechunk
         coords = coords[:shape[0], :shape[1], :shape[2]]
-        coords = coords.rechunk(tuple(blocksize + [1,]))
+        coords = coords.rechunk(tuple(blocksize + [3,]))
 
-        # convert to position field
-        coords = coords + position_grid_dask(shape, blocksize) * spacing.astype(np.float32)
-        coords = da.around(coords, decimals=2)
+        # if user wants to write to disk
+        if write_path is not None:
+            compressor = Blosc(cname='zstd', clevel=9, shuffle=Blosc.BITSHUFFLE)
+            coords_disk = zarr.open(write_path, 'w',
+                shape=coords.shape, chunks=tuple(blocksize + [3,]),
+                dtype=coords.dtype, compressor=compressor,
+            )
+            da.to_zarr(coords, coords_disk)
+            return coords_disk
 
-        # write in parallel as 3D array to zarr file
-        compressor = Blosc(cname='zstd', clevel=9, shuffle=Blosc.BITSHUFFLE)
-        coords_disk = zarr.open(output, 'w',
-            shape=coords.shape, chunks=tuple(blocksize + [3,]),
-            dtype=coords.dtype, compressor=compressor,
-        )
-        da.to_zarr(coords, coords_disk)
+        # if user wants to compute and return full field
+        if not lazy:
+            return coords.compute()
 
-        # return pointer to zarr file
-        return coords_disk
+        # if user wants to return compute graph w/o executing
+        if lazy:
+            return coords
+
+
+def _get_origins_and_spans(
+    transform,
+    mov_spacing,
+    transpose,
+    blocksize,
+):
+    """
+    """
+
+    # wrap transform as dask array, define chunks
+    transform_da = transform
+    if not isinstance(transform_da, da.Array):
+        transform_da = da.from_array(transform)
+    if transpose:
+        transform_da = transform_da.transpose(2,1,0,3)
+        transform_da = transform_da[..., ::-1]
+    transform_da = transform_da.rechunk(tuple(blocksize + [3,]))
+
+    # function for getting per block origins and spans
+    def get_origin_and_span(t_block, mov_spacing):
+        mins = t_block.min(axis=(0,1,2))
+        maxs = t_block.max(axis=(0,1,2))
+        os = np.empty((2,3))
+        os[0] = np.maximum(0, mins - 3*mov_spacing)
+        os[1] = maxs - mins + 6*mov_spacing
+        return os.reshape((1,1,1,2,3))
+ 
+    # get number of jobs needed
+    nblocks = np.prod(transform_da.numblocks)
+
+    # start cluster
+    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+        cluster.scale_cluster(nblocks + 4)
+
+        # get per block origins and spans
+        return da.map_blocks(
+            get_origin_and_span,
+            transform_da, mov_spacing=mov_spacing,
+            dtype=np.float32,
+            new_axis=[4,],
+            chunks=(1,1,1,2,3),
+        ).compute()
 
 
 def apply_position_field(
-    mov, mov_spacing,
-    fix, fix_spacing,
-    transform, output,
-    blocksize=[256,]*3, order=1,
-    transform_spacing=None,
+    fix, mov,
+    fix_spacing, mov_spacing,
+    transform,
+    blocksize,
     transpose=[False,]*3,
-    depth=(32, 32, 32),
+    write_path=None,
+    lazy=True,
     cluster_kwargs={},
 ):
     """
     """
 
     # get number of jobs needed
-    block_grid = np.ceil(np.array(mov.shape) / blocksize).astype(int)
+    block_grid = np.ceil(np.array(fix.shape) / blocksize).astype(int)
+    if transpose[0]:
+        block_grid = block_grid[::-1]
     nblocks = np.prod(block_grid)
 
+    # start cluster
     with janelia_lsf_cluster(**cluster_kwargs) as cluster:
-        cluster.scale_cluster(nblocks)
+        if write_path is not None or not lazy:
+            cluster.scale_cluster(nblocks + WORKER_BUFFER)
 
-        # determine mov/fix relative chunking
-        m_blocksize = blocksize * fix_spacing / mov_spacing
-        m_blocksize = list(np.round(m_blocksize).astype(np.int16))
-        m_depth = depth * fix_spacing / mov_spacing
-        m_depth = tuple(np.round(m_depth).astype(np.int16))
-
-        # determine trans/fix relative chunking
-        if transform_spacing is not None:
-            t_blocksize = blocksize * fix_spacing / transform_spacing
-            t_blocksize = list(np.round(t_blocksize).astype(np.int16))
-            t_depth = depth * fix_spacing / transform_spacing
-            t_depth = tuple(np.round(t_depth).astype(np.int16))
-        else:
-            t_blocksize = blocksize
-            t_depth = depth
-
-        # wrap objects as dask arrays
-        fix_da = da.from_array(fix)
-        if transpose[0]:
-            fix_da = fix_da.transpose(2,1,0)
-
-        mov_da = da.from_array(mov)
-        if transpose[1]:
-            mov_da = mov_da.transpose(2,1,0)
-            block_grid = block_grid[::-1]
-
-        transform_da = da.from_array(transform)
+        # wrap transform as dask array, define chunks
+        transform_da = transform
+        if not isinstance(transform, da.Array):
+            transform_da = da.from_array(transform)
         if transpose[2]:
             transform_da = transform_da.transpose(2,1,0,3)
             transform_da = transform_da[..., ::-1]
+        transform_da = transform_da.rechunk(tuple(blocksize + [3,]))
 
-        # chunk dask arrays
-        fix_da = da.reshape(fix_da, fix_da.shape + (1,)).rechunk(tuple(blocksize + [1,]))
-        mov_da = da.reshape(mov_da, mov_da.shape + (1,)).rechunk(tuple(m_blocksize + [1,]))
-        transform_da = transform_da.rechunk(tuple(t_blocksize + [3,]))
+        # function for getting per block origins and spans
+        def get_origin_and_span(t_block, mov_spacing):
+            mins = t_block.min(axis=(0,1,2))
+            maxs = t_block.max(axis=(0,1,2))
+            os = np.empty((2,3))
+            os[0] = np.maximum(0, mins - 3*mov_spacing)
+            os[1] = maxs - mins + 6*mov_spacing
+            return os.reshape((1,1,1,2,3))
+
+        # get per block origins and spans
+        os = da.map_blocks(
+            get_origin_and_span,
+            transform_da, mov_spacing=mov_spacing,
+            dtype=np.float32,
+            new_axis=[4,],
+            chunks=(1,1,1,2,3),
+        ).compute()
+
+        # extract crop info and convert to voxel units
+        origins = os[..., 0, :]
+        span = np.max(os[..., 1, :], axis=(0,1,2))
+        origins_vox = np.round(origins / mov_spacing).astype(int)
+        span = np.ceil(span / mov_spacing).astype(int)
+
+        # wrap moving data as dask array
+        mov_da = da.from_array(mov)
+        if transpose[1]:
+            mov_da = mov_da.transpose(2,1,0)
+
+        # pad moving data dask array for blocking
+        pads = []
+        for sh, sp in zip(mov_da.shape, span):
+            diff = sp - sh % sp
+            pad = (0, diff) if sh % sp > 0 else (0, 0)
+            pads.append(pad)
+        mov_da = da.pad(mov_da, pads)
+
+        # construct moving blocks
+        o, s, bg = origins_vox, span, block_grid
+        mov_blocks = [[[mov_da[o[i,j,k,0]:o[i,j,k,0]+s[0],
+                               o[i,j,k,1]:o[i,j,k,1]+s[1],
+                               o[i,j,k,2]:o[i,j,k,2]+s[2]] for k in range(bg[2])]
+                                                           for j in range(bg[1])]
+                                                           for i in range(bg[0])]
+        mov_da = da.block(mov_blocks)[..., None]
+        mov_da = mov_da.rechunk(tuple(span) + (1,))
+
+        # wrap origins as dask array, define chunks
+        origins_da = da.from_array(origins)
+        origins_da = origins_da.rechunk((1,1,1,3))
 
         # put transform in voxel units
+        # position vectors are in moving coordinate system
+        origins_da = origins_da / mov_spacing
         transform_da = transform_da / mov_spacing
 
-        # map the interpolate function with overlaps
-        # TODO: depth should be computed automatically from transform maximum?
-        d = [depth+(0,), m_depth+(0,), t_depth+(0,)]
-        aligned = da.map_overlap(
-            interpolate_image_dask, fix_da, mov_da, transform_da,
-            blocksize=m_blocksize, margin=m_depth,
-            depth=d, boundary=0, dtype=np.uint16, align_arrays=False,
+        # wrap interpolate function
+        def wrapped_interpolate_image(x, y, origin):
+            x = x.squeeze()
+            y = y - origin
+            return interpolate_image(x, y)
+
+        # map the interpolate function
+        aligned = da.map_blocks(
+            wrapped_interpolate_image,
+            mov_da, transform_da, origins_da,
+            dtype=np.uint16,
+            chunks=tuple(blocksize),
+            drop_axis=[3,],
         )
 
-        # remove degenerate dimension
-        aligned = da.reshape(aligned, aligned.shape[:-1])
+        # if user wants to write to disk
+        if write_path is not None:
+            compressor = Blosc(cname='zstd', clevel=9, shuffle=Blosc.BITSHUFFLE)
+            aligned_disk = zarr.open(write_path, 'w',
+                shape=aligned.shape, chunks=aligned.chunksize,
+                dtype=aligned.dtype, compressor=compressor,
+            )
+            da.to_zarr(aligned, aligned_disk)
+            return aligned_disk
 
-        # write in parallel as 3D array to zarr file
-        compressor = Blosc(cname='zstd', clevel=9, shuffle=Blosc.BITSHUFFLE)
-        aligned_disk = zarr.open(output, 'w',
-            shape=aligned.shape, chunks=aligned.chunksize,
-            dtype=aligned.dtype, compressor=compressor,
-        )
-        da.to_zarr(aligned, aligned_disk)
+        # if user wants to compute and return full resampled image
+        if not lazy:
+            return aligned.compute()
 
-        # return pointer to zarr file
-        return aligned_disk
+        # if user wants to return compute graph w/o executing
+        if lazy:
+            return aligned
 
 
+def apply_local_affines(
+    fix, mov,
+    fix_spacing, mov_spacing,
+    local_affines,
+    blocksize,
+    global_affine=None,
+    write_path=None,
+    lazy=True,
+    transpose=[False,]*3,
+    cluster_kwargs={},
+):
+    """
+    """
+
+    # get task graph for local affines position field
+    local_affines_pf = local_affines_to_position_field(
+        fix.shape, fix_spacing, blocksize, local_affines,
+        global_affine=global_affine, lazy=True,
+        cluster_kwargs=cluster_kwargs,
+    )
+
+    # align
+    aligned = apply_position_field(
+        fix, mov, fix_spacing, mov_spacing,
+        local_affines_pf, blocksize,
+        write_path=write_path,
+        lazy=lazy,
+        transpose=transpose,
+        cluster_kwargs=cluster_kwargs,
+    )
+
+    return aligned
+
+
+# TODO: refactor this function
 def compose_position_fields(
     fields, spacing, output,
     blocksize=[256,]*3, displacement=None,
@@ -288,7 +386,7 @@ def compose_position_fields(
     nblocks = np.prod(block_grid)
 
     with janelia_lsf_cluster(**cluster_kwargs) as cluster:
-        cluster.scale_cluster(nblocks)
+        cluster.scale_cluster(nblocks + WORKER_BUFFER)
     
         # wrap fields as dask arrays
         fields_da = da.stack([da.from_array(f, chunks=blocksize+[3,]) for f in fields])
@@ -313,4 +411,5 @@ def compose_position_fields(
 
         # return pointer to zarr file
         return composed_disk
+
 

@@ -279,7 +279,7 @@ def apply_position_field(
         if write_path is not None:
             compressor = Blosc(cname='zstd', clevel=9, shuffle=Blosc.BITSHUFFLE)
             aligned_disk = zarr.open(write_path, 'w',
-                shape=aligned.shape, chunks=aligned.chunksize,
+                shape=transform_da.shape[:-1], chunks=aligned.chunksize,
                 dtype=aligned.dtype, compressor=compressor,
             )
             da.to_zarr(aligned, aligned_disk)
@@ -308,9 +308,14 @@ def apply_local_affines(
     """
     """
 
+    # get position field shape
+    pf_shape = fix.shape
+    if transpose[0]:
+        pf_shape = pf_shape[::-1]
+
     # get task graph for local affines position field
     local_affines_pf = local_affines_to_position_field(
-        fix.shape, fix_spacing, blocksize, local_affines,
+        pf_shape, fix_spacing, blocksize, local_affines,
         global_affine=global_affine, lazy=True,
         cluster_kwargs=cluster_kwargs,
     )

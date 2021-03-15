@@ -21,5 +21,6 @@ setuptools.setup(
         'greedypy',
         'zarr',
         'numcodecs',
+        'fishspot',
     ]
 )

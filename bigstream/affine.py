@@ -17,6 +17,7 @@ def ransac_affine(
     nspots=5000,
     align_threshold=2.0,
     num_sigma_max=10,
+    **kwargs,
 ):
     """
     """
@@ -62,7 +63,7 @@ def ransac_affine(
 
     # align
     return ransac.ransac_align_points(
-        fixed_spots, moving_spots, align_threshold,
+        fixed_spots, moving_spots, align_threshold, **kwargs,
     )
 
 

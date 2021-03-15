@@ -85,7 +85,7 @@ def ransac_affine(
 
     if verbose:
         ns = fixed_spots.shape[0]
-        print('MATCHED points: found {ns} matched points')
+        print(f'MATCHED points: found {ns} matched points')
 
     # align
     return ransac.ransac_align_points(

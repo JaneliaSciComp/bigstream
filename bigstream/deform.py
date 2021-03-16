@@ -6,7 +6,7 @@ import dask.array as da
 import zarr
 from numcodecs import Blosc
 from itertools import product
-from ClusterWrap.clusters import janelia_lsf_cluster
+import ClusterWrap
 
 WORKER_BUFFER = 8
 
@@ -84,7 +84,7 @@ def tiled_deformable_align(
         )
 
     # distributed computations done in cluster context
-    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+    with ClusterWrap.cluster(**cluster_kwargs) as cluster:
         if write_path is not None or not lazy:
             cluster.scale_cluster(nblocks + WORKER_BUFFER)
 

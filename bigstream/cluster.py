@@ -1,4 +1,4 @@
-from ClusterWrap.clusters import janelia_lsf_cluster
+import ClusterWrap
 import numpy as np
 import zarr
 from numcodecs import Blosc
@@ -15,7 +15,7 @@ def execute(
     """
 
     # start the cluster
-    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+    with ClusterWrap.cluster(**cluster_kwargs) as cluster:
 
         # print dashboard url
         print("cluster dashboard link: ", cluster.get_dashboard())

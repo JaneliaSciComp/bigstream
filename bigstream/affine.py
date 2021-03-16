@@ -2,7 +2,7 @@ import numpy as np
 from bigstream import features
 from bigstream import ransac
 import dask.array as da
-from ClusterWrap.clusters import janelia_lsf_cluster
+import ClusterWrap
 
 WORKER_BUFFER = 8
 
@@ -113,7 +113,7 @@ def tiled_ransac_affine(
     overlap = [int(round(x/8)) for x in blocksize]
 
     # distributed computations done in cluster context
-    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+    with ClusterWrap.cluster(**cluster_kwargs) as cluster:
         cluster.scale_cluster(nblocks + WORKER_BUFFER)
 
         # wrap images as dask arrays

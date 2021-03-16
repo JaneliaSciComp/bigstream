@@ -5,7 +5,7 @@ from numcodecs import Blosc
 from bigstream import stitch
 import dask.array as da
 from scipy.ndimage import zoom
-from ClusterWrap.clusters import janelia_lsf_cluster
+import ClusterWrap
 
 WORKER_BUFFER = 8
 
@@ -109,7 +109,7 @@ def local_affines_to_position_field(
             total_affines[x, y, z] = np.matmul(g, l)[:3, :]
 
     # create cluster
-    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+    with ClusterWrap.cluster(**cluster_kwargs) as cluster:
         if write_path is not None or not lazy:
             cluster.scale_cluster(nblocks + WORKER_BUFFER)
 
@@ -191,7 +191,7 @@ def apply_position_field(
     nblocks = np.prod(block_grid)
 
     # start cluster
-    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+    with ClusterWrap.cluster(**cluster_kwargs) as cluster:
         if write_path is not None or not lazy:
             cluster.scale_cluster(nblocks + WORKER_BUFFER)
 
@@ -346,7 +346,7 @@ def compose_position_fields(
     block_grid = np.ceil(np.array(fields[0].shape[:-1]) / blocksize).astype(int)
     nblocks = np.prod(block_grid)
 
-    with janelia_lsf_cluster(**cluster_kwargs) as cluster:
+    with ClusterWrap.cluster(**cluster_kwargs) as cluster:
         cluster.scale_cluster(nblocks + WORKER_BUFFER)
     
         # wrap fields as dask arrays

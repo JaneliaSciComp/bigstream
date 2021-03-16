@@ -18,6 +18,8 @@ def ransac_affine(
     align_threshold=2.0,
     num_sigma_max=10,
     verbose=True,
+    fixed_spots=None,
+    moving_spots=None,
     **kwargs,
 ):
     """
@@ -27,25 +29,25 @@ def ransac_affine(
         print('Getting key points')
 
     # get spots
-    fixed_spots = features.blob_detection(
-        fixed, min_radius, max_radius,
-        num_sigma=max(max_radius-min_radius, num_sigma_max),
-        threshold=0, exclude_border=cc_radius,
-    )
+    if fixed_spots is None:
+        fixed_spots = features.blob_detection(
+            fixed, min_radius, max_radius,
+            num_sigma=max(max_radius-min_radius, num_sigma_max),
+            threshold=0, exclude_border=cc_radius,
+        )
+        if verbose:
+            ns = fixed_spots.shape[0]
+            print(f'FIXED image: found {ns} key points')
 
-    if verbose:
-        ns = fixed_spots.shape[0]
-        print(f'FIXED image: found {ns} key points')
-
-    moving_spots = features.blob_detection(
-        moving, min_radius, max_radius,
-        num_sigma=max(max_radius-min_radius, num_sigma_max),
-        threshold=0, exclude_border=cc_radius,
-    )
-
-    if verbose:
-        ns = moving_spots.shape[0]
-        print(f'MOVING image: found {ns} key points')
+    if moving_spots is None:
+        moving_spots = features.blob_detection(
+            moving, min_radius, max_radius,
+            num_sigma=max(max_radius-min_radius, num_sigma_max),
+            threshold=0, exclude_border=cc_radius,
+        )
+        if verbose:
+            ns = moving_spots.shape[0]
+            print(f'MOVING image: found {ns} key points')
 
     # sort
     sort_idx = np.argsort(fixed_spots[:, 3])[::-1]
@@ -61,18 +63,9 @@ def ransac_affine(
     fixed_spots = features.get_spot_context(
         fixed, fixed_spots, fixed_vox, cc_radius,
     )
-
-    if verbose:
-        ns = len(fixed_spots)
-        print(f'FIXED image: found {ns} blocks')
-
     moving_spots = features.get_spot_context(
         moving, moving_spots, moving_vox, cc_radius,
     )
-
-    if verbose:
-        ns = len(moving_spots)
-        print(f'MOVING image: found {ns} blocks')
 
     # get point correspondences
     correlations = features.pairwise_correlation(

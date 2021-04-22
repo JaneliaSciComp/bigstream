@@ -8,12 +8,10 @@ from numcodecs import Blosc
 from itertools import product
 import ClusterWrap
 
-WORKER_BUFFER = 8
-
 
 def deformable_align(
-    fixed, moving,
-    fixed_spacing, moving_spacing,
+    fix, mov,
+    fix_spacing, mov_spacing,
     cc_radius=12,
     gradient_smoothing=[3., 0., 1., 2.],
     field_smoothing=[0.5, 0., 1., 6.],
@@ -25,12 +23,12 @@ def deformable_align(
     """
     """
 
-    fixed = fixed.astype(np.float32)
-    moving = moving.astype(np.float32)
+    fix = fix.astype(np.float32)
+    mov = mov.astype(np.float32)
 
     register = gprm.greedypy_registration_method(
-        fixed, fixed_spacing,
-        moving, moving_spacing,
+        fix, fix_spacing,
+        mov, mov_spacing,
         iterations,
         shrink_factors,
         smooth_sigmas,
@@ -46,8 +44,8 @@ def deformable_align(
 
 
 def tiled_deformable_align(
-    fixed, moving,
-    fixed_spacing, moving_spacing,
+    fix, mov,
+    fix_spacing, mov_spacing,
     blocksize,
     transpose=[False]*2,
     global_affine=None,
@@ -61,11 +59,11 @@ def tiled_deformable_align(
     """
 
     # get number of blocks required
-    block_grid = np.ceil(np.array(fixed.shape) / blocksize)
+    block_grid = np.ceil(np.array(fix.shape) / blocksize)
     nblocks = np.prod(block_grid)
 
     # get true field shape
-    original_shape = fixed.shape
+    original_shape = fix.shape
     if transpose[0]:
         original_shape = original_shape[::-1]
 
@@ -74,11 +72,11 @@ def tiled_deformable_align(
     if global_affine is not None or local_affines is not None:
         if local_affines is None:
             local_affines = np.empty(
-                block_grid + (3,4), dtype=np.float32,
+                block_grid + (4,4), dtype=np.float32,
             )
-            local_affines[..., :, :] = np.eye(4)[:3, :]
+            local_affines[..., :, :] = np.eye(4)
         affine_pf = transform.local_affines_to_position_field(
-            original_shape, fixed_spacing, blocksize,
+            original_shape, fix_spacing, blocksize,
             local_affines, global_affine=global_affine,
             lazy=True, cluster_kwargs=cluster_kwargs,
         )
@@ -86,33 +84,33 @@ def tiled_deformable_align(
     # distributed computations done in cluster context
     with ClusterWrap.cluster(**cluster_kwargs) as cluster:
         if write_path is not None or not lazy:
-            cluster.scale_cluster(nblocks + WORKER_BUFFER)
+            cluster.scale_cluster(nblocks + 1)
 
         # wrap images as dask arrays
-        fixed_da = da.from_array(fixed)
-        moving_da = da.from_array(moving)
+        fix_da = da.from_array(fix)
+        mov_da = da.from_array(mov)
 
         # in case xyz convention is flipped for input file
         if transpose[0]:
-            fixed_da = fixed_da.transpose(2,1,0)
+            fix_da = fix_da.transpose(2,1,0)
         if transpose[1]:
-            moving_da = moving_da.transpose(2,1,0)
+            mov_da = mov_da.transpose(2,1,0)
 
         # pad the ends to fill in the last blocks
         pads = []
         for x, y in zip(original_shape, blocksize):
             pads += [(0, y - x % y) if x % y > 0 else (0, 0)]
-        fixed_da = da.pad(fixed_da, pads)
-        moving_da = da.pad(moving_da, pads)
+        fix_da = da.pad(fix_da, pads)
+        mov_da = da.pad(mov_da, pads)
 
         # chunk to blocksize
-        fixed_da = fixed_da.rechunk(tuple(blocksize))
-        moving_da = moving_da.rechunk(tuple(blocksize))
+        fix_da = fix_da.rechunk(tuple(blocksize))
+        mov_da = mov_da.rechunk(tuple(blocksize))
 
         # wrap deformable function
         def wrapped_deformable_align(x, y):
             warp = deformable_align(
-                x, y, fixed_spacing, moving_spacing,
+                x, y, fix_spacing, mov_spacing,
                 **deform_kwargs,
             )
             return warp.reshape((1,1,1)+warp.shape)
@@ -123,7 +121,7 @@ def tiled_deformable_align(
         out_blocks = [1,1,1] + out_blocks + [3,]
 
         warps = da.map_overlap(
-            wrapped_deformable_align, fixed_da, moving_da,
+            wrapped_deformable_align, fix_da, mov_da,
             depth=overlaps,
             boundary=0,
             trim=False,

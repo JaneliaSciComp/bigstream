@@ -50,10 +50,7 @@ def tiled_deformable_align(
     transpose=[False]*2,
     global_affine=None,
     local_affines=None,
-    write_path=None,
-    lazy=True,
-    deform_kwargs={},
-    cluster_kwargs={},
+    **kwargs,
 ):
     """
     """
@@ -88,91 +85,65 @@ def tiled_deformable_align(
             displacement=False,
         )
 
-    # distributed computations done in cluster context
-    with ClusterWrap.cluster(**cluster_kwargs) as cluster:
+    # wrap images as dask arrays
+    fix_da = da.from_array(fix)
+    mov_da = da.from_array(mov)
 
-        # wrap images as dask arrays
-        fix_da = da.from_array(fix)
-        mov_da = da.from_array(mov)
+    # in case xyz convention is flipped for input file
+    if transpose[0]:
+        fix_da = fix_da.transpose(2,1,0)
+    if transpose[1]:
+        mov_da = mov_da.transpose(2,1,0)
 
-        # in case xyz convention is flipped for input file
-        if transpose[0]:
-            fix_da = fix_da.transpose(2,1,0)
-        if transpose[1]:
-            mov_da = mov_da.transpose(2,1,0)
+    # pad the ends to fill in the last blocks
+    pads = []
+    for x, y in zip(original_shape, blocksize):
+        pads += [(0, y - x % y) if x % y > 0 else (0, 0)]
+    fix_da = da.pad(fix_da, pads)
+    mov_da = da.pad(mov_da, pads)
 
-        # pad the ends to fill in the last blocks
-        pads = []
-        for x, y in zip(original_shape, blocksize):
-            pads += [(0, y - x % y) if x % y > 0 else (0, 0)]
-        fix_da = da.pad(fix_da, pads)
-        mov_da = da.pad(mov_da, pads)
+    # chunk to blocksize
+    fix_da = fix_da.rechunk(tuple(blocksize))
+    mov_da = mov_da.rechunk(tuple(blocksize))
 
-        # chunk to blocksize
-        fix_da = fix_da.rechunk(tuple(blocksize))
-        mov_da = mov_da.rechunk(tuple(blocksize))
-
-        # wrap deformable function
-        def wrapped_deformable_align(x, y):
-            return deformable_align(
-                x, y, fix_spacing, mov_spacing,
-                **deform_kwargs,
-            )
-
-        # deform all chunks
-        out_blocks = [x + 2*y for x, y in zip(blocksize, overlap)] + [3,]
-        warps = da.map_overlap(
-            wrapped_deformable_align,
-            fix_da, mov_da,
-            depth=overlap,
-            boundary=0,
-            trim=False,
-            align_arrays=False,
-            dtype=np.float32,
-            new_axis=[3,],
-            chunks=out_blocks,
+    # wrap deformable function
+    def wrapped_deformable_align(x, y):
+        return deformable_align(
+            x, y, fix_spacing, mov_spacing,
+            **kwargs,
         )
 
-        # stitch neighboring displacement fields
-        warps = ds.stitch.stitch_blocks(warps, blocksize, overlap)
+    # deform all chunks
+    out_blocks = [x + 2*y for x, y in zip(blocksize, overlap)] + [3,]
+    warps = da.map_overlap(
+        wrapped_deformable_align,
+        fix_da, mov_da,
+        depth=overlap,
+        boundary=0,
+        trim=False,
+        align_arrays=False,
+        dtype=np.float32,
+        new_axis=[3,],
+        chunks=out_blocks,
+    )
 
-        # crop any pads
-        warps = warps[:original_shape[0],
-                      :original_shape[1],
-                      :original_shape[2]]
+    # stitch neighboring displacement fields
+    warps = ds.stitch.stitch_blocks(warps, blocksize, overlap)
 
-        # compose with affine position field
-        # TODO refactor transform.compose_position_fields
-        #      replace this approximation
-        if affine_pf is not None:
-            final_field = affine_pf + warps
-        else:
-            final_field = warps + ds.local_affine.position_grid(
-                original_shape, blocksize,
-            )
+    # crop any pads
+    warps = warps[:original_shape[0],
+                  :original_shape[1],
+                  :original_shape[2]]
 
-        # if user wants to write to disk
-        if write_path is not None:
-            compressor = Blosc(
-                cname='zstd',
-                clevel=4,
-                shuffle=Blosc.BITSHUFFLE,
-            )
-            final_field_disk = zarr.open(
-                write_path, 'w',
-                shape=final_field.shape,
-                chunks=tuple(blocksize + [3,]),
-                dtype=final_field.dtype,
-                compressor=compressor,
-            )
-            da.to_zarr(final_field, final_field_disk)
-            return final_field_disk
+    # compose with affine position field
+    # TODO refactor transform.compose_position_fields
+    #      replace this approximation
+    if affine_pf is not None:
+        final_field = affine_pf + warps
+    else:
+        final_field = warps + ds.local_affine.position_grid(
+            original_shape, blocksize,
+        )
 
-        # if user wants to compute and return full field
-        if not lazy:
-            return final_field.compute()
-
-        # if user wants to return compute graph w/o executing
-        if lazy:
-            return final_field
+    return final_field
 

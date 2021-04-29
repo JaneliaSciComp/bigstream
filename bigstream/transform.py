@@ -1,11 +1,9 @@
 import numpy as np
 from scipy.ndimage import map_coordinates
 import zarr
-from numcodecs import Blosc
 import dask.array as da
 import dask.delayed as delayed
 from scipy.ndimage import zoom
-import ClusterWrap
 from dask_stitch.local_affine import local_affines_to_field
 from operator import getitem
 
@@ -60,82 +58,51 @@ def apply_position_field(
     transform,
     blocksize,
     transpose=[False,]*3,
-    write_path=None,
-    lazy=True,
-    cluster_kwargs={},
 ):
     """
     """
 
-    # start cluster
-    with ClusterWrap.cluster(**cluster_kwargs) as cluster:
+    # wrap transform as dask array, define chunks
+    transform_da = transform
+    if not isinstance(transform, da.Array):
+        transform_da = da.from_array(transform)
+    if transpose[2]:
+        transform_da = transform_da.transpose(2,1,0,3)
+        transform_da = transform_da[..., ::-1]
+    transform_da = transform_da.rechunk(tuple(blocksize) + (3,))
 
-        # wrap transform as dask array, define chunks
-        transform_da = transform
-        if not isinstance(transform, da.Array):
-            transform_da = da.from_array(transform)
-        if transpose[2]:
-            transform_da = transform_da.transpose(2,1,0,3)
-            transform_da = transform_da[..., ::-1]
-        transform_da = transform_da.rechunk(tuple(blocksize) + (3,))
+    # wrap moving data appropriately
+    if isinstance(mov, np.ndarray):
+        mov_s = delayed(mov)
+    elif isinstance(mov, zarr.Array):
+        mov_s = mov
 
-        # wrap moving image as dask array, define chunks
-        mov_da = mov
-        if not isinstance(mov, da.Array):
-            mov_da = da.from_array(mov)
-        if transpose[1]:
-            mov_da = mov_da.transpose(2,1,0)
-        mov_da = mov_da.rechunk(tuple(blocksize))
+    # function to get per block origin and span in voxel units
+    def transform_block(transform, mov):
+        # convert to voxel units
+        t = transform / mov_spacing
+        # get moving data block coordinates
+        s = np.floor(t.min(axis=(0,1,2))).astype(int)
+        s = np.maximum(0, s)
+        e = np.ceil(t.max(axis=(0,1,2))).astype(int) + 1
+        slc = tuple(slice(x, y) for x, y in zip(s, e))
+        # check transpose
+        if transpose[1]: slc = slc[::-1]
+        # slice data
+        mov_block = mov[slc]
+        # check transpose
+        if transpose[1]: mov_block = mov_block.transpose(2,1,0)
+        # interpolate block (adjust transform to local origin)
+        return interpolate_image(mov_block, t - s)
 
-        # scatter moving data onto cluster
-        mov_s = cluster.client.scatter(mov_da)
-
-        # function to get per block origin and span in voxel units
-        def transform_block(transform, mov):
-            # convert to voxel units
-            t = transform / mov_spacing
-            # get moving data block
-            s = np.floor(t.min(axis=(0,1,2))).astype(int)
-            s = np.maximum(0, s)
-            e = np.ceil(t.max(axis=(0,1,2))).astype(int) + 1
-            slc = tuple(slice(x, y) for x, y in zip(s, e))
-            mov_block = mov[slc]
-            # interpolate block (adjust transform to local origin)
-            return interpolate_image(mov_block, t - s)
-
-        # map the interpolate function
-        aligned = da.map_blocks(
-            transform_block,
-            transform_da, mov=mov_s,
-            dtype=mov.dtype,
-            chunks=tuple(blocksize),
-            drop_axis=[3,],
-        )
-
-        # if user wants to write to disk
-        if write_path is not None:
-            compressor = Blosc(
-                cname='zstd',
-                clevel=4,
-                shuffle=Blosc.BITSHUFFLE,
-            )
-            aligned_disk = zarr.open(
-                write_path, 'w',
-                shape=transform_da.shape[:-1],
-                chunks=aligned.chunksize,
-                dtype=aligned.dtype,
-                compressor=compressor,
-            )
-            da.to_zarr(aligned, aligned_disk)
-            return aligned_disk
-
-        # if user wants to compute and return full resampled image
-        if not lazy:
-            return aligned.compute()
-
-        # if user wants to return compute graph w/o executing
-        if lazy:
-            return aligned
+    # map the interpolate function
+    return da.map_blocks(
+        transform_block,
+        transform_da, mov=mov_s,
+        dtype=mov.dtype,
+        chunks=transform_da.chunks[:-1],
+        drop_axis=[3,],
+    )
 
 
 def compose_affines(global_affine, local_affines):
@@ -162,10 +129,7 @@ def apply_local_affines(
     local_affines,
     blocksize,
     global_affine=None,
-    write_path=None,
-    lazy=True,
     transpose=[False,]*3,
-    cluster_kwargs={},
 ):
     """
     """
@@ -191,14 +155,9 @@ def apply_local_affines(
     )
 
     # align
-    aligned = apply_position_field(
+    return apply_position_field(
         fix, mov, fix_spacing, mov_spacing,
         position_field, blocksize,
-        write_path=write_path,
-        lazy=lazy,
         transpose=transpose,
-        cluster_kwargs=cluster_kwargs,
     )
-
-    return aligned
 

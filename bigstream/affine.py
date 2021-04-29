@@ -98,7 +98,6 @@ def tiled_ransac_affine(
     max_radius,
     match_threshold,
     blocksize,
-    cluster_kwargs={},
     **kwargs,
 ):
     """
@@ -109,44 +108,39 @@ def tiled_ransac_affine(
     nblocks = np.prod(block_grid)
     overlap = [int(round(x/8)) for x in blocksize]
 
-    # distributed computations done in cluster context
-    with ClusterWrap.cluster(**cluster_kwargs) as cluster:
+    # wrap images as dask arrays
+    fix_da = da.from_array(fix, chunks=blocksize)
+    mov_da = da.from_array(mov, chunks=blocksize)
 
-        # wrap images as dask arrays
-        fix_da = da.from_array(fix, chunks=blocksize)
-        mov_da = da.from_array(mov, chunks=blocksize)
+    # wrap affine function
+    def wrapped_ransac_affine(x, y, block_info=None):
 
-        # wrap affine function
-        def wrapped_ransac_affine(x, y):
-            affine = ransac_affine(
-                x, y, fix_spacing, mov_spacing,
-                min_radius, max_radius, match_threshold,
-                **kwargs,
-            )
-            return affine.reshape((1,1,1,4,4))
+        # compute affine
+        affine = ransac_affine(
+            x, y, fix_spacing, mov_spacing,
+            min_radius, max_radius, match_threshold,
+            **kwargs,
+        )
 
-        # affine align all chunks
-        affines = da.map_overlap(
-            wrapped_ransac_affine, fix_da, mov_da,
-            depth=tuple(overlap),
-            boundary='reflect',
-            trim=False,
-            align_arrays=False,
-            dtype=np.float64,
-            new_axis=[3, 4],
-            chunks=[1, 1, 1, 4, 4],
-        ).compute()
-
-    # improve on identity affines
-    affines = interpolate_affines(affines)
-
-    # adjust affines for block origins
-    for i in range(nblocks):
-        x, y, z = np.unravel_index(i, block_grid)
-        origin = (np.array(blocksize) * [x, y, z] - overlap) * fix_spacing
-        tl, tr, a = np.eye(4), np.eye(4), affines[x, y, z]
+        # adjust for block origin
+        idx = np.array(block_info[0]['chunk-location'])
+        origin = (idx * blocksize - overlap) * fix_spacing
+        tl, tr = np.eye(4), np.eye(4)
         tl[:3, -1], tr[:3, -1] = origin, -origin
-        affines[x, y, z] = np.matmul(tl, np.matmul(a, tr))
+        affine = np.matmul(tl, np.matmul(affine, tr))
 
-    return affines
+        # return with block index axes
+        return affine.reshape((1,1,1,4,4))
+
+    # affine align all chunks
+    return da.map_overlap(
+        wrapped_ransac_affine, fix_da, mov_da,
+        depth=tuple(overlap),
+        boundary='reflect',
+        trim=False,
+        align_arrays=False,
+        dtype=np.float64,
+        new_axis=[3, 4],
+        chunks=[1, 1, 1, 4, 4],
+    )
 

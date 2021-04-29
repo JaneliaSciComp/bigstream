@@ -14,7 +14,7 @@ def ransac_affine(
     cc_radius=12,
     nspots=5000,
     align_threshold=2.0,
-    num_sigma_max=10,
+    num_sigma_max=15,
     verbose=True,
     fix_spots=None,
     mov_spots=None,
@@ -30,7 +30,7 @@ def ransac_affine(
     if fix_spots is None:
         fix_spots = features.blob_detection(
             fix, min_radius, max_radius,
-            num_sigma=max(max_radius-min_radius, num_sigma_max),
+            num_sigma=min(max_radius-min_radius, num_sigma_max),
             threshold=0, exclude_border=cc_radius,
         )
         if verbose:
@@ -40,7 +40,7 @@ def ransac_affine(
     if mov_spots is None:
         mov_spots = features.blob_detection(
             mov, min_radius, max_radius,
-            num_sigma=max(max_radius-min_radius, num_sigma_max),
+            num_sigma=min(max_radius-min_radius, num_sigma_max),
             threshold=0, exclude_border=cc_radius,
         )
         if verbose:
@@ -73,7 +73,6 @@ def ransac_affine(
         fix_spots, mov_spots,
         correlations, match_threshold,
     )
-
     if verbose:
         ns = fix_spots.shape[0]
         print(f'MATCHED points: found {ns} matched points')
@@ -112,7 +111,6 @@ def tiled_ransac_affine(
 
     # distributed computations done in cluster context
     with ClusterWrap.cluster(**cluster_kwargs) as cluster:
-        cluster.scale_cluster(nblocks + 1)
 
         # wrap images as dask arrays
         fix_da = da.from_array(fix, chunks=blocksize)

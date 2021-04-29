@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="bigstream",
-    version="0.1.3",
+    version="0.1.4",
     author="Greg M. Fleishman",
     author_email="greg.nli10me@gmail.com",
     description="Tools for distributed alignment of massive images",
@@ -15,6 +15,7 @@ setuptools.setup(
         'scipy',
         'scikit-image',
         'opencv-python',
+        'bokeh',
         'dask',
         'dask[array]',
         'dask[delayed]',

@@ -7,6 +7,7 @@ import dask.delayed as delayed
 from scipy.ndimage import zoom
 import ClusterWrap
 from dask_stitch.local_affine import local_affines_to_field
+from operator import getitem
 
 
 def position_grid(shape):
@@ -66,13 +67,8 @@ def apply_position_field(
     """
     """
 
-    # get number of jobs needed
-    nblocks = np.prod(np.ceil(np.array(fix.shape) / blocksize))
-
     # start cluster
     with ClusterWrap.cluster(**cluster_kwargs) as cluster:
-        if write_path is not None or not lazy:
-            cluster.scale_cluster(nblocks + 1)
 
         # wrap transform as dask array, define chunks
         transform_da = transform
@@ -83,69 +79,34 @@ def apply_position_field(
             transform_da = transform_da[..., ::-1]
         transform_da = transform_da.rechunk(tuple(blocksize) + (3,))
 
+        # wrap moving image as dask array, define chunks
+        mov_da = mov
+        if not isinstance(mov, da.Array):
+            mov_da = da.from_array(mov)
+        if transpose[1]:
+            mov_da = mov_da.transpose(2,1,0)
+        mov_da = mov_da.rechunk(tuple(blocksize))
+
+        # scatter moving data onto cluster
+        mov_s = cluster.client.scatter(mov_da)
+
         # function to get per block origin and span in voxel units
-        def get_origin_and_span(t_block, mov_spacing):
-            mins = t_block.min(axis=(0,1,2))
-            maxs = t_block.max(axis=(0,1,2))
-            mins = np.floor(mins / mov_spacing).astype(int)
-            maxs = np.ceil(maxs / mov_spacing).astype(int)
-            os = np.empty((2,3))
-            os[0] = np.maximum(0, mins - 3)
-            os[1] = maxs - mins + 6
-            return os.reshape((1,1,1,2,3))
-
-        # get per block origins and spans
-        os = da.map_blocks(
-            get_origin_and_span,
-            transform_da,
-            mov_spacing=mov_spacing,
-            dtype=int,
-            new_axis=[4,],
-            chunks=(1,1,1,2,3),
-        )
-
-        # extract crop info
-        origins_da = os[..., 0, :]
-        span = np.max(os[..., 1, :], axis=(0,1,2))
-
-        # wrap moving data access with a function
-        def moving_data_chunk(origin, span):
-            origin = origin.astype(int)
-            span = span.astype(int)
-            return mov[tuple(slice(o, o+s) for o, s in zip(origin, span))]
-
-        # delay the data access function
-        mdc = delayed(moving_data_chunk, pure=True)
-
-        # cut moving data into blocks
-        sh = origins_da.shape[:3]
-        mov_da = [[[da.from_delayed(
-                    mdc(origins_da[i, j, k], span),
-                    dtype=mov.dtype,
-                    shape=span) 
-                    for k in range(sh[2])]
-                    for j in range(sh[1])]
-                    for i in range(sh[0])]
-
-        # reformat to dask array, extra dimension for map_blocks
-        mov_da = da.block(mov_da)[..., None]
-
-        # wrap interpolate function
-        def wrapped_interpolate_image(t, mov, origin, mov_spacing):
-            mov, origin = mov.squeeze(), origin.squeeze()
-            t = t / mov_spacing - origin
-            return interpolate_image(mov, t)
-
-        print(transform_da)
-        print(mov_da)
-        print(origins_da)
-        return 0
+        def transform_block(transform, mov):
+            # convert to voxel units
+            t = transform / mov_spacing
+            # get moving data block
+            s = np.floor(t.min(axis=(0,1,2))).astype(int)
+            s = np.maximum(0, s)
+            e = np.ceil(t.max(axis=(0,1,2))).astype(int) + 1
+            slc = tuple(slice(x, y) for x, y in zip(s, e))
+            mov_block = mov[slc]
+            # interpolate block (adjust transform to local origin)
+            return interpolate_image(mov_block, t - s)
 
         # map the interpolate function
         aligned = da.map_blocks(
-            wrapped_interpolate_image,
-            transform_da, mov_da, origins_da,
-            mov_spacing=mov_spacing,
+            transform_block,
+            transform_da, mov=mov_s,
             dtype=mov.dtype,
             chunks=tuple(blocksize),
             drop_axis=[3,],
@@ -177,6 +138,24 @@ def apply_position_field(
             return aligned
 
 
+def compose_affines(global_affine, local_affines):
+    """
+    """
+
+    # get block info
+    block_grid = local_affines.shape[:3]
+    nblocks = np.prod(block_grid)
+
+    # compose with global affine
+    total_affines = np.copy(local_affines)
+    for i in range(nblocks):
+        x, y, z = np.unravel_index(i, block_grid)
+        total_affines[x, y, z] = np.matmul(
+            global_affine, local_affines[x, y, z]
+        )
+    return total_affines
+
+
 def apply_local_affines(
     fix, mov,
     fix_spacing, mov_spacing,
@@ -195,14 +174,10 @@ def apply_local_affines(
     block_grid = local_affines.shape[:3]
     nblocks = np.prod(block_grid)
 
-    # compose with global affine
+    # compose global/local affines
     total_affines = np.copy(local_affines)
     if global_affine is not None:
-        for i in range(nblocks):
-            x, y, z = np.unravel_index(i, block_grid)
-            total_affines[x, y, z] = np.matmul(
-                global_affine, local_affines[x, y, z]
-            )
+        total_affines = compose_affines(global_affine, local_affines)
 
     # get shape and overlap for position field
     pf_shape = fix.shape if not transpose[0] else fix.shape[::-1]

@@ -1,6 +1,6 @@
 import numpy as np
 import greedypy.greedypy_registration_method as gprm
-from bigstream import stitch
+import dask_stitch as ds
 from bigstream import transform
 import dask.array as da
 import zarr
@@ -60,31 +60,36 @@ def tiled_deformable_align(
 
     # get number of blocks required
     block_grid = np.ceil(np.array(fix.shape) / blocksize)
-    nblocks = np.prod(block_grid)
 
     # get true field shape
     original_shape = fix.shape
     if transpose[0]:
         original_shape = original_shape[::-1]
 
+    # compose global/local affines
+    total_affines = None
+    if local_affines is not None and global_affine is not None:
+        total_affines = transform.compose_affines(
+            global_affine, local_affines,
+        )
+    elif global_affine is not None:
+        total_affines = np.empty(tuple(block_grid) + (4, 4))
+        total_affines[..., :, :] = global_affine
+    elif local_affines is not None:
+        total_affines = np.copy(local_affines)
+
     # get affine position field
+    overlap = tuple([int(round(x/8)) for x in blocksize])
     affine_pf = None
-    if global_affine is not None or local_affines is not None:
-        if local_affines is None:
-            local_affines = np.empty(
-                block_grid + (4,4), dtype=np.float32,
-            )
-            local_affines[..., :, :] = np.eye(4)
-        affine_pf = transform.local_affines_to_position_field(
-            original_shape, fix_spacing, blocksize,
-            local_affines, global_affine=global_affine,
-            lazy=True, cluster_kwargs=cluster_kwargs,
+    if total_affines is not None:
+        affine_pf = ds.local_affine.local_affines_to_field(
+            original_shape, fix_spacing, total_affines,
+            blocksize, overlap,
+            displacement=False,
         )
 
     # distributed computations done in cluster context
     with ClusterWrap.cluster(**cluster_kwargs) as cluster:
-        if write_path is not None or not lazy:
-            cluster.scale_cluster(nblocks + 1)
 
         # wrap images as dask arrays
         fix_da = da.from_array(fix)
@@ -109,55 +114,59 @@ def tiled_deformable_align(
 
         # wrap deformable function
         def wrapped_deformable_align(x, y):
-            warp = deformable_align(
+            return deformable_align(
                 x, y, fix_spacing, mov_spacing,
                 **deform_kwargs,
             )
-            return warp.reshape((1,1,1)+warp.shape)
 
         # deform all chunks
-        overlaps = tuple([int(round(x/8)) for x in blocksize])
-        out_blocks = [x + 2*y for x, y in zip(blocksize, overlaps)]
-        out_blocks = [1,1,1] + out_blocks + [3,]
-
+        out_blocks = [x + 2*y for x, y in zip(blocksize, overlap)] + [3,]
         warps = da.map_overlap(
-            wrapped_deformable_align, fix_da, mov_da,
-            depth=overlaps,
+            wrapped_deformable_align,
+            fix_da, mov_da,
+            depth=overlap,
             boundary=0,
             trim=False,
             align_arrays=False,
             dtype=np.float32,
-            new_axis=[3,4,5,6,],
+            new_axis=[3,],
             chunks=out_blocks,
         )
 
         # stitch neighboring displacement fields
-        warps = stitch.stitch_fields(warps, blocksize)
+        warps = ds.stitch.stitch_blocks(warps, blocksize, overlap)
 
         # crop any pads
         warps = warps[:original_shape[0],
                       :original_shape[1],
                       :original_shape[2]]
 
-
+        # compose with affine position field
         # TODO refactor transform.compose_position_fields
         #      replace this approximation
-        # compose with affine position field
         if affine_pf is not None:
             final_field = affine_pf + warps
         else:
-            final_field = warps + transform.position_grid_dask(
+            final_field = warps + ds.local_affine.position_grid(
                 original_shape, blocksize,
             )
 
         # if user wants to write to disk
         if write_path is not None:
-            compressor = Blosc(cname='zstd', clevel=9, shuffle=Blosc.BITSHUFFLE)
-            final_field_disk = zarr.open(write_path, 'w',
-                shape=final_field.shape, chunks=tuple(blocksize + [3,]),
-                dtype=final_field.dtype, compressor=compressor,
+            compressor = Blosc(
+                cname='zstd',
+                clevel=4,
+                shuffle=Blosc.BITSHUFFLE,
+            )
+            final_field_disk = zarr.open(
+                write_path, 'w',
+                shape=final_field.shape,
+                chunks=tuple(blocksize + [3,]),
+                dtype=final_field.dtype,
+                compressor=compressor,
             )
             da.to_zarr(final_field, final_field_disk)
+            return final_field_disk
 
         # if user wants to compute and return full field
         if not lazy:

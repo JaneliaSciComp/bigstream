@@ -3,9 +3,7 @@ from scipy.ndimage import map_coordinates
 import zarr
 import dask.array as da
 import dask.delayed as delayed
-from scipy.ndimage import zoom
 from dask_stitch.local_affine import local_affines_to_field
-from operator import getitem
 
 
 def position_grid(shape):
@@ -51,8 +49,25 @@ def apply_global_affine(
     return interpolate_image(mov, coords, order=order)
 
 
-# DASK functions
-def apply_position_field(
+def compose_affines(global_affine, local_affines):
+    """
+    """
+
+    # get block info
+    block_grid = local_affines.shape[:3]
+    nblocks = np.prod(block_grid)
+
+    # compose with global affine
+    total_affines = np.copy(local_affines)
+    for i in range(nblocks):
+        x, y, z = np.unravel_index(i, block_grid)
+        total_affines[x, y, z] = np.matmul(
+            global_affine, local_affines[x, y, z]
+        )
+    return total_affines
+
+
+def prepare_apply_position_field(
     fix, mov,
     fix_spacing, mov_spacing,
     transform,
@@ -105,25 +120,7 @@ def apply_position_field(
     )
 
 
-def compose_affines(global_affine, local_affines):
-    """
-    """
-
-    # get block info
-    block_grid = local_affines.shape[:3]
-    nblocks = np.prod(block_grid)
-
-    # compose with global affine
-    total_affines = np.copy(local_affines)
-    for i in range(nblocks):
-        x, y, z = np.unravel_index(i, block_grid)
-        total_affines[x, y, z] = np.matmul(
-            global_affine, local_affines[x, y, z]
-        )
-    return total_affines
-
-
-def apply_local_affines(
+def prepare_apply_local_affines(
     fix, mov,
     fix_spacing, mov_spacing,
     local_affines,
@@ -155,7 +152,7 @@ def apply_local_affines(
     )
 
     # align
-    return apply_position_field(
+    return prepare_apply_position_field(
         fix, mov, fix_spacing, mov_spacing,
         position_field, blocksize,
         transpose=transpose,

@@ -3,10 +3,6 @@ import greedypy.greedypy_registration_method as gprm
 import dask_stitch as ds
 from bigstream import transform
 import dask.array as da
-import zarr
-from numcodecs import Blosc
-from itertools import product
-import ClusterWrap
 
 
 def deformable_align(
@@ -43,7 +39,7 @@ def deformable_align(
     return register.get_warp()
 
 
-def tiled_deformable_align(
+def prepare_piecewise_deformable_align(
     fix, mov,
     fix_spacing, mov_spacing,
     blocksize,

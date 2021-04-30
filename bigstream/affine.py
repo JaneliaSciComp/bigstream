@@ -2,7 +2,6 @@ import numpy as np
 from bigstream import features
 from bigstream import ransac
 import dask.array as da
-import ClusterWrap
 
 
 def ransac_affine(
@@ -91,7 +90,7 @@ def interpolate_affines(affines):
     return affines
 
 
-def tiled_ransac_affine(
+def prepare_piecewise_ransac_affine(
     fix, mov,
     fix_spacing, mov_spacing,
     min_radius,

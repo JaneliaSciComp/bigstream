@@ -17,6 +17,7 @@ def ransac_affine(
     verbose=True,
     fix_spots=None,
     mov_spots=None,
+    default=np.eye(4),
     **kwargs,
 ):
     """
@@ -32,6 +33,9 @@ def ransac_affine(
             num_sigma=min(max_radius-min_radius, num_sigma_max),
             threshold=0, exclude_border=cc_radius,
         )
+        if fix_spots.shape[0] < 50:
+            print('Fewer than 50 spots found in fixed image, returning default')
+            return default
         if verbose:
             ns = fix_spots.shape[0]
             print(f'FIXED image: found {ns} key points')
@@ -42,6 +46,9 @@ def ransac_affine(
             num_sigma=min(max_radius-min_radius, num_sigma_max),
             threshold=0, exclude_border=cc_radius,
         )
+        if mov_spots.shape[0] < 50:
+            print('Fewer than 50 spots found in moving image, returning default')
+            return default
         if verbose:
             ns = mov_spots.shape[0]
             print(f'MOVING image: found {ns} key points')
@@ -80,14 +87,6 @@ def ransac_affine(
     return ransac.ransac_align_points(
         fix_spots, mov_spots, align_threshold, **kwargs,
     )
-
-
-def interpolate_affines(affines):
-    """
-    """
-
-    # TODO: replace identity matrices
-    return affines
 
 
 def prepare_piecewise_ransac_affine(
@@ -142,4 +141,62 @@ def prepare_piecewise_ransac_affine(
         new_axis=[3, 4],
         chunks=[1, 1, 1, 4, 4],
     )
+
+
+def interpolate_affines(affines):
+    """
+    """
+
+    # get block grid
+    block_grid = affines.shape[:3]
+
+    # construct an all identities matrix for comparison
+    all_identities = np.empty_like(affines)
+    for i in range(np.prod(block_grid)):
+        idx = np.unravel_index(i, block_grid)
+        all_identities[idx] = np.eye(4)
+
+    # if affines are all identity, just return
+    if np.all(affines == all_identities):
+        return affines
+
+    # process continues until there are no identity matrices left
+    new_affines = np.copy(affines)
+    identities = True
+    while identities:
+        identities = False
+
+        # loop over all affine matrices
+        for i in range(np.prod(block_grid)):
+            idx = np.unravel_index(i, block_grid)
+
+            # if an identity matrix is found
+            if np.all(new_affines[idx] == np.eye(4)):
+                identities = True
+                trans, denom = np.array([0, 0, 0]), 0
+
+                # average translations from 6 connected neighborhood
+                for ax in range(3):
+                    if idx[ax] > 0:
+                        neighbor = tuple(
+                            x-1 if j == ax else x for j, x in enumerate(idx)
+                        )
+                        neighbor_trans = new_affines[neighbor][:3, -1]
+                        if not np.all(neighbor_trans == 0):
+                            trans = trans + neighbor_trans
+                            denom += 1
+                    if idx[ax] < block_grid[ax]-1:
+                        neighbor = tuple(
+                            x+1 if j == ax else x for j, x in enumerate(idx)
+                        )
+                        neighbor_trans = new_affines[neighbor][:3, -1]
+                        if not np.all(neighbor_trans == 0):
+                            trans = trans + neighbor_trans
+                            denom += 1
+
+                # normalize then update matrix
+                if denom > 0: trans /= denom
+                new_affines[idx][:3, -1] = trans
+
+    return new_affines
 

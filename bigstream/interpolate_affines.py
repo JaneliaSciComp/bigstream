@@ -3,6 +3,7 @@ import numpy as np
 import glob
 from itertools import product
 from os.path import dirname
+import warnings
 
 
 def read_coords(path):
@@ -33,9 +34,12 @@ no_updates = False
 while not no_updates:
 
     no_updates = True
+    identity_count = 0
+
     for tile in tiles:
         affine = np.loadtxt(tile + '/ransac_affine.mat')
         if (affine == np.eye(4)[:3]).all():
+            identity_count += 1
             no_updates = False
             oo, ee, ii = read_coords(tile + '/coords.txt')
             neighbors = get_neighbors(tiledir, ii)
@@ -45,4 +49,11 @@ while not no_updates:
                 affine[:, -1] += neighbor_affine[:, -1]
             affine[:, -1] /= len(neighbors.keys())
             np.savetxt(tile + '/ransac_affine.mat', affine, fmt='%.6f', delimiter=' ')
+
+    if identity_count == len(tiles):
+        warning = "WARNING: all local affine alignments are identity.\n"
+        warning += "Check if images are already aligned.\n"
+        warning += "Check spot detection parameters and ensure enough feature points are detected"
+        warnings.warn(warning)
+        break
 

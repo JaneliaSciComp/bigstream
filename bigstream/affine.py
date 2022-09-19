@@ -21,6 +21,33 @@ def ransac_affine(
     **kwargs,
 ):
     """
+    The affine alignment algorithm is composed of three steps:
+
+    1. Key point extraction from fixed and moving images
+    2. Correspondence matching between fixed and moving key points using neighborhood correlation
+    3. Affine alignment of corresponding key points using RANSAC
+   
+    Parameters
+    ----------
+    min_radius: float
+        radius in voxels of smallest expected blob/cell size
+    max_radius: float
+        radius in voxels of largest expected blob/cell size
+    match_threshold: 
+        neighborhood correlation between two key points must exceed this value for it to be a valid match
+    cc_radius: float, optional
+        key points are matched using correlation of the data in their neighborhoods, this is the neighborhood radius in voxels (default: 12)
+    nspots: int, optional
+        the maximum number of key point pairs to use to compute the affine alignment (default: 5000)
+    align_threshold: float, optional
+        points are considered aligned by the affine if they are less than this value apart, in micrometers (default: 2.0)
+    num_sigma_max: float, optional
+        the maximum number of filters to run in the blob detection (default: 10)
+    
+    Returns
+    -------
+    global_affine: 
+        the return value is a 4x4 numpy array containing an affine transform matrix; this describes correspondence between points in the fixed image and moving image.
     """
 
     if verbose:

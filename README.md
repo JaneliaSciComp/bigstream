@@ -9,6 +9,17 @@ BigStream is a library of tools for 3D registration of images too large to fit i
 ---
 > pip install bigstream
 
+## Updates
+---
+BigStream has just undergone a major change to prepare for releasing v1.0.0.
+Improvements include:
+* Better utilization of dask primitives for faster and more robust distribution
+* More accurate linear blending of transform blocks for smoother transforms
+* A single python function to run the easi-fish registration pipeline directly
+* New alignment functions: feature point ransac affine, random affine search
+* Full access to the SimpleITK ImageRegistrationMethod options for almost all alignments
+* Better source code design providing easy modular access at many points in the funciton hierarchy
+
 ## Branches 
 ---
 The `master` branch is the most up to date version. With minimal modification it can be used in any distributed environment supported by [dask-jobqueue](https://jobqueue.dask.org/en/latest/ "dask-jobqueue").
@@ -18,39 +29,49 @@ The `prototype` branch is a record of the first implementation, built using a di
 ## Usage
 ---
 
-The simplest way to use BigStream, which will cover a large portion of the use cases, is to call an existing pipeline. For example, to use the global affine --> piecewise affine --> piecewise deformable method used to align multiround multiFISH datasets:
+Bigstream is flexible toolkit that can be used in many different ways. I'll enumerate some of them, starting with the "largest" (pipelines that chain together many steps) to the "smallest" (individual functions).
 
+Running the easi-fish registration pipeline:
 ```python
-from bigstream import pipelines
+from bigstream.application_pipelines import easifish_registration_pipeline
 
-transform = pipelines.multifish_registration_pipeline(
-    fixed_file_path=fixed_path,
-    fixed_lowres_dataset=fixed_lowres,
-    fixed_highres_dataset=fixed_highres,
-    moving_file_path=moving_path,
-    moving_lowres_dataset=moving_lowres,
-    moving_highres_dataset=moving_highres,
-    transform_write_path=forward_write_path,
-    inv_transform_write_path=inverse_write_path,
-    scratch_directory=scratch_path,
-    global_affine_params={},
-    local_affine_params={},
-    deform_params={},
+fix_lowres = """ load a lowres version of your fixed image """
+fix_highres = """ (lazy, e.g. zarr) load a highres version of your fixed image """
+mov_lowres = """ load a lowres version of your moving image """
+mov_highres = """ (lazy, e.g. zarr) load a highres version of your moving image """
+fix_lowres_spacing = """ voxel spacing of lowres fixed image """
+fix_highres_spacing = """ voxel spacing of highres fixed image """
+mov_lowres_spacing = """ voxel spacing of lowres moving image """
+mov_highres_spacing = """ voxel spacing of highres moving images """
+blocksize = [128, 128, 128]  # size of individual alignment blocks in voxels
+write_directory = './somewhere_to_save_transforms_and_images'
+
+affine, deform, aligned = easifish_registration_pipeline(
+    fix_lowres, fix_highres, mov_lowres, mov_highres,
+    fix_lowres_spacing, fix_highres_spacing,
+    mov_lowres_spacing, mov_highres_spacing,
+    blocksize=blocksize,
+    write_directory=write_directory,
 )
 ```
 
-All inputs other than the last three are strings. This pipeline assumes the input image format is [N5](https://zarr.readthedocs.io/en/stable/api/n5.html "N5 documentation") (can be written using [Zarr](https://zarr.readthedocs.io/en/stable/index.html "Zarr documentation")), so `fixed_file_path` and `moving_file_path` are paths to N5 files.
+This pipeline runs 4 steps:
+* global affine based on feature point ransac
+* global affine refinement based on gradient descent on image intensities
+* local affine based on feature point ransac
+* local deform based on gradient descent on image intensities
 
-Roughly speaking this pipeline executes three steps:
-1. global affine
-1. piecewise affine
-1. piecewise deformation
+These four steps can be customized using these optional parameters to the pipeline:
 
-Affine alignments are done at a lower resolution than deformable alignments. `fixed_lowres_dataset` is the path to the low resolution scale level in the fixed N5 file, the other variable names should be clear.
+```python
+global_ransac_kwargs
+global_affine_kwargs
+local_ransac_kwargs
+local_deform_kwargs
+```
 
-The pipeline results in two outputs: a forward transform and an inverse transform, both stored as N5 files on disk. To construct these outputs, and because it is assumed that the input images are very large, several objects are written to disk for temporary storage - so a scratch directory must also be provided. The temporary files will be removed by he pipeline itself when they are no longer needed.
+See the docstring for `easifish_registration_pipeline` for more details.
 
-Finaly, the params dictionaries allow knowledgeable users to modify parameters associated with the individual steps of the pipeline.
 
 ## Tutorials
 ---

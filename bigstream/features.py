@@ -23,18 +23,15 @@ def blob_detection(
     return np.hstack((spots[:, :3], intensities[..., None]))
 
 
-def get_spot_context(image, spots, vox, radius):
+def get_contexts(image, coords, radius):
     """
     """
 
-    output = []
-    for spot in spots:
-        s = (spot/vox).astype(int)
-        w = image[s[0]-radius:s[0]+radius+1,
-                  s[1]-radius:s[1]+radius+1,
-                  s[2]-radius:s[2]+radius+1]
-        output.append( [spot, w] )
-    return output    
+    contexts = []
+    for coord in coords:
+        crop = tuple(slice(x-radius, x+radius+1) for x in coord)
+        contexts.append(image[crop])
+    return contexts    
 
 
 def _stats(arr):
@@ -53,9 +50,9 @@ def pairwise_correlation(A, B):
     """
     """
 
-    # grab and flatten context
-    a_con = np.array( [a[1].flatten() for a in A] )
-    b_con = np.array( [b[1].flatten() for b in B] )
+    # flatten contexts into array
+    a_con = np.array( [a.flatten() for a in A] )
+    b_con = np.array( [b.flatten() for b in B] )
 
     # get means and std for all contexts, center contexts
     a_mean, a_std = _stats(a_con)
@@ -74,13 +71,9 @@ def pairwise_correlation(A, B):
     return corr
 
 
-def match_points(A, B, scores, threshold):
+def match_points(a_pos, b_pos, scores, threshold):
     """
     """
-
-    # split positions from context
-    a_pos = np.array( [a[0] for a in A] )
-    b_pos = np.array( [b[0] for b in B] )
 
     # get highest scores above threshold
     best_indcs = np.argmax(scores, axis=1)

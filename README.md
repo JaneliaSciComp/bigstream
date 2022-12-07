@@ -142,10 +142,39 @@ local_aligned = piecewise_apply_transform(
 )
 ```
 
-See the docstrings for `bigstream.align.alignment_pipeline`, `bigstream.piecewise_align.distributed_piecewise_alignment_pipeline`, `bigstream.transform.apply_transform`, and `bigstream.piecewise_transform.distributed_apply_transform` for more details.
+For details, see the docstrings for:
+* `bigstream.align.alignment_pipeline`
+* `bigstream.piecewise_align.distributed_piecewise_alignment_pipeline`
+* `bigstream.transform.apply_transform`
+* `bigstream.piecewise_transform.distributed_apply_transform`
 
 ### Using individual functions
+```python
+from bigstream.align import affine_align
+from bigstream.transform import apply_transform
 
+# load all the input data
+fix = """ load your fixed image """
+mov = """ load your moving image """
+fix_spacing = """ voxel spacing of fixed image """
+mov_spacing = """ voxel spacing of moving image """
+
+# run an affine alignment
+affine = affine_align(
+    fix, mov,
+    fix_spacing, mov_spacing,
+    # TONS of customization and efficiency options available here
+)
+
+# apply transform
+aligned = apply_transform(
+    fix, mov,
+    fix_spacing, mov_spacing,
+    transform_list=[affine,],  # this list can be arbitrarily long
+)
+```
+
+The docstrings for the functions in `bigstream.align` show all the configurable options available. Any alignment function has full access to the SimpleITK ImageRegistrationMethod API.
 
 ## Tutorials
 ---

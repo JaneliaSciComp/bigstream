@@ -29,12 +29,13 @@ The `prototype` branch is a record of the first implementation, built using a di
 ## Usage
 ---
 
-Bigstream is flexible toolkit that can be used in many different ways. I'll enumerate some of them, starting with the "largest" (pipelines that chain together many steps) to the "smallest" (individual functions).
+Bigstream is flexible toolkit that can be used in many different ways. I'll discuss some of them in order of "largest" (pipelines that chain together many steps) to "smallest" (individual functions).
 
-Running the easi-fish registration pipeline:
+### Running the easi-fish registration pipeline:
 ```python
 from bigstream.application_pipelines import easifish_registration_pipeline
 
+# load all the input data
 fix_lowres = """ load a lowres version of your fixed image """
 fix_highres = """ (lazy, e.g. zarr) load a highres version of your fixed image """
 mov_lowres = """ load a lowres version of your moving image """
@@ -71,6 +72,79 @@ local_deform_kwargs
 ```
 
 See the docstring for `easifish_registration_pipeline` for more details.
+
+### Running custom alignment pipelines
+```python
+from bigstream.align import alignment_pipeline
+from bigstream.piecewise_align import distributed_piecewise_alignment_pipeline
+from bigstream.transform import apply_transform
+from bigstream.piecewise_transform import distributed_apply_transform
+
+# load all the input data
+fix_lowres = """ load a lowres version of your fixed image """
+fix_highres = """ (lazy, e.g. zarr) load a highres version of your fixed image """
+mov_lowres = """ load a lowres version of your moving image """
+mov_highres = """ (lazy, e.g. zarr) load a highres version of your moving image """
+fix_lowres_spacing = """ voxel spacing of lowres fixed image """
+fix_highres_spacing = """ voxel spacing of highres fixed image """
+mov_lowres_spacing = """ voxel spacing of lowres moving image """
+mov_highres_spacing = """ voxel spacing of highres moving images """
+blocksize = [128, 128, 128]  # size of individual alignment blocks in voxels
+write_directory = './somewhere_to_save_transforms_and_images'
+
+# construct a global alignment pipeline
+rigid_kwargs = {}  # see bigstream.align.affine_align docstring for options
+affine_kwargs = {} # see bigstream.align.affine_align docstring for options
+deform_kwargs = {} # see bigstream.align.deformable_align docstring for options
+steps = [('rigid', rigid_kwargs), ('affine', affine_kwargs), ('deform', deform_kwargs)]
+
+# run the alignment
+global_transform = alignment_pipeline(
+    fix_lowres, mov_lowres,
+    fix_lowres_spacing,
+    mov_lowres_spacing,
+    steps=steps,
+)
+
+# apply transform
+global_aligned = apply_transform(
+    fix_lowres, mov_lowres,
+    fix_lowres_spacing, mov_lowres_spacing,
+    transform_list=[global_transform,],
+)
+
+# construct a local alignment pipeline to refine global result
+rigid_kwargs = {}  # see bigstream.align.affine_align docstring for options
+affine_kwargs = {} # see bigstream.align.affine_align docstring for options
+deform_kwargs = {} # see bigstream.align.deformable_align docstring for options
+steps = [('rigid', rigid_kwargs), ('affine', affine_kwargs), ('deform', deform_kwargs)]
+blocksize = [128, 128, 128]
+
+# run the alignment
+local_transform = distributed_piecewise_alignment_pipeline(
+    fix_highres, mov_highres
+    fix_highres_spacing, mov_highres_spacing,
+    steps=steps,
+    blocksize=blocksize,
+    static_transform_list=[global_transform,]
+    write_path='./deform.zarr',
+    cluster_kwargs={## params to control your cluster},
+)
+
+# apply the transforms
+local_aligned = piecewise_apply_transform(
+    fix_highres, mov_highres,
+    fix_highres_spacing, mov_highres_spacing,
+    transform_list=[global_transform, local_transform],
+    blocksize=blocksize,
+    write_path='./deformed.zarr',
+    cluster_kwargs={## params to control your cluster},
+)
+```
+
+See the docstrings for `bigstream.align.alignment_pipeline`, `bigstream.piecewise_align.distributed_piecewise_alignment_pipeline`, `bigstream.transform.apply_transform`, and `bigstream.piecewise_transform.distributed_apply_transform` for more details.
+
+### Using individual functions
 
 
 ## Tutorials

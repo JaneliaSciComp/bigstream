@@ -910,11 +910,11 @@ def alignment_pipeline(
     a = (fix, mov, fix_spacing, mov_spacing)
     b = {'fix_mask':fix_mask, 'mov_mask':mov_mask,
          'fix_origin':fix_origin, 'mov_origin':mov_origin,}
-    align = {'ransac':lambda **c: feature_point_ransac_affine_align(*a, **b, **c),
-             'random':lambda **c: random_affine_search(*a, **b, **c)[0],
-             'rigid': lambda **c: affine_align(*a, **b, **c, rigid=True),
-             'affine':lambda **c: affine_align(*a, **b, **c),
-             'deform':lambda **c: deformable_align(*a, **b, **c)[1],}
+    align = {'ransac':lambda **c: feature_point_ransac_affine_align(*a, **{**b, **c}),
+             'random':lambda **c: random_affine_search(*a, **{**b, **c})[0],
+             'rigid': lambda **c: affine_align(*a, **{**b, **c}, rigid=True),
+             'affine':lambda **c: affine_align(*a, **{**b, **c}),
+             'deform':lambda **c: deformable_align(*a, **{**b, **c})[1],}
 
     # loop over steps
     initial_transform_count = len(static_transform_list)

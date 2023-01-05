@@ -573,7 +573,10 @@ def affine_align(
         irm.SetMovingInitialTransform(T)
     # set transform to optimize
     if isinstance(initial_condition, str) and initial_condition == "CENTER":
-        x = sitk.CenteredTransformInitializer(fix, mov, sitk.Euler3DTransform())
+        a, b = fix, mov
+        if fix_mask is not None and mov_mask is not None:
+            a, b = fix_mask, mov_mask
+        x = sitk.CenteredTransformInitializer(a, b, sitk.Euler3DTransform())
         x = sitk.Euler3DTransform(x).GetTranslation()[::-1]
         initial_condition = np.eye(4)
         initial_condition[:3, -1] = x

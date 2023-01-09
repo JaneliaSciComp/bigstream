@@ -24,5 +24,6 @@ setuptools.setup(
         'numcodecs>=0.9.1',
         'fishspot>=0.2.3',
         'SimpleITK>=2.2.0',
+        'tifffile>=2022.10.10'
     ]
 )

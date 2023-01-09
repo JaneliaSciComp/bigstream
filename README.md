@@ -3,7 +3,7 @@
 
 ![warp](resources/warp_interpolation.gif)
 
-BigStream is a library of tools for 3D registration of images too large to fit into memory and/or too large to register in a single (multi-threaded) process. BigStream automates chunking of the alignment problem into overlapping blocks, distributes the blocks to independent workers running in parallel, and stitches the results into a single smooth transform. BigStream includes global affine, piecewise affine, and piecewise deformable alignments; it also includes tools for finding feature points of interest, applying transforms, and inverting transforms. The tools can be used individually to construct custom workflows, but pipelines are also provided for specific alignment problems.
+BigStream is a library of tools for 3D registration including images too large to fit into memory and/or too large to register in a single (multi-threaded) process. BigStream can automate chunking of the alignment problem into overlapping blocks, distributes the blocks to independent workers running in parallel, and stitches the results into a single smooth transform. BigStream includes global affine, piecewise affine, and piecewise deformable alignments; it also includes tools for finding feature points of interest, applying transforms, and inverting transforms. The tools can be used individually to construct custom workflows, but pipelines are also provided for specific alignment problems.
 
 ## Installation
 ---
@@ -20,14 +20,27 @@ Improvements include:
 * Full access to the SimpleITK ImageRegistrationMethod options for almost all alignments
 * Better source code design providing easy modular access at many points in the funciton hierarchy
 
+Development wise, bigstream has reached a milestone in stability and I can now focus on documenting, teaching, and maintaining the package instead of building core functionality.
+
 ## Branches 
 ---
 The `master` branch is the most up to date version. With minimal modification it can be used in any distributed environment supported by [dask-jobqueue](https://jobqueue.dask.org/en/latest/ "dask-jobqueue").
 
 The `prototype` branch is a record of the first implementation, built using a different software stack. Rather than DASK, it handles blocking, distribution, and stiching manually. The primary workflow can be seen in the `stream.sh` script. This version was built specifically for LSF clusters and minimal modification of the `submit` function in `stream.sh` would be required for using this version on other clusters. 
 
-## Usage
+## Tutorials and Tutorial Data
 ---
+
+For those interested in using the modular components of BigStream, ipython notebooks are provided walking you through the components that make up a pipeline. For example, [here is the tutorial for the multifish_registration_pipeline](https://github.com/GFleishman/bigstream/blob/master/notebooks/bigstream_intro_tutorial.ipynb "multifish registration tutorial"). Included in the repository are several datasets useful for testing and demonstrating functionality in the tutorials. 
+
+## Issues
+---
+Please use the github issue tracker on this page for issues of any kind.
+
+## Usage Examples
+---
+
+The tutorials are a more in depth way to learn the package, but here are some usage examples.
 
 Bigstream is flexible toolkit that can be used in many different ways. I'll discuss some of them in order of "largest" (pipelines that chain together many steps) to "smallest" (individual functions).
 
@@ -176,16 +189,3 @@ aligned = apply_transform(
 
 The docstrings for the functions in `bigstream.align` show all the configurable options available. Any alignment function has full access to the SimpleITK ImageRegistrationMethod API.
 
-## Tutorials
----
-
-For those interested in using the modular components of BigStream, ipython notebooks are provided walking you through the components that make up a pipeline. For example, [here is the tutorial for the multifish_registration_pipeline](https://github.com/GFleishman/bigstream/blob/master/notebooks/bigstream_intro_tutorial.ipynb "multifish registration tutorial").
-
-## Tutorial data
----
-
-Included in the repository are several datasets useful for testing and demonstrating functionality in the tutorials. 
-
-## Issues
----
-Please use the github issue tracker on this page for issues of any kind.

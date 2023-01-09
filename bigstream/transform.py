@@ -199,6 +199,23 @@ def compose_displacement_vector_fields(
     spacing,
 ):
     """
+    Compose two displacement vector fields into a single field
+
+    Parameters
+    ----------
+    first_field : nd-array
+        The first field
+
+    second_field : nd-array
+        The second field
+
+    spacing : 1d-array
+        The voxel spacing for the two fields (fields must have same spacing)
+
+    Returns
+    -------
+    composite_field : nd-array
+        The single field composition of first_field and second_field
     """
 
     # container for warped first field
@@ -221,6 +238,26 @@ def compose_displacement_vector_fields(
 
 def compose_transforms(transform_one, transform_two, spacing):
     """
+    Compose two transforms into a single transform
+
+    Parameters
+    ----------
+    transform_one : nd-array
+        Can be either a 4x4 affine matrix or a displacement vector field
+
+    transform_two : nd-array
+        Can be either a 4x4 affine matrix or a displacement vector field
+
+    spacing : 1d-array
+        The voxel spacing for the two transforms (transforms must have same spacing)
+        Ignored for affine matrices.
+
+    Returns
+    -------
+    composite_transform : nd-array
+        The single transform composition of transform_one and transform_two
+        If both given transforms are affine this is a 4x4 matrix. Otherwise,
+        it is a displacement vector field.
     """
 
     # two affines
@@ -247,6 +284,24 @@ def compose_transforms(transform_one, transform_two, spacing):
 
 def compose_transform_list(transforms, spacing):
     """
+    Compose a list of transforms into a single transform
+
+    Parameters
+    ----------
+    transforms : list
+        Elements of list must be either 4x4 affine matrices or displacement
+        vector fields
+
+    spacing : 1d-array
+        The voxel spacing of all transforms in the list (all transforms must
+        have the same spacing). Ignored for affine transforms.
+
+    Returns
+    -------
+    composite_transform : nd-array
+        The single transform composition of all elements in transforms.
+        If all transforms are affine, this is a 4x4 matrix. Otherwise,
+        it is a displacement vector field.
     """
 
     transform = transforms.pop()
@@ -263,6 +318,34 @@ def invert_displacement_vector_field(
     sqrt_iterations=5,
 ):
     """
+    Numerically find the inverse of a displacement vector field.
+
+    Parameters
+    ----------
+    field : nd-array
+        The displacement vector field to invert
+
+    spacing : 1d-array
+        The physical voxel spacing of the displacement field
+
+    iterations : scalar int (default: 10)
+        The number of stationary point iterations to find inverse. More
+        iterations gives a more accurate inverse but takes more time.
+
+    order : scalar int (default: 2)
+        The number of roots to take before stationary point iterations
+
+    sqrt_iterations : scalar int (default: 5)
+        The number of iterations to find the field composition square root
+
+    Returns
+    -------
+    inverse_field : nd-array
+        The numerical inverse of the given displacement vector field.
+        field(inverse_field) should be nearly zeros everywhere.
+        inverse_field(field) should be nearly zeros everywhere.
+        If precision is not high enough, look at iterations,
+        order, and sqrt_iterations.
     """
 
     # initialize inverse as negative root

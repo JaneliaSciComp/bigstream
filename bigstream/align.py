@@ -91,6 +91,84 @@ def feature_point_ransac_affine_align(
     **kwargs,
 ):
     """
+    Compute an affine alignment from feature points and ransac. A blob detector finds feature points
+    and a correspondence between those points is estimated. A ransac filter determines the affine
+    transform that brings the largest number of corresponding points to the same locations.
+
+    Parameters
+    ----------
+    fix : ndarray
+        the fixed image
+
+    mov : ndarray
+        the moving image; `fix.ndim` must equal `mov.ndim`
+
+    fix_spacing : 1d array
+        The spacing in physical units (e.g. mm or um) between voxels
+        of the fixed image.
+        Length must equal `fix.ndim`
+
+    mov_spacing : 1d array
+        The spacing in physical units (e.g. mm or um) between voxels
+        of the moving image.
+        Length must equal `mov.ndim`
+
+    blob_sizes : list of two floats
+        The [minimum, maximum] size of feature point objects in voxel units
+
+    num_sigma_max : scalar int (default: 15)
+        The maximum number of laplacians to use in the feature point LoG detector
+
+    cc_radius : scalar int (default: 12)
+        The halfwidth of neighborhoods around feature points used to determine
+        correlation and correspondence
+
+    nspots : scalar int (default: 5000)
+        The maximum number of feature point spots to use in each image
+
+    match_threshold : scalar float in range [0, 1] (default: 0.7)
+        The minimum correlation two feature point neighborhoods must have to
+        consider them corresponding points
+
+    align_threshold :
+
+    diagonal_constraint : scalar float (default: 0.75)
+        Diagonal entries of the affine matrix cannot be lower than this number
+
+    fix_spots : nd-array Nx3 (default: None)
+        Skip the spot detection for the fixed image and provide your own spot coordinate
+
+    mov_spots : nd-array Nx3 (default: None)
+        Skip the spot detection for the moving image and provide your own spot coordinate
+
+    fix_mask : binary nd-array (default: None)
+        Spots from fixed image can only be found in the foreground of this mask
+
+    mov_mask : binary nd-array (default: None)
+        Spots from moving image can only be found in the foreground of this mask
+
+    fix_origin : 1d array (default: (0, 0, 0))
+        The origin of the fixed image in physical units
+
+    mov_origin : 1d array (default: (0, 0, 0))
+        The origin of the moving image in physical units
+
+    static_transform_list : list of numpy arrays (default: [])
+        Transforms applied to moving image before applying query transform
+        Assumed to have the same domain as the fixed image, though sampling
+        can be different. I.e. the origin and span are the same (in phyiscal
+        units) but the number of voxels can be different.
+
+    default : 2d array 4x4 (default: None)
+        A default transform to return if the method fails to find a valid one
+
+    **kwargs : any additional keyword arguments
+        Passed to cv2.estimateAffine3D
+
+    Returns
+    -------
+    affine_matrix : 2d array 4x4
+        An affine matrix matching the moving image to the fixed image
     """
 
     # establish default

@@ -10,6 +10,25 @@ def blob_detection(
     **kwargs,
 ):
     """
+    Find discrete blobs in an image
+
+    Parameters
+    ----------
+    image : nd-array
+        The image containing blobs or points you want to detect
+    min_blob_radius : scalar float
+        The smallest size blob you want to find in voxel units
+    max_blob_radius : scalar float
+        The largest size blob you want to find in voxel units
+    **kwargs : any additional kwargs
+        Passed to fishspot.detect_spots_log
+
+    Returns
+    -------
+    blob_coordinates_and_intensities : nd-array Nx4
+        The first three columns of the array are the coordinates of the
+        detected blobs. The last column is the image intensity at the
+        detected coordinate location.
     """
 
     wth = white_tophat(image, max_blob_radius)
@@ -25,6 +44,21 @@ def blob_detection(
 
 def get_contexts(image, coords, radius):
     """
+    Get neighborhoods of a set of coordinates
+
+    Parameters
+    ----------
+    image : nd-array
+        The source image data
+    coords : nd-array Nx3
+        A set of coordinates into the image data
+    radius : scalar int
+        The half width of neighborhoods to extract
+
+    Returns
+    -------
+    neighborhoods : list of nd-arrays
+        List of the extracted neighborhoods
     """
 
     contexts = []
@@ -48,6 +82,19 @@ def _stats(arr):
 
 def pairwise_correlation(A, B):
     """
+    Pearson correlation coefficient of all neighborhoods in A to all neighborhoods in B
+
+    Parameters
+    ----------
+    A : list of nd-arrays
+        First list of neighborhoods
+    B : list of nd-arrays
+        Second list of neighborhoods
+
+    Returns
+    -------
+    correlations : 2d-array, NxM
+        N is the length of A and M is the length of B
     """
 
     # flatten contexts into array
@@ -73,6 +120,23 @@ def pairwise_correlation(A, B):
 
 def match_points(a_pos, b_pos, scores, threshold):
     """
+    Given two point sets and pairwise scores, determine which points correspond.
+
+    Parameters
+    ----------
+    a_pos : 2d-array Nx3
+        First set of point coordinates
+    b_pos : 2d-array Mx3
+        Second set of point coordinates
+    scores : 2d-array NxM
+        Correspondence scores for all points in a_pos to all points in b_pos
+    threshold : scalar float
+        Minimum correspondence score for a valid match
+
+    Returns
+    -------
+    matched_a_points, matched_b_points : two 2d-arrays both Px3
+        The points from a_pos and b_pos that correspond
     """
 
     # get highest scores above threshold

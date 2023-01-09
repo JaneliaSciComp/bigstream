@@ -24,6 +24,69 @@ def distributed_apply_transform(
     **kwargs,
 ):
     """
+    Resample a larger-than-memory moving image onto a fixed image through a
+    list of transforms
+
+    Parameters
+    ----------
+    fix : zarr array
+        The fixed image data
+
+    mov : zarr array
+        The moving image data
+
+    fix_spacing : 1d array
+        The spacing in physical units (e.g. mm or um) between voxels
+        of the fixed image. Length must equal `fix.ndim`
+
+    mov_spacing : 1d array
+        The spacing in physical units (e.g. mm or um) between voxels
+        of the moving image. Length must equal `mov.ndim`
+
+    transform_list : list
+        The list of transforms to apply. These may be 2d arrays of shape 4x4
+        (affine transforms), or ndarrays of `fix.ndim` + 1 dimensions (deformations).
+        Zarr arrays work just fine.
+
+    blocksize : iterable
+        The shape of blocks in voxels
+
+    write_path : string (default: None)
+        Location on disk to write the resampled data as a zarr array
+
+    overlap : float in range [0, 1] (default: 0.5)
+        Block overlap size as a percentage of block size
+
+    inverse_transforms : bool (default: False)
+        Set to true if the list of transforms are all inverted
+
+    dataset_path : string (default: None)
+        A subpath in the zarr array to write the resampled data to
+
+    temporary_directory : string (default: None)
+        A parent directory for temporary data written to disk during computation
+        If None then the current directory is used
+
+    cluster : ClusterWrap.cluster object (default: None)
+        Only set if you have constructed your own static cluster. The default behavior
+        is to construct a cluster for the duration of this function, then close it
+        when the function is finished.
+
+    cluster_kwargs : dict (default: {})
+        Arguments passed to ClusterWrap.cluster
+        If working with an LSF cluster, this will be
+        ClusterWrap.janelia_lsf_cluster. If on a workstation
+        this will be ClusterWrap.local_cluster.
+        This is how distribution parameters are specified.
+
+    **kwargs : Any additional keyword arguments
+        Passed to bigstream.transform.apply_transform
+
+    Returns
+    -------
+    resampled : array
+        The resampled moving data with transform_list applied. If write_path is not None
+        this will be a zarr array. Otherwise it is a numpy array.
     """
 
     # temporary file paths and ensure inputs are zarr
@@ -169,6 +232,58 @@ def distributed_apply_transform_to_coordinates(
     cluster_kwargs={},
 ):
     """
+    Move a set of coordinates through a list of transforms
+    Transforms can be larger-than-memory
+
+    Parameters
+    ----------
+    coordinates : Nxd array
+        The coordinates to move. N such coordinates in d dimensions.
+
+    transform_list : list
+        The transforms to apply, in stack order. Elements must be 2d 4x4 arrays
+        (affine transforms) or d + 1 dimension arrays (deformations).
+        Zarr arrays work just fine.
+
+    partition_size : scalar float (default: 30.)
+        Size of blocks that domain is carved into for distributed computation
+        in same units as coordinates
+
+    transform_spacing : 1d array or tuple of 1d arrays (default: None)
+        The spacing in physical units (e.g. mm or um) between voxels
+        of any deformations in the transform_list. If any transform_list
+        contains any deformations then transform_spacing cannot be None.
+        If a single 1d array then all deforms have that spacing.
+        If a tuple, then its length must be the same as transform_list,
+        thus each deformation can be given its own spacing. Spacings given
+        for affine transforms are ignored.
+
+    transform_origin : 1d array or tuple of 1d arrays (default: None)
+        The origin in physical units (e.g. mm or um) of the given transforms.
+        If None, all origins are assumed to be (0, 0, 0, ...); otherwise, follows
+        the same logic as transform_spacing. Origins given for affine transforms
+        are ignored.
+
+    temporary_directory : string (default: None)
+        A parent directory for temporary data written to disk during computation
+        If None then the current directory is used
+
+    cluster : ClusterWrap.cluster object (default: None)
+        Only set if you have constructed your own static cluster. The default behavior
+        is to construct a cluster for the duration of this function, then close it
+        when the function is finished.
+
+    cluster_kwargs : dict (default: {})
+        Arguments passed to ClusterWrap.cluster
+        If working with an LSF cluster, this will be
+        ClusterWrap.janelia_lsf_cluster. If on a workstation
+        this will be ClusterWrap.local_cluster.
+        This is how distribution parameters are specified.
+
+    Returns
+    -------
+    transformed_coordinates : Nxd array
+        The given coordinates transformed by the given transform_list
     """
 
     # TODO: check this for multiple deforms and transform_origin as a list
@@ -249,6 +364,48 @@ def distributed_invert_displacement_vector_field(
     cluster_kwargs={},
 ):
     """
+    Numerically find the inverse of a larger-than-memory displacement vector field
+
+    Parameters
+    ----------
+    field_zarr : zarr array
+        The displacement vector field to invert
+
+    spacing : 1d-array
+        The physical voxel spacing of the displacement field
+
+    blocksize : iterable
+        The shape of blocks in voxels
+
+    write_path : string (default: None)
+        Location on disk to write the resampled data as a zarr array
+
+    iterations : scalar int (default: 10)
+        The number of stationary point iterations to find inverse. More
+        iterations gives a more accurate inverse but takes more time.
+
+    order : scalar int (default: 2)
+        The number of roots to take before stationary point iterations.
+
+    sqrt_iterations : scalar int (default: 5)
+        The number of iterations to find the field composition square root.
+
+    cluster : ClusterWrap.cluster object (default: None)
+        Only set if you have constructed your own static cluster. The default behavior
+        is to construct a cluster for the duration of this function, then close it
+        when the function is finished.
+
+    cluster_kwargs : dict (default: {})
+        Arguments passed to ClusterWrap.cluster
+        If working with an LSF cluster, this will be
+        ClusterWrap.janelia_lsf_cluster. If on a workstation
+        this will be ClusterWrap.local_cluster.
+        This is how distribution parameters are specified.
+
+    Returns
+    -------
+    inverse_field : zarr array
+        The numerical inverse of the given displacement vector field as a zarr array.
     """
 
     # get overlap and number of blocks

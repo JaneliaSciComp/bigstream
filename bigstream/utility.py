@@ -9,6 +9,28 @@ from distributed import Lock
 
 def skip_sample(image, spacing, ss_spacing):
     """
+    Return a subset of the voxels in an image to approximate a different
+    sampling rate
+
+    Parameters
+    ----------
+    image : nd-array
+        The image to sub-sample
+
+    spacing : 1d-array
+        The physical spacing of the voxels in image
+
+    ss_spacing : 1d-array
+        The desired physical spacing to approximate by skipping voxels
+
+    Returns
+    -------
+    smaller_image : nd-array
+        a subset of voxels from image with a new spacing as close as
+        possible to ss_spacing
+
+    new_spacing : 1d-array
+        the physical spacing of smaller_image
     """
 
     spacing = np.array(spacing)
@@ -19,6 +41,26 @@ def skip_sample(image, spacing, ss_spacing):
 
 def numpy_to_sitk(image, spacing=None, origin=None, vector=False):
     """
+    Convert a numpy array to a sitk image object
+
+    Parameters
+    ----------
+    image : nd-array
+        The image data
+
+    spacing : 1d-array (default: None)
+        The physical spacing of image
+
+    origin : 1d-array (default: None)
+        The physical origin of image
+
+    vector : bool (default:False)
+        If the last axis of image is a vector dimension
+
+    Returns
+    -------
+    sitk_image : sitk.image object
+        The given image data with correct spacing and origin set
     """
 
     # check endianness of data - some sitk operations seem to
@@ -38,6 +80,17 @@ def numpy_to_sitk(image, spacing=None, origin=None, vector=False):
 
 def invert_matrix_axes(matrix):
     """
+    Permute matrix entries to reflect an xyz to zyx (or vice versa) axis reordering
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The matrix to permute
+
+    Returns
+    -------
+    permuted_matrix : 4x4 array
+        The same matrix but with the axis order inverted
     """
 
     corrected = np.eye(4)
@@ -48,6 +101,20 @@ def invert_matrix_axes(matrix):
 
 def change_affine_matrix_origin(matrix, origin):
     """
+    Affine matrix change of origin
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The matrix to rebase
+
+    origin : 1d-array
+        The new origin
+
+    Returns
+    -------
+    new_matrix : 4x4 array
+        The same affine transform but encoded with respect to the given origin
     """
 
     tl, tr = np.eye(4), np.eye(4)
@@ -58,6 +125,17 @@ def change_affine_matrix_origin(matrix, origin):
 
 def affine_transform_to_matrix(transform):
     """
+    Convert sitk affine transform object to a 4x4 numpy array
+
+    Parameters
+    ----------
+    transform : sitk.AffineTransform
+        The affine transform
+
+    Returns
+    -------
+    matrix : 4x4 numpy array
+        The same transform as a 4x4 matrix
     """
 
     matrix = np.eye(4)
@@ -68,6 +146,17 @@ def affine_transform_to_matrix(transform):
 
 def matrix_to_affine_transform(matrix):
     """
+    Convert 4x4 numpy array to sitk.AffineTransform object
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The affine transform as a numpy array
+
+    Returns
+    -------
+    affine_transform : sitk.AffineTransform
+        The same affine but as a sitk.AffineTransform object
     """
 
     matrix_sitk = invert_matrix_axes(matrix)
@@ -79,6 +168,17 @@ def matrix_to_affine_transform(matrix):
 
 def matrix_to_euler_transform(matrix):
     """
+    Convert 4x4 numpy array to sitk.Euler3DTransform (rigid transform)
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The rigid transform as a numpy array
+
+    Returns
+    -------
+    rigid_transform : sitk.Euler3DTransform object
+        The same rigid transform but as a sitk object
     """
 
     matrix_sitk = invert_matrix_axes(matrix)
@@ -90,6 +190,18 @@ def matrix_to_euler_transform(matrix):
 
 def euler_transform_to_parameters(transform):
     """
+    Convert a sitk.Euler3DTransform object to a list of rigid transform
+    parameters
+
+    Parameters
+    ----------
+    transform : sitk.Euler3DTransform
+        The rigid transform object
+
+    Returns
+    -------
+    rigid_parameters : 1d-array, length 6
+        The rigid transform parameters: (rotX, rotY, rotZ, transX, transY, transZ)
     """
 
     return np.array((transform.GetAngleX(),
@@ -101,6 +213,17 @@ def euler_transform_to_parameters(transform):
 
 def parameters_to_euler_transform(params):
     """
+    Convert rigid transform parameters to a sitk.Euler3DTransform object
+
+    Parameters
+    ----------
+    rigid_parameters : 1d-array, length 6
+        The rigid transform parameters: (rotX, rotY, rotZ, transX, transY, transZ)
+
+    Returns
+    -------
+    transform : sitk.Euler3DTransform
+        A sitk rigid transform object
     """
 
     transform = sitk.Euler3DTransform()
@@ -111,6 +234,25 @@ def parameters_to_euler_transform(params):
 
 def physical_parameters_to_affine_matrix(params, center):
     """
+    Convert separate affine transform parameters to an affine matrix
+
+    Parameters
+    ----------
+    params : 1d-array
+        The affine transform parameters
+        (transX, transY, transZ, rotX, rotY, rotZ, scX, scY, scZ, shX, shY, shZ)
+        trans : translation
+        rot : rotation
+        sc : scale
+        sh : shear
+
+    center : 1d-array
+        The center of rotation as a coordinate
+
+    Returns
+    -------
+    matrix : 4x4 array
+        The affine matrix representing those physical transform parameters
     """
 
     # translation
@@ -135,6 +277,23 @@ def physical_parameters_to_affine_matrix(params, center):
 
 def matrix_to_displacement_field(matrix, shape, spacing=None):
     """
+    Convert an affine matrix into a displacement vector field
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The affine matrix
+
+    shape : tuple
+        The voxel grid shape for the displacement vector field
+
+    spacing : tuple (default: (1, 1, 1, ...))
+        The voxel sampling rate (spacing) for the displacement vector field
+
+    Returns
+    -------
+    displacement_vector_field : nd-array
+        Field of shape + (3,) shape and given spacing
     """
 
     if spacing is None: spacing = np.ones(len(shape))
@@ -147,6 +306,24 @@ def matrix_to_displacement_field(matrix, shape, spacing=None):
 
 def field_to_displacement_field_transform(field, spacing=None, origin=None):
     """
+    Convert a displacement vector field numpy array to a sitk displacement field
+    transform object
+
+    Parameters
+    ----------
+    field : nd-array
+        The displacement vector field
+
+    spacing : tuple (default: (1, 1, 1, ...))
+        The voxel spacing (sampling rate) of the field
+
+    origin : tuple (default: (0, 0, 0, ...))
+        The origin (in physical units) of the field
+
+    Returns
+    -------
+    sitk_displacement_field : sitk.DisplacementFieldTransform
+        A sitk displacement field transform object
     """
 
     field = field.astype(np.float64)[..., ::-1]
@@ -156,6 +333,18 @@ def field_to_displacement_field_transform(field, spacing=None, origin=None):
 
 def bspline_parameters_to_transform(parameters):
     """
+    Convert 1d-array of b-spline parameters to sitk.BSplineTransform
+
+    Parameters
+    ----------
+    parameters : 1d-array
+        The control point and other parameters that fully specify a b-spline
+        transform
+
+    Returns
+    -------
+    trasnform_object : sitk.BSplineTransform
+        A sitk.BSplineTransform object
     """
 
     t = sitk.BSplineTransform(3, 3)
@@ -168,6 +357,29 @@ def bspline_to_displacement_field(
     bspline, shape, spacing=None, origin=None, direction=None,
 ):
     """
+    Convert a sitk.BSplineTransform object to a displacement vector field
+
+    Parameters
+    ----------
+    bspline : sitk.BSplineTransform
+        A sitk.BSplineTransform object
+
+    shape : tuple
+        The shape of the resulting displacement field
+
+    spacing : tuple (default: (1, 1, 1, ...))
+        The desired spacing for the displacement field
+
+    origin : tuple (default: (0, 0, 0, ...))
+        The origin of the displacement field
+
+    direction : 4x4 matrix (default identity)
+        The directions cosine matrix for the field
+
+    Returns
+    -------
+    displacement_field : nd-array
+        The displacement vector field given by the b-spline transform
     """
 
     if spacing is None: spacing = np.ones(len(shape))
@@ -186,6 +398,23 @@ def bspline_to_displacement_field(
 
 def relative_spacing(query, reference, reference_spacing):
     """
+    Determine a voxel spacing from two images and one voxel spacing
+
+    Parameters
+    ----------
+    query : nd-array
+        The voxel grid whose spacing you'd like to know
+
+    reference : nd-array
+        A different voxel grid over the same domain whose spacing you do know
+
+    reference_spacing : tuple
+        The known voxel spacing
+
+    Returns
+    -------
+    query_spacing : 1d-array
+        The spacing of the query voxel grid
     """
 
     ndim = len(reference_spacing)
@@ -196,6 +425,28 @@ def relative_spacing(query, reference, reference_spacing):
 
 def transform_list_to_composite_transform(transform_list, spacing=None, origin=None):
     """
+    Convert a list of transforms to a sitk.CompositeTransform object
+
+    Parameters
+    ----------
+    transform_list : list
+        A list of transforms, either 4x4 numpy arrays (affine transforms) or
+        nd-arrays (displacement vector fields)
+
+    spacing : 1d array or tuple of 1d arrays (default: None)
+        The spacing in physical units (e.g. mm or um) between voxels of any
+        deformations in transform_list. If a tuple, must be the same length
+        as transform_list. Entries for affine matrices are ignored.
+
+    origin : 1d array or tuple of 1d arrays (default: None)
+        The origin in physical units (e.g. mm or um) of any deformations
+        in transform_list. If a tuple, must be the same length as transform_list.
+        Entries for affine matrices are ignored.
+
+    Returns
+    -------
+    composite_transform : sitk.CompositeTransform object
+        All transforms in the given list compressed into a sitk.CompositTransform 
     """
 
     transform = sitk.CompositeTransform(3)
@@ -214,6 +465,32 @@ def transform_list_to_composite_transform(transform_list, spacing=None, origin=N
 
 def create_zarr(path, shape, chunks, dtype, chunk_locked=False, client=None):
     """
+    Create a new zarr array on disk
+
+    Parameters
+    ----------
+    path : string
+        The location of the new zarr array
+
+    shape : tuple
+        The shape of the new zarr array
+
+    chunks : tuple
+        The shape of individual chunks in the zarr array
+
+    dtype : a numpy.dtype object
+        The data type of the new zarr array data
+
+    chunk_locked : bool (default: False)
+        DEPRECATED
+
+    client : dask.client (default: None)
+        DEPRECATED
+
+    Returns
+    -------
+    zarr_array : zarr array
+        Reference to the newly created zarr array on disk
     """
 
     compressor = Blosc(
@@ -244,6 +521,23 @@ def create_zarr(path, shape, chunks, dtype, chunk_locked=False, client=None):
 
 def numpy_to_zarr(array, chunks, path):
     """
+    Convert a numpy array to a zarr array on disk
+
+    Parameters
+    ----------
+    array : nd-array
+        The numpy array to convert to zarr format
+
+    chunks : tuple
+        The shape of individual chunks in the zarr array
+
+    path : string
+        On disk location to create the zarr array
+
+    Returns
+    -------
+    zarr_array : zarr array
+        Reference to the zarr array copy of the given numpy array
     """
 
     if not isinstance(array, zarr.Array):

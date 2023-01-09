@@ -17,6 +17,41 @@ def patch_mutual_information(
     **kwargs,
 ):
     """
+    Local mutual information metric between two images
+    MI is computed patch-wise across both images and the mean over all
+    patches is returned
+
+    Parameters
+    ----------
+    fix : nd-array
+        fixed image
+    mov : nd-array
+        moving image
+    spacing : 1d-array
+        The voxel spacing of the two images (must be the same)
+    radius : scalar float
+        Neighborhood half-width in physical units
+    stride : scalar int
+        Spacing between neighborhood centers
+    percentile_cutoff : scalar float (default: 0)
+        local MI scores below this value are ignored in final mean computation
+    fix_mask : binary nd-array (default: None)
+        mask over fixed data (only data in foreground is considered)
+    mov_mask : binary nd-array (default: None)
+        mask over moving data (only data in foreground is considered)
+    return_metric_image : bool (default: False)
+        Return an image with local MIs
+    **kwargs : any additional arguments
+        Passed to bigstream.configure_irm.configure_irm
+        Use these arguments to parameterize the metric
+
+    Returns
+    -------
+    score : scalar float
+        The local MI averaged over all patches
+    metric_image : nd-array
+        Optional output only returned if return_metric_image == True
+        The local MIs rendered in an image
     """
 
     # create sitk versions of data

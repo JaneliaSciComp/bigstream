@@ -137,18 +137,17 @@ def distributed_piecewise_alignment_pipeline(
     mov_zarr_path = temporary_directory.name + '/mov.zarr'
     fix_mask_zarr_path = temporary_directory.name + '/fix_mask.zarr'
     mov_mask_zarr_path = temporary_directory.name + '/mov_mask.zarr'
-    zarr_blocks = (128,)*fix.ndim
-    fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
-    mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
-    if fix_mask is not None: fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
-    if mov_mask is not None: mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
+    fix_zarr = ut.numpy_to_zarr(fix, blocksize, fix_zarr_path)
+    mov_zarr = ut.numpy_to_zarr(mov, blocksize, mov_zarr_path)
+    if fix_mask is not None: fix_mask_zarr = ut.numpy_to_zarr(fix_mask, blocksize, fix_mask_zarr_path)
+    if mov_mask is not None: mov_mask_zarr = ut.numpy_to_zarr(mov_mask, blocksize, mov_mask_zarr_path)
 
     # zarr files for initial deformations
     new_list = []
     for iii, transform in enumerate(static_transform_list):
         if transform.shape != (4, 4) and len(transform.shape) != 1:
             path = temporary_directory.name + f'/deform{iii}.zarr'
-            transform = ut.numpy_to_zarr(transform, zarr_blocks + (transform.shape[-1],), path)
+            transform = ut.numpy_to_zarr(transform, tuple(blocksize) + (transform.shape[-1],), path)
         new_list.append(transform)
     static_transform_list = new_list
 
@@ -157,7 +156,7 @@ def distributed_piecewise_alignment_pipeline(
         output_transform = ut.create_zarr(
             write_path,
             fix.shape + (fix.ndim,),
-            zarr_blocks + (fix.ndim,),
+            tuple(blocksize) + (fix.ndim,),
             np.float32,
         )
 
@@ -360,7 +359,7 @@ def distributed_piecewise_alignment_pipeline(
 
         # get zarr blocks touched by every alignment block
         def get_zarr_blocks(coords):
-            ranges = [(a.start//b, (a.stop-1)//b+1) for a, b in zip(coords, zarr_blocks)]
+            ranges = [(a.start//b, (a.stop-1)//b+1) for a, b in zip(coords, blocksize)]
             return set(product(*[range(a[0], a[1]) for a in ranges]))
         write_blocks = [get_zarr_blocks(index[1]) for index in indices]
 

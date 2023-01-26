@@ -321,10 +321,10 @@ def distributed_piecewise_alignment_pipeline(
             region = [slice(None),]*3
             if block_index[i] == 0:
                 region[i] = slice(overlaps[i], None)
-                weights = weights[region]
+                weights = weights[tuple(region)]
             if block_index[i] == nblocks[i] - 1:
                 region[i] = slice(None, -overlaps[i])
-                weights = weights[region]
+                weights = weights[tuple(region)]
 
         # crop any incomplete blocks (on the ends)
         if np.any( weights.shape != transform.shape[:-1] ):

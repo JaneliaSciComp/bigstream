@@ -1,13 +1,11 @@
 import numpy as np
 import os
 from ClusterWrap.decorator import cluster
-import CircuitSeeker.fileio as csio
-import CircuitSeeker.utility as ut
-from CircuitSeeker.align import affine_align
-from CircuitSeeker.align import deformable_align
-from CircuitSeeker.transform import apply_transform
 import dask.array as da
-import dask.delayed as delayed
+import bigstream.utility as ut
+from bigstream.align import affine_align
+from bigstream.align import deformable_align
+from bigstream.transform import apply_transform
 from scipy.ndimage import median_filter
 from scipy.ndimage import gaussian_filter1d
 from scipy.ndimage import map_coordinates
@@ -19,30 +17,22 @@ import json
 
 @cluster
 def distributed_image_mean(
-    frames,
+    fix_array,
+    axis=0,
     cluster=None,
     cluster_kwargs={},
 ):
     """
-    Voxelwise mean over all images specified by frames.
-    Distributed with Dask for expediency.
+    Voxelwise mean over images in a zarr array.
+    Distributed with dask.
 
     Parameters
     ----------
-    frames : dict
-        Specifies the image set on disk to be averaged. At least three
-        keys must be defined:
-            'folder' : directory containing the image set
-            'prefix' : common prefix to all images being averaged
-            'suffix' : common suffix - typically the file extension
-        Common values for suffix are '.h5', '.stack', or '.tiff'
+    fix_array : zarr.Array
+        The set of images over which you want to take a mean
 
-        If suffix is '.h5' then an additional key must be defined:
-            'dataset_path' : path to image dataset within hdf5 container
-
-        If suffix is '.stack' then two additional keys must be defined:
-            'dtype' : a numpy datatype object for the datatype in the raw images
-            'shape' : the array shape of the data as a tuple
+    axis : int (default: 0)
+        The axis over which you want to take the mean
 
     cluster : ClusterWrap.cluster object (default: None)
         Only set if you have constructed your own static cluster. The default behavior
@@ -59,37 +49,11 @@ def distributed_image_mean(
     Returns
     -------
     image_mean : ndarray
-        The voxelwise mean of the images specified in frames
+        The voxelwise mean fix_array over axis
     """
 
-    # hdf5 files use dask.array
-    if csio.testPathExtensionForHDF5(frames['suffix']):
-        frames = csio.daskArrayBackedByHDF5(
-            frames['folder'], frames['prefix'],
-            frames['suffix'], frames['dataset_path'],
-        )
-        frames_mean = frames.mean(axis=0, dtype=np.float32).compute()
-        frames_mean = np.round(frames_mean).astype(frames[0].dtype)
-    # stack files use dask.array
-    elif csio.testPathExtensionForSTACK(frames['suffix']):
-        frames = csio.daskArrayBackedBySTACK(
-            frames['folder'], frames['prefix'], frames['suffix'],
-            frames['dtype'], frames['shape'],
-        )
-        frames_mean = frames.mean(axis=0, dtype=np.float32).compute()
-        frames_mean = np.round(frames_mean).astype(frames[0].dtype)
-    # other types use dask.bag
-    else:
-        frames = csio.daskBagOfFilePaths(
-            frames['folder'], frames['prefix'], frames['suffix'],
-        )
-        nframes = frames.npartitions
-        frames_mean = frames.map(csio.readImage).reduction(sum, sum).compute()
-        dtype = frames_mean.dtype
-        frames_mean = np.round(frames_mean/np.float(nframes)).astype(dtype)
-
-    # return reference to mean image
-    return frames_mean
+    mean = da.from_zarr(fix_array).mean(axis=axis, dtype=np.float32).compute()
+    return np.round(mean).astype(fix_array.dtype)
 
 
 @cluster

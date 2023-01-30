@@ -52,10 +52,12 @@ def distributed_image_mean(
         The voxelwise mean fix_array over axis
     """
 
-    mean = da.from_zarr(fix_array).mean(axis=axis, dtype=np.float32).compute()
+    fix_array = da.from_zarr(fix_array)
+    mean = fix_array.mean(axis=axis, dtype=np.float32).compute()
     return np.round(mean).astype(fix_array.dtype)
 
 
+# TODO: UPDATE TO TAKE ZARR ARRAY INPUT
 @cluster
 def motion_correct(
     fix, frames,
@@ -224,7 +226,7 @@ def motion_correct(
     return transforms
 
 
-# TODO: not yet refactored
+# TODO: UPDATE TO TAKE ZARR ARRAY INPUT
 def deformable_motion_correct(
     fix, frames,
     fix_spacing, frames_spacing,
@@ -357,6 +359,7 @@ def read_transforms(path):
     return np.array([d[str(i)] for i in range(len(d))])
 
 
+# TODO: UPDATE TO TAKE ZARR ARRAY INPUT
 @cluster
 def resample_frames(
     frames,

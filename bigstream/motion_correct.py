@@ -166,12 +166,6 @@ def motion_correct(
             fix_mask=fix_mask,
             **kwargs,
         )
-#        t = affine_align(
-#            mov, fix, mov_spacing, fix_spacing,
-#            mov_mask=fix_mask,
-#            **kwargs,
-#        )
-#        t = np.linalg.inv(t)
         # TODO: 2 lines below assume its a rigid transform
         e = ut.matrix_to_euler_transform(t)
         return ut.euler_transform_to_parameters(e)
@@ -400,19 +394,23 @@ def resample_frames(
         A reference to the zarr array on disk containing the resampled data
     """
 
-    # wrap mask, ensure transforms are list
-    mask_d = None
     if mask is not None:
+        # ensure compatible shapes
         mask_sh, mov_sh = mask.shape, mov_zarr.shape[1:]
         if mask_sh != mov_sh:
             mask = zoom(mask, np.array(mov_sh) / mask_sh, order=0)
-        mask_d = cluster.client.scatter(mask, broadcast=True)
-    transforms = list(transforms)
 
-    # determine which frames will be resampled
+        # write to disk so all workers can retrieve
+        temporary_directory = tempfile.TemporaryDirectory(
+            prefix='.', dir=os.getcwd(),
+        )
+        np.save(temporary_directory.name + '/mask.npy', mask)
+
+    # determine which frames will be resampled, ensure transforms are list
     total_frames = mov_zarr.shape[0]
     mov_indices = range(0, total_frames, time_stride)
     compute_frames = len(mov_indices)
+    transforms = list(transforms)
 
     # create an output zarr file
     output_zarr = ut.create_zarr(
@@ -423,10 +421,14 @@ def resample_frames(
     )
 
     # wrap transform function
-    def wrapped_apply_transform(read_index, write_index, transform, mask_d=None):
+    def wrapped_apply_transform(read_index, write_index, transform):
 
-        # read data, format transform_list
+        # read data
         mov = mov_zarr[read_index]
+        if os.path.isfile(temporary_directory.name + '/mask.npy'):
+            mask = np.load(temporary_directory.name + '/mask.npy')
+
+        # format transform_list
         transform_list = [transform,]
         if len(transform.shape) == 1:  # affine + bspline case
             transform_list = [transform[:16].reshape((4,4)), transform[16:]]
@@ -438,7 +440,7 @@ def resample_frames(
         )
 
         # mask and write result
-        if mask_d is not None: aligned = aligned * mask_d
+        if mask is not None: aligned = aligned * mask
         output_zarr[write_index] = aligned
         return True
 
@@ -446,7 +448,6 @@ def resample_frames(
     futures = cluster.client.map(
         wrapped_apply_transform,
         mov_indices, range(compute_frames), transforms,
-        mask_d=mask_d,
     )
     all_written = np.all( cluster.client.gather(futures) )
     if not all_written: print("SOMETHING FAILED, CHECK LOGS")

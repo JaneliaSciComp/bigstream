@@ -13,6 +13,7 @@ from scipy.ndimage import zoom
 import zarr
 from glob import glob
 import json
+import tempfile
 
 
 @cluster
@@ -57,11 +58,10 @@ def distributed_image_mean(
     return np.round(mean).astype(fix_array.dtype)
 
 
-# TODO: UPDATE TO TAKE ZARR ARRAY INPUT
 @cluster
 def motion_correct(
-    fix, frames,
-    fix_spacing, frames_spacing,
+    fix, mov_zarr,
+    fix_spacing, mov_spacing,
     time_stride=1,
     sigma=7,
     fix_mask=None,
@@ -77,26 +77,17 @@ def motion_correct(
     ----------
     fix : ndarray
         The fixed image reference. All frames will be aligned to this image.
+        This should be an in-memory numpy array.
 
-    frames : dict
-        Specifies the image set on disk to be motion corrected. At least three
-        keys must be defined:
-            'folder' : directory containing the image set
-            'prefix' : common prefix to all images being averaged
-            'suffix' : common suffix - typically the file extension
-        Common values for suffix are '.h5', '.stack', or '.tiff'
-
-        If suffix is '.h5' then an additional key must be defined:
-            'dataset_path' : path to image dataset within hdf5 container
-
-        If suffix is '.stack' then two additional keys must be defined:
-            'dtype' : a numpy datatype object for the datatype in the raw images
-            'shape' : the array shape of the data as a tuple
+    mov_zarr : zarr.Array
+        The moving image frames. This should be a 4D zarr Array object that is
+        only lazy loaded, e.g. not in memory. The time axis should be the first
+        axis.
 
     fix_spacing : 1d array
         The voxel spacing of the fixed reference image in micrometers
 
-    frames_spacing : 1d array
+    mov_spacing : 1d array
         The voxel spacing of the moving images in micrometers
 
     time_stride : int
@@ -107,7 +98,9 @@ def motion_correct(
     sigma : float
         Standard deviation of a Gaussian kernel applied to the found transforms along
         the time axis. This stabilizes the alignment at the expense of allowing a bit
-        more long term motion.
+        more long term motion. This is in units of frames *after* time stride has been
+        applied. So time_stride=4 and sigma=2 gives the same overall smoothing value as
+        time_stride=1 and sigma=8.
 
     fix_mask : binary ndarray
         Limits computation of the image matching metric to a region within the fixed image
@@ -129,39 +122,23 @@ def motion_correct(
 
     Returns
     -------
-    transforms : 2d array, NxP
+    transforms : 3d array, Nx4x4
         All transforms aligning the dataset to the reference. N == number of provided images
-        P == the number of parameters in each transform. E.g. a dataset with 100 images and
-        full affine alignment to the reference would yield a return array with shape 100x12.
+        and for each one there is a 4x4 affine (or rigid) transform matrix.
     """
 
-
-    # scatter fixed image to cluster
-    fix_d = cluster.client.scatter(fix, broadcast=True)
-    # scatter fixed mask to cluster
-    fix_mask_d = None
+    # put temp copies of fixed and mask on disk for workers to retrieve
+    temporary_directory = tempfile.TemporaryDirectory(
+        prefix='.', dir=os.getcwd(),
+    )
+    np.save(temporary_directory.name + '/fix.npy', fix)
     if fix_mask is not None:
-        fix_mask_d = cluster.client.scatter(fix_mask, broadcast=True)
+        np.save(temporary_directory.name + '/fix_mask.npy', fix_mask)
 
-    # get total number of frames
-    total_frames = len(csio.globPaths(
-        frames['folder'], frames['prefix'], frames['suffix'],
-    ))
-
-    # create dask array of all frames
-    if csio.testPathExtensionForHDF5(frames['suffix']):
-        frames_data = csio.daskArrayBackedByHDF5(
-            frames['folder'], frames['prefix'],
-            frames['suffix'], frames['dataset_path'],
-            stride=time_stride,
-        )
-    elif csio.testPathExtensionForSTACK(frames['suffix']):
-        frames_data = csio.daskArrayBackedBySTACK(
-            frames['folder'], frames['prefix'], frames['suffix'],
-            frames['dtype'], frames['shape'],
-            stride=time_stride,
-        )
-    compute_frames = frames_data.shape[0]
+    # determine which frames will be aligned
+    total_frames = mov_zarr.shape[0]
+    mov_indices = range(0, total_frames, time_stride)
+    compute_frames = len(mov_indices)
 
     # set alignment defaults
     alignment_defaults = {
@@ -179,32 +156,29 @@ def motion_correct(
     kwargs = {**alignment_defaults, **kwargs}
 
     # wrap align function
-    def wrapped_affine_align(mov, fix_d, fix_mask_d):
-        mov = mov.squeeze()
-#        t = affine_align(
-#            fix_d, mov, fix_spacing, frames_spacing,
-#            fix_mask=fix_mask_d,
-#            **kwargs,
-#        )
+    def wrapped_affine_align(index):
+        fix = np.load(temporary_directory.name + '/fix.npy')
+        if os.path.isfile(temporary_directory.name + '/fix_mask.npy'):
+            fix_mask = np.load(temporary_directory.name + '/fix_mask.npy')
+        mov = mov_zarr[index]
         t = affine_align(
-            mov, fix_d, frames_spacing, fix_spacing,
-            mov_mask=fix_mask_d,
+            fix, mov, fix_spacing, mov_spacing,
+            fix_mask=fix_mask,
             **kwargs,
         )
-        t = np.linalg.inv(t)
+#        t = affine_align(
+#            mov, fix, mov_spacing, fix_spacing,
+#            mov_mask=fix_mask,
+#            **kwargs,
+#        )
+#        t = np.linalg.inv(t)
         # TODO: 2 lines below assume its a rigid transform
         e = ut.matrix_to_euler_transform(t)
-        p = ut.euler_transform_to_parameters(e)
-        return p[None, :]
+        return ut.euler_transform_to_parameters(e)
 
-    params = da.map_blocks(
-        wrapped_affine_align, frames_data,
-        fix_d=fix_d,
-        fix_mask_d=fix_mask_d,
-        dtype=np.float64,
-        drop_axis=[2, 3,],
-        chunks=[1, 6],  # TODO: chunk size here assumes rigid transform
-    ).compute()
+    # distribute
+    futures = cluster.client.map(wrapped_affine_align, mov_indices)
+    params = np.array(cluster.client.gather(futures))
 
     # smooth and interpolate
     # TODO: this kind of smoothing will not work with affine transforms
@@ -359,11 +333,10 @@ def read_transforms(path):
     return np.array([d[str(i)] for i in range(len(d))])
 
 
-# TODO: UPDATE TO TAKE ZARR ARRAY INPUT
 @cluster
 def resample_frames(
-    frames,
-    frames_spacing,
+    mov_zarr,
+    mov_spacing,
     transforms,
     write_path,
     mask=None,
@@ -381,22 +354,12 @@ def resample_frames(
 
     Parameters
     ----------
-    frames : dict
-        Specifies the image set on disk to be resampled. At least three
-        keys must be defined:
-            'folder' : directory containing the image set
-            'prefix' : common prefix to all images being averaged
-            'suffix' : common suffix - typically the file extension
-        Common values for suffix are '.h5', '.stack', or '.tiff'
+    mov_zarr : zarr.Array
+        The moving image frames. This should be a 4D zarr Array object that is
+        only lazy loaded, e.g. not in memory. The time axis should be the first
+        axis.
 
-        If suffix is '.h5' then an additional key must be defined:
-            'dataset_path' : path to image dataset within hdf5 container
-
-        If suffix is '.stack' then two additional keys must be defined:
-            'dtype' : a numpy datatype object for the datatype in the raw images
-            'shape' : the array shape of the data as a tuple
-
-    frames_spacing : 1d array
+    mov_spacing : 1d array
         The voxel spacing of the moving images in micrometers
 
     transforms : nd array
@@ -437,69 +400,55 @@ def resample_frames(
         A reference to the zarr array on disk containing the resampled data
     """
 
-
-    # create dask array of all frames
-    if csio.testPathExtensionForHDF5(frames['suffix']):
-        frames_data = csio.daskArrayBackedByHDF5(
-            frames['folder'], frames['prefix'],
-            frames['suffix'], frames['dataset_path'],
-            stride=time_stride,
-        )
-    elif csio.testPathExtensionForSTACK(frames['suffix']):
-        frames_data = csio.daskArrayBackedBySTACK(
-            frames['folder'], frames['prefix'], frames['suffix'],
-            frames['dtype'], frames['shape'],
-            stride=time_stride,
-        )
-    compute_frames = frames_data.shape[0]
-
-    # wrap transforms as dask array
-    # extra dimension to match frames_data ndims
-    if len(transforms.shape) == 3:
-        transforms = transforms[::time_stride, None, :, :]
-    elif len(transforms.shape) == 2:
-        transforms = transforms[::time_stride, None, None, :]
-    transforms_d = da.from_array(transforms, chunks=(1,)+transforms[0].shape)
-
-    # wrap mask
+    # wrap mask, ensure transforms are list
     mask_d = None
     if mask is not None:
-        mask_sh, frame_sh = mask.shape, frames_data.shape[1:]
-        if mask_sh != frame_sh:
-            mask = zoom(mask, np.array(frame_sh) / mask_sh, order=0)
+        mask_sh, mov_sh = mask.shape, mov_zarr.shape[1:]
+        if mask_sh != mov_sh:
+            mask = zoom(mask, np.array(mov_sh) / mask_sh, order=0)
         mask_d = cluster.client.scatter(mask, broadcast=True)
+    transforms = list(transforms)
 
-    # wrap transform function
-    def wrapped_apply_transform(mov, t, mask_d=None):
-        mov = mov.squeeze()
-        t = t.squeeze()
+    # determine which frames will be resampled
+    total_frames = mov_zarr.shape[0]
+    mov_indices = range(0, total_frames, time_stride)
+    compute_frames = len(mov_indices)
 
-        # just an affine matrix
-        transform_list = [t,]
-
-        # affine plus bspline
-        if len(t.shape) == 1:
-            transform_list = [t[:16].reshape((4,4)), t[16:]]
-
-        # apply transform(s)
-        aligned = apply_transform(
-            mov, mov, frames_spacing, frames_spacing,
-            transform_list=transform_list,
-        )
-        if mask_d is not None:
-            aligned = aligned * mask_d
-        return aligned[None, ...]
-
-    # apply transform to all frames
-    frames_aligned = da.map_blocks(
-        wrapped_apply_transform, frames_data, transforms_d,
-        mask_d=mask_d,
-        dtype=np.uint16,
-        chunks=[1,] + list(frames_data.shape[1:]),
+    # create an output zarr file
+    output_zarr = ut.create_zarr(
+        write_path,
+        (compute_frames,) + mov_zarr.shape[1:],
+        (1,) + mov_zarr.shape[1:],
+        np.uint16,
     )
 
-    # write in parallel as 4D array to zarr file
-    da.to_zarr(frames_aligned, write_path)
-    return zarr.open(write_path, mode='r+')
+    # wrap transform function
+    def wrapped_apply_transform(read_index, write_index, transform, mask_d=None):
 
+        # read data, format transform_list
+        mov = mov_zarr[read_index]
+        transform_list = [transform,]
+        if len(transform.shape) == 1:  # affine + bspline case
+            transform_list = [transform[:16].reshape((4,4)), transform[16:]]
+
+        # apply transform_list
+        aligned = apply_transform(
+            mov, mov, mov_spacing, mov_spacing,
+            transform_list=transform_list,
+        )
+
+        # mask and write result
+        if mask_d is not None: aligned = aligned * mask_d
+        output_zarr[write_index] = aligned
+        return True
+
+    # distribute and wait for completion
+    futures = cluster.client.map(
+        wrapped_apply_transform,
+        mov_indices, range(compute_frames), transforms,
+        mask_d=mask_d,
+    )
+    all_written = np.all( cluster.client.gather(futures) )
+    if not all_written: print("SOMETHING FAILED, CHECK LOGS")
+    return output_zarr
 

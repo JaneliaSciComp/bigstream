@@ -158,6 +158,7 @@ def motion_correct(
     # wrap align function
     def wrapped_affine_align(index):
         fix = np.load(temporary_directory.name + '/fix.npy')
+        fix_mask = None
         if os.path.isfile(temporary_directory.name + '/fix_mask.npy'):
             fix_mask = np.load(temporary_directory.name + '/fix_mask.npy')
         mov = mov_zarr[index]
@@ -194,7 +195,8 @@ def motion_correct(
     return transforms
 
 
-# TODO: UPDATE TO TAKE ZARR ARRAY INPUT
+# TODO: VERY OLD - UPDATE TO TAKE ZARR INPUTS AND BE
+#    CONSISTENT WITH motion_correct FUNCTION
 def deformable_motion_correct(
     fix, frames,
     fix_spacing, frames_spacing,
@@ -329,29 +331,35 @@ def read_transforms(path):
 
 @cluster
 def resample_frames(
+    fix,
     mov_zarr,
+    fix_spacing,
     mov_spacing,
     transforms,
     write_path,
     mask=None,
     time_stride=1,
     compression_level=4,
+    static_transform_list_before=[],
+    static_transform_list_after=[],
     cluster=None,
     cluster_kwargs={},
 ):
     """
     Resample a 4D dataset using a set of motion correction transforms
-    Frames are resampled on the same voxel grid they are defined on. This works
-    fine when transforms are relatively small, but will cause foreground to go
-    out of the field of view for larger transforms. If you've done motion correction
-    correctly, this is unlikely, but still possible for some experimental designs.
 
     Parameters
     ----------
+    fix : numpy.ndarray
+        The reference image. Frames will be resampled onto this voxel grid.
+
     mov_zarr : zarr.Array
         The moving image frames. This should be a 4D zarr Array object that is
         only lazy loaded, e.g. not in memory. The time axis should be the first
         axis.
+
+    fix_spacing : 1d array
+        the voxel spacing of the fixed image in micrometers
 
     mov_spacing : 1d array
         The voxel spacing of the moving images in micrometers
@@ -376,6 +384,12 @@ def resample_frames(
         much faster but also take up more space. High numbers take considerably longer
         to write to disk.
 
+    static_transform_list_before : list of ndarrays (default: [])
+        Transforms to apply to the moving frames before the motion correction transform
+
+    static_transform_list_after : list of ndarrays (default: [])
+        Transforms to apply to the moving frames after the motion correction transform
+
     cluster : ClusterWrap.cluster object (default: None)
         Only set if you have constructed your own static cluster. The default behavior
         is to construct a cluster for the duration of this function, then close it
@@ -394,17 +408,36 @@ def resample_frames(
         A reference to the zarr array on disk containing the resampled data
     """
 
+    # format and depost mask in location accessible to all workers
+    temporary_directory = tempfile.TemporaryDirectory(
+        prefix='.', dir=os.getcwd(),
+    )
+    np.save(temporary_directory.name + '/fix.npy', fix)
     if mask is not None:
-        # ensure compatible shapes
         mask_sh, mov_sh = mask.shape, mov_zarr.shape[1:]
         if mask_sh != mov_sh:
             mask = zoom(mask, np.array(mov_sh) / mask_sh, order=0)
-
-        # write to disk so all workers can retrieve
-        temporary_directory = tempfile.TemporaryDirectory(
-            prefix='.', dir=os.getcwd(),
-        )
         np.save(temporary_directory.name + '/mask.npy', mask)
+
+    # save initial deforms to location accessible to all workers
+    new_list = []
+    for iii, transform in enumerate(static_transform_list_before):
+        if transform.shape != (4, 4) and len(transform.shape) != 1:
+            path = temporary_directory.name + f'/deform{iii}.npy'
+            np.save(path, transform)
+            transform = path
+        new_list.append(transform)
+    static_transform_list_before = new_list
+
+    # save subsequent deforms to location accessible to all workers
+    new_list = []
+    for iii, transform in enumerate(static_transform_list_after):
+        if transform.shape != (4, 4) and len(transform.shape) != 1:
+            path = temporary_directory.name + f'/deform{iii}.npy'
+            np.save(path, transform)
+            transform = path
+        new_list.append(transform)
+    static_transform_list_after = new_list
 
     # determine which frames will be resampled, ensure transforms are list
     total_frames = mov_zarr.shape[0]
@@ -421,21 +454,29 @@ def resample_frames(
     )
 
     # wrap transform function
-    def wrapped_apply_transform(read_index, write_index, transform):
+    def wrapped_apply_transform(
+        read_index, write_index, transform,
+        static_transform_list_before,
+        static_transform_list_after,
+    ):
 
-        # read data
+        # read frame and mask data
+        fix = np.load(temporary_directory.name + '/fix.npy')
         mov = mov_zarr[read_index]
         if os.path.isfile(temporary_directory.name + '/mask.npy'):
             mask = np.load(temporary_directory.name + '/mask.npy')
 
         # format transform_list
+        a = [np.load(x) if isinstance(x, str) else x for x in static_transform_list_before]
+        b = [np.load(x) if isinstance(x, str) else x for x in static_transform_list_after]
         transform_list = [transform,]
         if len(transform.shape) == 1:  # affine + bspline case
             transform_list = [transform[:16].reshape((4,4)), transform[16:]]
+        transform_list = a + transform_list + b
 
         # apply transform_list
         aligned = apply_transform(
-            mov, mov, mov_spacing, mov_spacing,
+            fix, mov, fix_spacing, mov_spacing,
             transform_list=transform_list,
         )
 
@@ -448,6 +489,8 @@ def resample_frames(
     futures = cluster.client.map(
         wrapped_apply_transform,
         mov_indices, range(compute_frames), transforms,
+        static_transform_list_before=static_transform_list_before,
+        static_transform_list_after=static_transform_list_after,
     )
     all_written = np.all( cluster.client.gather(futures) )
     if not all_written: print("SOMETHING FAILED, CHECK LOGS")

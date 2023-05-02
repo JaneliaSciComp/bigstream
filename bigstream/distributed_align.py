@@ -364,27 +364,28 @@ def distributed_alignment_pipeline(
     # since they are already zarr arrays
 
     # determine fixed image slices for blocking
-    blocksize_array = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix.shape) / blocksize_array).astype(int)
-    overlaps = np.round(blocksize_array * overlap_factor).astype(int)
+    block_partition_size = np.array(blocksize)
+    nblocks = np.ceil(np.array(fix.shape) / block_partition_size).astype(int)
+    overlaps = np.round(block_partition_size * overlap_factor).astype(int)
     indices, slices = [], []
     for (i, j, k) in np.ndindex(*nblocks):
-        start = blocksize_array * (i, j, k) - overlaps
-        stop = start + blocksize_array + 2 * overlaps
+        start = block_partition_size * (i, j, k) - overlaps
+        stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
         stop = np.minimum(fix.shape, stop)
         coords = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
         if fix_mask is not None:
-            start = blocksize_array * (i, j, k)
-            stop = start + blocksize_array
+            start = block_partition_size * (i, j, k)
+            stop = start + block_partition_size
             ratio = np.array(fix_mask.shape) / fix.shape
             start = np.round(ratio * start).astype(int)
             stop = np.round(ratio * stop).astype(int)
             mask_crop = fix_mask[tuple(slice(a, b)
                                        for a, b in zip(start, stop))]
-            if not np.sum(mask_crop) / np.prod(mask_crop.shape) >= foreground_percentage:
+            if (np.sum(mask_crop) / np.prod(mask_crop.shape) <
+                foreground_percentage):
                 foreground = False
 
         if foreground:
@@ -406,7 +407,7 @@ def distributed_alignment_pipeline(
     print('Submit alignment for', len(indices), 'bocks')
     align_blocks_args = [_create_single_block_align_args_from_index(
         block_info,
-        blocksize_array,
+        block_partition_size,
         overlaps,
         fix, mov,
         fix_spacing, mov_spacing,

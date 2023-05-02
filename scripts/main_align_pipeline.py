@@ -56,7 +56,6 @@ class _ArgsHelper:
 def _define_args(global_descriptor, local_descriptor):
     args_parser = argparse.ArgumentParser(description='Registration pipeline')
     args_parser.add_argument('--fixed-global',
-                             '--fixed-lowres',
                              dest='fixed_global',
                              help='Fixed global (low resolution) volume path')
     args_parser.add_argument('--fixed-global-subpath',
@@ -65,7 +64,6 @@ def _define_args(global_descriptor, local_descriptor):
                              help='Fixed global (low resolution) subpath')
 
     args_parser.add_argument('--moving-global',
-                             '--moving-lowres',
                              dest='moving_global',
                              help='Moving global (low resolution) volume path')
     args_parser.add_argument('--moving-global-subpath',
@@ -74,20 +72,16 @@ def _define_args(global_descriptor, local_descriptor):
                              help='Moving global (low resolution) subpath')
 
     args_parser.add_argument('--fixed-local',
-                             '--fixed-highres',
                              dest='fixed_local',
                              help='Path to the fixed local (high resolution) volume')
     args_parser.add_argument('--fixed-local-subpath',
-                             '--fixed-highres-subpath',
                              dest='fixed_local_subpath',
                              help='Fixed local (high resolution) subpath')
 
     args_parser.add_argument('--moving-local',
-                             '--moving-highres',
                              dest='moving_local',
                              help='Path to the moving local (high resolution) volume')
     args_parser.add_argument('--moving-local-subpath',
-                             '--moving-highres-subpath',
                              dest='moving_local_subpath',
                              help='Moving local (high resolution) subpath')
 
@@ -156,11 +150,21 @@ def _define_args(global_descriptor, local_descriptor):
                              default='deform-transform',
                              type=str,
                              help='Local transform name')
+    args_parser.add_argument('--local-transform-subpath',
+                             dest='local_transform_subpath',
+                             default='',
+                             type=str,
+                             help='Local transform subpath')
     args_parser.add_argument('--local-inv-transform-name',
                              dest='local_inv_transform_name',
                              default='inv-deform-transform',
                              type=str,
                              help='Local inverse transform name')
+    args_parser.add_argument('--local-inv-transform-subpath',
+                             dest='local_inv_transform_subpath',
+                             default='',
+                             type=str,
+                             help='Local inverse transform subpath')
     args_parser.add_argument('--local-aligned-name',
                              dest='local_aligned_name',
                              type=str,
@@ -502,7 +506,9 @@ def _run_local_alignment(args, steps, global_transform, output_dir, working_dir)
             [global_transform] if global_transform is not None else [],
             output_dir,
             args.local_transform_name,
+            args.local_transform_subpath,
             args.local_inv_transform_name,
+            args.local_inv_transform_subpath,
             args.local_aligned_name,
             args.output_chunk_size,
             args.local_write_group_interval,
@@ -525,7 +531,9 @@ def _align_local_data(fix_input,
                       global_transforms_list,
                       output_dir,
                       local_transform_name,
+                      local_transform_subpath,
                       local_inv_transform_name,
+                      local_inv_transform_subpath,
                       local_aligned_name,
                       output_chunk_size,
                       write_group_interval,
@@ -553,7 +561,7 @@ def _align_local_data(fix_input,
         deform_path = output_dir + '/' + local_transform_name
         local_deform = n5_utils.create_dataset(
             deform_path,
-            None, # no dataset subpath
+            local_transform_subpath,
             fix_dataarray.shape + (fix_dataarray.ndim,),
             output_blocks_chunksize + (fix_dataarray.ndim,),
             np.float32,
@@ -582,7 +590,7 @@ def _align_local_data(fix_input,
         inv_deform_path = output_dir + '/' + local_inv_transform_name
         local_inv_deform = n5_utils.create_dataset(
             inv_deform_path,
-            None, # no dataset subpath
+            local_inv_transform_subpath,
             fix_dataarray.shape + (fix_dataarray.ndim,),
             output_blocks_chunksize + (fix_dataarray.ndim,),
             np.float32,

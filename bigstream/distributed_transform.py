@@ -12,8 +12,7 @@ from dask.distributed import as_completed
 def distributed_apply_transform(
     fix, mov,
     fix_spacing, mov_spacing,
-    partition_size,
-    output_chunk_size,
+    blocksize,
     transform_list,
     overlap_factor=0.5,
     aligned_data=None,
@@ -42,11 +41,8 @@ def distributed_apply_transform(
         The spacing in physical units (e.g. mm or um) between voxels
         of the moving image. Length must equal `mov.ndim`
 
-    partition_size : int
-        The block size used for distributing the work
-
-    output_chunk_size :
-        Output chunk size
+    blocksize : tuple
+        The block partition size used for distributing the work
 
     transform_list : list
         The list of transforms to apply. These may be 2d arrays of shape 4x4
@@ -89,9 +85,9 @@ def distributed_apply_transform(
     """
 
     # get overlap and number of blocks
-    partition_dims = np.array((partition_size,)*fix.ndim)
-    nblocks = np.ceil(np.array(fix.shape) / partition_dims).astype(int)
-    overlaps = np.round(partition_dims * overlap_factor).astype(int)
+    block_partition_size = np.array(blocksize)
+    nblocks = np.ceil(np.array(fix.shape) / block_partition_size).astype(int)
+    overlaps = np.round(block_partition_size * overlap_factor).astype(int)
 
     # ensure there's a 1:1 correspondence between transform spacing 
     # and transform list
@@ -111,15 +107,15 @@ def distributed_apply_transform(
     # prepare block coordinates
     blocks_coords = []
     for (i, j, k) in np.ndindex(*nblocks):
-        start = partition_dims * (i, j, k) - overlaps
-        stop = start + partition_dims + 2 * overlaps
+        start = block_partition_size * (i, j, k) - overlaps
+        stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
         stop = np.minimum(fix.shape, stop)
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
         blocks_coords.append(block_coords)
 
     print('Transform', len(blocks_coords), 'blocks',
-          'with partition size' ,partition_dims)
+          'with partition size' ,block_partition_size)
     # align all blocks
     futures = cluster.client.map(
         _transform_single_block,
@@ -128,7 +124,7 @@ def distributed_apply_transform(
         full_mov=mov,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
-        blocksize=partition_dims,
+        blocksize=block_partition_size,
         blockoverlaps=overlaps,
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,

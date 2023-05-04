@@ -95,6 +95,10 @@ def _define_args(global_descriptor, local_descriptor):
                              default=128,
                              type=int,
                              help='Output chunk size')
+    args_parser.add_argument('--output-blocksize',
+                             dest='output_blocksize',
+                             type=_inttuple,
+                             help='Output chunk size as a tuple.')
 
     args_parser.add_argument(global_descriptor._argflag('output-dir'),
                              dest=global_descriptor._argdest('output_dir'),
@@ -155,6 +159,10 @@ def _define_args(global_descriptor, local_descriptor):
                              default='',
                              type=str,
                              help='Local transform subpath')
+    args_parser.add_argument('--local-transform-blocksize',
+                             dest='local_transform_blocksize',
+                             type=_inttuple,
+                             help='Local transform chunk size')
     args_parser.add_argument('--local-inv-transform-name',
                              dest='local_inv_transform_name',
                              default='inv-deform-transform',
@@ -165,6 +173,10 @@ def _define_args(global_descriptor, local_descriptor):
                              default='',
                              type=str,
                              help='Local inverse transform subpath')
+    args_parser.add_argument('--local-inv-transform-blocksize',
+                             dest='local_inv_transform_blocksize',
+                             type=_inttuple,
+                             help='Local inverse transform chunk size')
     args_parser.add_argument('--local-aligned-name',
                              dest='local_aligned_name',
                              type=str,
@@ -425,12 +437,17 @@ def _run_global_alignment(args, steps, global_output_dir):
         if global_output_dir and args.global_aligned_name:
             global_aligned_file = (global_output_dir + '/' + 
                                    args.global_aligned_name)
+            if len(args.output_blocksize) > 0:
+                output_blocksize = args.output_blocksize
+            else:
+                # default to output_chunk_size
+                output_blocksize = (args.output_chunk_size,) * global_alignment.ndim
             print('Save global aligned volume to', global_aligned_file)
             n5_utils.create_dataset(
                 global_aligned_file,
                 args.moving_global_subpath, # same dataset as the moving image
                 global_alignment.shape,
-                (args.output_chunk_size,)*global_alignment.ndim,
+                output_blocksize,
                 global_alignment.dtype,
                 data=global_alignment,
                 pixelResolution=mov_attrs.get('pixelResolution'),
@@ -495,6 +512,25 @@ def _run_local_alignment(args, steps, global_transform, output_dir, working_dir)
                                     args.overlap_factor >= 1)
                                  else
                                     args.overlap_factor)
+
+        if len(args.output_blocksize) > 0:
+            output_blocksize = args.output_blocksize
+        else:
+            # default to output_chunk_size
+            output_blocksize = (args.output_chunk_size,) * fix_highres_ldata.ndim
+
+        if len(args.local_transform_blocksize) > 0:
+            local_transform_blocksize = args.local_transform_blocksize
+        else:
+            # default to output blocksize
+            local_transform_blocksize = output_blocksize
+
+        if len(args.local_inv_transform_blocksize) > 0:
+            local_inv_transform_blocksize = args.local_inv_transform_blocksize
+        else:
+            # default to local transform blocksize
+            local_inv_transform_blocksize = local_transform_blocksize
+
         _align_local_data(
             (fix_highres_path, args.fixed_local_subpath, fix_highres_ldata),
             (mov_highres_path, args.moving_local_subpath, mov_highres_ldata),
@@ -507,10 +543,12 @@ def _run_local_alignment(args, steps, global_transform, output_dir, working_dir)
             output_dir,
             args.local_transform_name,
             args.local_transform_subpath,
+            local_transform_blocksize,
             args.local_inv_transform_name,
             args.local_inv_transform_subpath,
+            local_inv_transform_blocksize,
             args.local_aligned_name,
-            args.output_chunk_size,
+            output_blocksize,
             args.local_write_group_interval,
             args.inv_iterations,
             args.inv_order,
@@ -532,10 +570,12 @@ def _align_local_data(fix_input,
                       output_dir,
                       local_transform_name,
                       local_transform_subpath,
+                      local_transform_blocksize,
                       local_inv_transform_name,
                       local_inv_transform_subpath,
+                      local_inv_transform_blocksize,
                       local_aligned_name,
-                      output_chunk_size,
+                      output_blocksize,
                       write_group_interval,
                       inv_iterations,
                       inv_order,
@@ -545,7 +585,6 @@ def _align_local_data(fix_input,
     mov_path, mov_dataset, mov_dataarray = mov_input
 
     print('Run local alignment:', steps, partitionsize, flush=True)
-    output_blocks_chunksize = (output_chunk_size,) * fix_dataarray.ndim
     blocks_partitionsize = (partitionsize,) * fix_dataarray.ndim
 
     fix_spacing = n5_utils.get_voxel_spacing(fix_attrs)
@@ -563,7 +602,7 @@ def _align_local_data(fix_input,
             deform_path,
             local_transform_subpath,
             fix_dataarray.shape + (fix_dataarray.ndim,),
-            output_blocks_chunksize + (fix_dataarray.ndim,),
+            local_transform_blocksize + (fix_dataarray.ndim,),
             np.float32,
             # the transformation does not have to have spacing attributes
         )
@@ -592,7 +631,7 @@ def _align_local_data(fix_input,
             inv_deform_path,
             local_inv_transform_subpath,
             fix_dataarray.shape + (fix_dataarray.ndim,),
-            output_blocks_chunksize + (fix_dataarray.ndim,),
+            local_inv_transform_blocksize + (fix_dataarray.ndim,),
             np.float32,
             # the transformation does not have to have spacing attributes
         )
@@ -623,7 +662,7 @@ def _align_local_data(fix_input,
             aligned_path,
             mov_dataset,
             fix_dataarray.shape,
-            output_blocks_chunksize,
+            output_blocksize,
             fix_dataarray.dtype,
             pixelResolution=mov_attrs.get('pixelResolution'),
             downsamplingFactors=mov_attrs.get('downsamplingFactors'),

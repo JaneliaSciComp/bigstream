@@ -12,6 +12,13 @@ from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import distributed_apply_transform
 
 
+def _inttuple(arg):
+    if arg is not None and arg.strip():
+        return tuple([int(d) for d in arg.split(',')])
+    else:
+        return ()
+
+
 def _stringlist(arg):
     if arg is not None and arg.strip():
         return list(filter(lambda x: x, [s.strip() for s in arg.split(',')]))
@@ -55,6 +62,10 @@ def _define_args():
                              default=128,
                              type=int,
                              help='Output chunk size')
+    args_parser.add_argument('--output-blocksize',
+                             dest='output_blocksize',
+                             type=_inttuple,
+                             help='Output chunk size as a tuple.')
     args_parser.add_argument('--working-dir',
                              dest='working_dir',
                              help='Working directory')
@@ -113,7 +124,12 @@ def _run_apply_transform(args):
     local_deform, _ = n5_utils.open(args.local_transform,
                                     args.local_transform_subpath)
 
-    output_blocks = (args.output_chunk_size,) * fix_data.ndim
+    if len(args.output_blocksize) > 0:
+        output_blocks = args.output_blocksize
+    else:
+        # default to output_chunk_size
+        output_blocks = (args.output_chunk_size,) * fix_data.ndim
+
     blocks_partitionsize = (args.blocks_partitionsize,) * fix_data.ndim
 
     if args.output:

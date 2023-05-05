@@ -135,7 +135,7 @@ def distributed_apply_transform(
         for _, result in batch:
             finished_block_coords, aligned_block = result
 
-            print('Completed block:',
+            print('Transformed block:',
                   finished_block_coords,
                   flush=True)
 
@@ -481,7 +481,7 @@ def distributed_invert_displacement_vector_field(
         for _, result in batch:
             inverse_block_coords, inverse_block = result
 
-            print('Completed block:',
+            print('Inversed block:',
                   inverse_block_coords,
                   flush=True)
 

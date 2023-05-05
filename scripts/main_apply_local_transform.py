@@ -66,17 +66,8 @@ def _define_args():
                              dest='output_blocksize',
                              type=_inttuple,
                              help='Output chunk size as a tuple.')
-    args_parser.add_argument('--working-dir',
-                             dest='working_dir',
-                             help='Working directory')
-
-    args_parser.add_argument('--blocks-partitionsize',
-                             dest='blocks_partitionsize',
-                             default=128,
-                             type=int,
-                             help='blocksize for splitting the work')
-    args_parser.add_argument('--overlap-factor',
-                             dest='overlap_factor',
+    args_parser.add_argument('--blocks-overlap-factor',
+                             dest='blocks_overlap_factor',
                              default=0.5,
                              type=float,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
@@ -130,8 +121,6 @@ def _run_apply_transform(args):
         # default to output_chunk_size
         output_blocks = (args.output_chunk_size,) * fix_data.ndim
 
-    blocks_partitionsize = (args.blocks_partitionsize,) * fix_data.ndim
-
     if args.output:
         output_dataarray = n5_utils.create_dataset(
             args.output,
@@ -156,8 +145,8 @@ def _run_apply_transform(args):
         distributed_apply_transform(
             fix_data, mov_data,
             fix_voxel_spacing, mov_voxel_spacing,
-            blocks_partitionsize,
-            overlap_factor=args.overlap_factor,
+            output_blocks, # use block chunk size for distributing the work
+            overlap_factor=args.blocks_overlap_factor,
             transform_list=affine_transforms_list + [local_deform],
             aligned_data=output_dataarray,
             cluster=cluster,

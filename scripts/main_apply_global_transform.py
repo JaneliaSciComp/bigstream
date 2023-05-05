@@ -5,6 +5,13 @@ import bigstream.n5_utils as n5_utils
 from bigstream.transform import apply_transform
 
 
+def _inttuple(arg):
+    if arg is not None and arg.strip():
+        return tuple([int(d) for d in arg.split(',')])
+    else:
+        return ()
+
+
 def _stringlist(arg):
     if arg is not None and arg.strip():
         return list(filter(lambda x: x, [s.strip() for s in arg.split(',')]))
@@ -45,6 +52,10 @@ def _define_args():
                              default=128,
                              type=int,
                              help='Output chunk size')
+    args_parser.add_argument('--output-blocksize',
+                             dest='output_blocksize',
+                             type=_inttuple,
+                             help='Output chunk size as a tuple.')
 
     return args_parser
 
@@ -66,7 +77,12 @@ def _run_apply_transform(args):
     print('Moving volume attributes:',
           mov_data.shape, mov_voxel_spacing, flush=True)
 
-    output_blocks = (args.output_chunk_size,) * fix_data.ndim
+    if (args.output_blocksize is not None and
+        len(args.output_blocksize) > 0):
+        output_blocksize = args.output_blocksize
+    else:
+        # default to output_chunk_size
+        output_blocksize = (args.output_chunk_size,) * fix_data.ndim
 
     if args.output:
         if args.affine_transformations:
@@ -85,7 +101,7 @@ def _run_apply_transform(args):
             args.output,
             output_subpath,
             fix_data.shape,
-            output_blocks,
+            output_blocksize,
             fix_data.dtype,
             data=transformed
         )

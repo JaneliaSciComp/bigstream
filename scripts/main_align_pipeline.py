@@ -501,19 +501,22 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
                                  else
                                     args.blocks_overlap_factor)
 
-        if len(args.output_blocksize) > 0:
+        if (args.output_blocksize is not None and
+            len(args.output_blocksize) > 0):
             output_blocksize = args.output_blocksize
         else:
             # default to output_chunk_size
             output_blocksize = (args.output_chunk_size,) * fix_highres_ldata.ndim
 
-        if len(args.local_transform_blocksize) > 0:
+        if (args.local_transform_blocksize is not None and
+            len(args.local_transform_blocksize) > 0):
             local_transform_blocksize = args.local_transform_blocksize
         else:
             # default to output blocksize
             local_transform_blocksize = output_blocksize
 
-        if len(args.local_inv_transform_blocksize) > 0:
+        if (args.local_inv_transform_blocksize is not None and
+            len(args.local_inv_transform_blocksize) > 0):
             local_inv_transform_blocksize = args.local_inv_transform_blocksize
         else:
             # default to local transform blocksize

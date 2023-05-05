@@ -143,7 +143,7 @@ def _align_single_block(block_index,
                 transform, fix_block.shape, spacing=fix_spacing,
             )
 
-        print('Completed alignment for block', block_index)
+        print('Completed single block alignment for', block_index)
     except Exception as e:
         print('Alignment pipeline failed for block', block_index,
               traceback.format_exception(e))

@@ -53,9 +53,7 @@ def _align_single_block(block_index,
                         fix_spacing, mov_spacing,
                         fix_mask, mov_mask,
                         align_steps,
-                        static_transform_list,
-                        result_transform,
-                        write_group_interval):
+                        static_transform_list):
 
     # print some feedback
     print('Align block: ', block_index,
@@ -201,49 +199,38 @@ def _align_single_block(block_index,
         print('Apply weights for', block_index, block_coords,
               'from', weights.shape, 'to', transform.shape)
         transform = transform * weights[..., None]
-
-        # write the data
-        if result_transform:
-            # wait until the correct write window for this write group
-            # if a worker can query the set of running tasks, I may be able to skip
-            # groups that are completely written
-            write_group = np.sum(np.array(block_index) % 3 * (9, 3, 1))
-            while not (write_group < time.time() / write_group_interval % 27 < write_group + .5):
-                time.sleep(1)
-            print('Write results for block', block_index,
-                  'at', block_coords)
-            result_transform[block_coords] += transform
     except Exception as e:
         print('Balancing weights failed for', block_index, block_coords,
               traceback.format_exception(e))
 
-    return transform
+    # Crop the vector field to the blocksize
+    transform_block_coords_list = []
+    for axis in range(transform.ndim - 1):
+        # left side
+        slc = [slice(None),]*(transform.ndim - 1)
+        start = block_coords[axis].start
+        stop = block_coords[axis].stop
+        if block_coords[axis].start != 0:
+            slc[axis] = slice(overlaps[axis], None)
+            transform = transform[tuple(slc)]
+            start = start+overlaps[axis]
 
+        # right side
+        slc = [slice(None),]*(transform.ndim - 1)
+        if transform.shape[axis] > blocksize[axis]:
+            slc[axis] = slice(None, blocksize[axis])
+            transform = transform[tuple(slc)]
+            stop = start + transform.shape[axis]
 
-def _create_single_block_align_args_from_index(block_info,
-                                               blocksize,
-                                               blockoverlaps,
-                                               fix_vol, mov_vol,
-                                               fix_spacing, mov_spacing,
-                                               fix_mask, mov_mask,
-                                               align_steps,
-                                               transforms_list,
-                                               result_transform,
-                                               write_group_interval):
-    return [
-        block_info[0],  # block_index
-        block_info[1],  # ndim tuple of block slices
-        block_info[2],  # block neighbors
-        blocksize,
-        blockoverlaps,
-        fix_vol, mov_vol,
-        fix_spacing, mov_spacing,
-        fix_mask, mov_mask,
-        align_steps,
-        transforms_list,
-        result_transform,
-        write_group_interval,
-    ]
+        transform_block_coords_list.append(slice(start, stop))
+
+    transform_block_coords = tuple(transform_block_coords_list)
+    print('Calculated vector field for block', 
+          block_coords,
+          '->',
+          transform_block_coords, transform.shape)
+
+    return transform_block_coords, transform
 
 
 @cluster
@@ -405,18 +392,20 @@ def distributed_alignment_pipeline(
     steps = [(a, {**kwargs, **b}) for a, b in steps]
 
     print('Submit alignment for', len(indices), 'bocks')
-    align_blocks_args = [_create_single_block_align_args_from_index(
-        block_info,
-        block_partition_size,
-        overlaps,
-        fix, mov,
-        fix_spacing, mov_spacing,
-        fix_mask, mov_mask,
-        steps,
-        static_transform_list,
-        output_transform,
-        write_group_interval
-    ) for block_info in indices]
+    align_blocks_args = [
+        [
+            block_info[0],  # block_index
+            block_info[1],  # ndim tuple of block slices
+            block_info[2],  # block neighbors
+            block_partition_size,
+            overlaps,
+            fix, mov,
+            fix_spacing, mov_spacing,
+            fix_mask, mov_mask,
+            steps,
+            static_transform_list,
+        ] for block_info in indices
+    ]
 
     print('Align', len(align_blocks_args), 'blocks')
     futures = cluster.client.map(
@@ -427,10 +416,18 @@ def distributed_alignment_pipeline(
     future_keys = [f.key for f in futures]
 
     for batch in as_completed(futures, with_results=True).batches():
-        for future, _ in batch:
+        for future, result in batch:
             iii = future_keys.index(future.key)
-            result_block_info = indices[iii]
-            print('Completed block: ', result_block_info[0],
-                    flush=True)
+            transform_block_index = indices[iii][0]
+            transform_block_coords, transform_block = result
+
+            print('Update vector field for block: ',
+                  transform_block_index, 'at',
+                  transform_block_coords,
+                  flush=True)
+            if output_transform is not None:
+                # trying to simply set the output
+                # Greg adds overlaps
+                output_transform[transform_block_coords] = transform_block
 
     return output_transform

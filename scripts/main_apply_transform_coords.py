@@ -70,10 +70,6 @@ def _define_args():
                              dest='local_transform_subpath',
                              help='Local transformation dataset to be applied')
 
-    args_parser.add_argument('--working-dir',
-                             dest='working_dir',
-                             help='Working directory')
-
     args_parser.add_argument('--partition-size',
                              dest='partition_size',
                              default=30,

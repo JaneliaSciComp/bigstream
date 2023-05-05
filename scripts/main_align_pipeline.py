@@ -106,9 +106,6 @@ def _define_args(global_descriptor, local_descriptor):
     args_parser.add_argument(local_descriptor._argflag('output-dir'),
                              dest=local_descriptor._argdest('output_dir'),
                              help='Local alignment output directory')
-    args_parser.add_argument(local_descriptor._argflag('working-dir'),
-                             dest=local_descriptor._argdest('working_dir'),
-                             help='Local alignment working directory')
     args_parser.add_argument('--global-registration-steps',
                              dest='global_registration_steps',
                              type=_stringlist,
@@ -139,13 +136,8 @@ def _define_args(global_descriptor, local_descriptor):
                              dest='local_registration_steps',
                              type=_stringlist,
                              help='Local (highres) registration steps, .e.g. ransac,deform')
-    args_parser.add_argument('--blocks-partitionsize',
-                             dest='blocks_partitionsize',
-                             default=128,
-                             type=int,
-                             help='blocksize for splitting the work')
-    args_parser.add_argument('--overlap-factor',
-                             dest='overlap_factor',
+    args_parser.add_argument('--blocks-overlap-factor',
+                             dest='blocks_overlap_factor',
                              default=0.5,
                              type=float,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
@@ -373,10 +365,6 @@ def _extract_output_dir(args, argdescriptor):
     return getattr(args, argdescriptor._argdest('output_dir'))
 
 
-def _extract_working_dir(args, argdescriptor):
-    return getattr(args, argdescriptor._argdest('working_dir'))
-
-
 def _run_global_alignment(args, steps, global_output_dir):
     if global_output_dir: 
         if args.global_transform_name:
@@ -484,7 +472,7 @@ def _align_global_data(fix_data,
     return affine, aligned
 
 
-def _run_local_alignment(args, steps, global_transform, output_dir, working_dir):
+def _run_local_alignment(args, steps, global_transform, output_dir):
     if steps:
         print('Run local registration with:', steps, flush=True)
 
@@ -508,10 +496,10 @@ def _run_local_alignment(args, steps, global_transform, output_dir, working_dir)
         else:
             cluster = local_cluster(config=dask_config)
 
-        overlap_factor = (0.5 if (args.overlap_factor <= 0 or
-                                    args.overlap_factor >= 1)
+        blocks_overlap_factor = (0.5 if (args.blocks_overlap_factor <= 0 or
+                                    args.blocks_overlap_factor >= 1)
                                  else
-                                    args.overlap_factor)
+                                    args.blocks_overlap_factor)
 
         if len(args.output_blocksize) > 0:
             output_blocksize = args.output_blocksize
@@ -537,8 +525,7 @@ def _run_local_alignment(args, steps, global_transform, output_dir, working_dir)
             fix_highres_attrs,
             mov_highres_attrs,
             steps,
-            args.blocks_partitionsize,
-            overlap_factor,
+            blocks_overlap_factor,
             [global_transform] if global_transform is not None else [],
             output_dir,
             args.local_transform_name,
@@ -564,8 +551,7 @@ def _align_local_data(fix_input,
                       fix_attrs,
                       mov_attrs,
                       steps,
-                      partitionsize,
-                      overlap_factor,
+                      blocks_overlap_factor,
                       global_transforms_list,
                       output_dir,
                       local_transform_name,
@@ -584,8 +570,7 @@ def _align_local_data(fix_input,
     fix_path, fix_dataset, fix_dataarray = fix_input
     mov_path, mov_dataset, mov_dataarray = mov_input
 
-    print('Run local alignment:', steps, partitionsize, flush=True)
-    blocks_partitionsize = (partitionsize,) * fix_dataarray.ndim
+    print('Run local alignment:', steps, output_blocksize, flush=True)
 
     fix_spacing = n5_utils.get_voxel_spacing(fix_attrs)
     mov_spacing = n5_utils.get_voxel_spacing(mov_attrs)
@@ -618,8 +603,8 @@ def _align_local_data(fix_input,
         fix_dataarray, mov_dataarray,
         fix_spacing, mov_spacing,
         steps,
-        blocks_partitionsize,
-        overlap_factor=overlap_factor,
+        output_blocksize, # parallelize on the block chunk size
+        overlap_factor=blocks_overlap_factor,
         static_transform_list=global_transforms_list,
         output_transform=local_deform,
         write_group_interval=write_group_interval,
@@ -645,9 +630,9 @@ def _align_local_data(fix_input,
         distributed_invert_displacement_vector_field(
             local_deform,
             fix_spacing,
-            blocks_partitionsize,
+            local_inv_transform_blocksize, # use blocksize for partitioning
             local_inv_deform,
-            overlap_factor=overlap_factor,
+            overlap_factor=blocks_overlap_factor,
             iterations=inv_iterations,
             order=inv_order,
             sqrt_iterations=inv_sqrt_iterations,
@@ -673,8 +658,8 @@ def _align_local_data(fix_input,
         distributed_apply_transform(
             fix_dataarray, mov_dataarray,
             fix_spacing, mov_spacing,
-            blocks_partitionsize,
-            overlap_factor=overlap_factor,
+            output_blocksize, # use block chunk size for distributing work
+            overlap_factor=blocks_overlap_factor,
             transform_list=global_transforms_list + [local_deform],
             aligned_data=local_aligned,
             cluster=cluster,
@@ -723,5 +708,4 @@ if __name__ == '__main__':
         local_steps,
         global_transform,
         _extract_output_dir(args, local_descriptor),
-        _extract_working_dir(args, local_descriptor),
     )

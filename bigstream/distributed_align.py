@@ -383,8 +383,8 @@ def distributed_alignment_pipeline(
     new_indices = []
     neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=3)))
     for index, coords in zip(indices, slices):
-        neighbor_flags = {tuple(o): tuple(index + o)
-                          in indices for o in neighbor_offsets}
+        neighbor_flags = {tuple(o): (tuple(index + o) in indices)
+                          for o in neighbor_offsets}
         new_indices.append((index, coords, neighbor_flags))
     indices = new_indices
 

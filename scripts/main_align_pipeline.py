@@ -90,7 +90,7 @@ def _define_args(global_descriptor, local_descriptor):
                              action='store_true',
                              help='If set use an existing global transform')
 
-    args_parser.add_argument('--output-chunk-size', 
+    args_parser.add_argument('--output-chunk-size',
                              dest='output_chunk_size',
                              default=128,
                              type=int,
@@ -425,12 +425,14 @@ def _run_global_alignment(args, steps, global_output_dir):
         if global_output_dir and args.global_aligned_name:
             global_aligned_file = (global_output_dir + '/' + 
                                    args.global_aligned_name)
-            if len(args.output_blocksize) > 0:
+            if (args.output_blocksize is not None and
+                len(args.output_blocksize) > 0):
                 output_blocksize = args.output_blocksize
             else:
                 # default to output_chunk_size
                 output_blocksize = (args.output_chunk_size,) * global_alignment.ndim
-            print('Save global aligned volume to', global_aligned_file)
+            print('Save global aligned volume to', global_aligned_file,
+                  'with blocksize', output_blocksize)
             n5_utils.create_dataset(
                 global_aligned_file,
                 args.moving_global_subpath, # same dataset as the moving image

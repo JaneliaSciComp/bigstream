@@ -238,10 +238,10 @@ def _get_axis_abs_neighbor_slice(axis_neighbor, block_axis_slice, axis_overlap):
         neighbor_slice_end = block_axis_slice.start + axis_overlap
     elif axis_neighbor == 0: # same as this block
         neighbor_slice_start = block_axis_slice.start + axis_overlap
-        neighbor_slice_end = block_axis_slice.end - axis_overlap
+        neighbor_slice_end = block_axis_slice.stop - axis_overlap
     else: # which_neighbor == 1 - right to this block
-        neighbor_slice_start = block_axis_slice.end - axis_overlap
-        neighbor_slice_end = block_axis_slice.end
+        neighbor_slice_start = block_axis_slice.stop - axis_overlap
+        neighbor_slice_end = block_axis_slice.stop
     return slice(neighbor_slice_start, neighbor_slice_end)
 
 

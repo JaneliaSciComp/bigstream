@@ -452,10 +452,12 @@ def distributed_alignment_pipeline(
         for future, result in batch:
             iii = future_keys.index(future.key)
             transform_block_index = indices[iii][0]
+            transform_block_coords = indices[iii][1]
             neighbors_coords, transform_block = result
 
             print('Calculated displacement vector field for block: ',
-                  transform_block_index,
+                  transform_block_index, 'at',
+                  transform_block_coords,
                   flush=True)
             if output_transform is not None:
                 for neighbor_coords in neighbors_coords:

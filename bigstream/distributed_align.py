@@ -478,18 +478,22 @@ def distributed_alignment_pipeline(
         for future, result in batch:
             iii = future_keys.index(future.key)
             transform_block_index = indices[iii]
-            neighbors_coords, transform_block = result
-
-            print('Calculated displacement vector field for block: ',
-                  transform_block_index,
-                  flush=True)
-            if output_transform is not None:
-                for neighbor_coords in neighbors_coords:
-                    absolute_coords, relative_coords = neighbor_coords
-                    print('Update displacement vector field for block: ',
-                        transform_block_index,
-                        'at', absolute_coords, 'from', relative_coords,
-                        flush=True)
-                    output_transform[absolute_coords] += transform_block[relative_coords]
+            if result is None:
+                print('Error calculating displacement vector field for block: ',
+                    transform_block_index,
+                    flush=True)
+            else:
+                neighbors_coords, transform_block = result
+                print('Calculated displacement vector field for block: ',
+                    transform_block_index,
+                    flush=True)
+                if output_transform is not None:
+                    for neighbor_coords in neighbors_coords:
+                        absolute_coords, relative_coords = neighbor_coords
+                        print('Update displacement vector field for block: ',
+                            transform_block_index,
+                            'at', absolute_coords, 'from', relative_coords,
+                            flush=True)
+                        output_transform[absolute_coords] += transform_block[relative_coords]
 
     return output_transform

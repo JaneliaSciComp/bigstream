@@ -307,7 +307,6 @@ def distributed_alignment_pipeline(
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
-    write_group_interval=30,
     cluster=None,
     cluster_kwargs={},
     **kwargs,

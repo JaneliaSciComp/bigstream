@@ -260,7 +260,7 @@ def _get_axis_abs_neighbor_range(axis_neighbor,
                                 axis_blocksize)
         neighbor_slice_end = min(neighbor_slice_start + axis_overlap,
                                  axis_block_slice.stop)
-    return neighbor_slice_start, neighbor_slice_end
+    return int(neighbor_slice_start), int(neighbor_slice_end)
 
 
 def _get_neighbor_overlap_rel_coords(neighbor,
@@ -279,6 +279,7 @@ def _get_neighbor_overlap_rel_coords(neighbor,
                                             blocksize,
                                             overlap)])
 
+
 def _get_axis_rel_neighbor_range(axis_neighbor,
                                  axis_block_slice,
                                  axis_blocksize,
@@ -287,7 +288,9 @@ def _get_axis_rel_neighbor_range(axis_neighbor,
                                              axis_block_slice,
                                              axis_blocksize,
                                              axis_overlap)
-    return start - axis_block_slice.start, end - axis_block_slice.start
+    return (int(start - axis_block_slice.start),
+            int(end - axis_block_slice.start))
+
 
 @cluster
 def distributed_alignment_pipeline(

@@ -205,6 +205,7 @@ def _align_single_block(block_index,
 
     neighbor_abs_coords = [_get_neighbor_overlap_abs_coords(n,
                                                             block_coords,
+                                                            blocksize,
                                                             overlaps)
                            for(n, present) in block_neighbors.items()
                                            if present]
@@ -212,7 +213,7 @@ def _align_single_block(block_index,
                                                             blocksize,
                                                             overlaps)
                             for(n, present) in block_neighbors.items()
-                                           if present]
+                                            if present]
 
     print('Calculated vector field for block',
           block_coords,
@@ -223,48 +224,69 @@ def _align_single_block(block_index,
             transform)
 
 
-def _get_neighbor_overlap_abs_coords(neighbor, block_coords, overlap):
-    return tuple([_get_axis_abs_neighbor_slice(neighbor_axis,
-                                               block_coords_axis,
-                                               overlap_axis)
+def _get_neighbor_overlap_abs_coords(neighbor,
+                                     block_coords,
+                                     blocksize,
+                                     overlap):
+    return tuple([slice(_get_axis_abs_neighbor_range(neighbor_axis,
+                                                     block_coords_axis,
+                                                     blocksize_axis,
+                                                     overlap_axis))
                   for (neighbor_axis,
                        block_coords_axis,
-                       overlap_axis) in zip(neighbor, block_coords, overlap)])
-
-
-def _get_axis_abs_neighbor_slice(axis_neighbor, block_axis_slice, axis_overlap):
-    if axis_neighbor == -1: # left to this block
-        neighbor_slice_start = block_axis_slice.start
-        neighbor_slice_end = block_axis_slice.start + axis_overlap
-    elif axis_neighbor == 0: # same as this block
-        neighbor_slice_start = block_axis_slice.start + axis_overlap
-        neighbor_slice_end = block_axis_slice.stop - axis_overlap
-    else: # which_neighbor == 1 - right to this block
-        neighbor_slice_start = block_axis_slice.stop - axis_overlap
-        neighbor_slice_end = block_axis_slice.stop
-    return slice(neighbor_slice_start, neighbor_slice_end)
-
-
-def _get_neighbor_overlap_rel_coords(neighbor, blocksize, overlap):
-    return tuple([_get_axis_rel_neighbor_slice(neighbor_axis,
-                                               blocksize_axis,
-                                               overlap_axis)
-                  for (neighbor_axis,
                        blocksize_axis,
-                       overlap_axis) in zip(neighbor, blocksize, overlap)])
+                       overlap_axis) in zip(neighbor,
+                                            block_coords,
+                                            blocksize,
+                                            overlap)])
 
 
-def _get_axis_rel_neighbor_slice(axis_neighbor, axis_blocksize, axis_overlap):
+def _get_axis_abs_neighbor_range(axis_neighbor,
+                                 axis_block_slice,
+                                 axis_blocksize,
+                                 axis_overlap):
     if axis_neighbor == -1: # left to this block
-        neighbor_slice_start = 0
-        neighbor_slice_end = axis_overlap
+        neighbor_slice_start = axis_block_slice.start
+        neighbor_slice_end = min(neighbor_slice_start + axis_overlap, 
+                                 axis_block_slice.stop)
     elif axis_neighbor == 0: # same as this block
-        neighbor_slice_start = axis_overlap
-        neighbor_slice_end = axis_overlap + axis_blocksize
+        neighbor_slice_start = axis_block_slice.start + axis_overlap
+        neighbor_slice_end = min(neighbor_slice_start + axis_blocksize,
+                                 axis_block_slice.stop)
     else: # which_neighbor == 1 - right to this block
-        neighbor_slice_start = axis_overlap + axis_blocksize
-        neighbor_slice_end = axis_overlap + 2 * axis_blocksize
-    return slice(neighbor_slice_start, neighbor_slice_end)
+        neighbor_slice_start = (axis_block_slice.start +
+                                axis_overlap +
+                                axis_blocksize)
+        neighbor_slice_end = min(neighbor_slice_start + axis_overlap,
+                                 axis_block_slice.stop)
+    return neighbor_slice_start, neighbor_slice_end
+
+
+def _get_neighbor_overlap_rel_coords(neighbor,
+                                     block_coords,
+                                     blocksize,
+                                     overlap):
+    return tuple([slice(_get_axis_rel_neighbor_range(neighbor_axis,
+                                                     block_coords_axis,
+                                                     blocksize_axis,
+                                                     overlap_axis))
+                  for (neighbor_axis,
+                       block_coords_axis,
+                       blocksize_axis,
+                       overlap_axis) in zip(neighbor,
+                                            block_coords,
+                                            blocksize,
+                                            overlap)])
+
+def _get_axis_rel_neighbor_range(axis_neighbor,
+                                 axis_block_slice,
+                                 axis_blocksize,
+                                 axis_overlap):
+    start,end = _get_axis_abs_neighbor_range(axis_neighbor,
+                                             axis_block_slice,
+                                             axis_blocksize,
+                                             axis_overlap)
+    return start - axis_block_slice.start, end - axis_block_slice.start
 
 @cluster
 def distributed_alignment_pipeline(
@@ -451,13 +473,11 @@ def distributed_alignment_pipeline(
     for batch in as_completed(futures, with_results=True).batches():
         for future, result in batch:
             iii = future_keys.index(future.key)
-            transform_block_index = indices[iii][0]
-            transform_block_coords = indices[iii][1]
+            transform_block_index = indices[iii]
             neighbors_coords, transform_block = result
 
             print('Calculated displacement vector field for block: ',
-                  transform_block_index, 'at',
-                  transform_block_coords,
+                  transform_block_index,
                   flush=True)
             if output_transform is not None:
                 for neighbor_coords in neighbors_coords:

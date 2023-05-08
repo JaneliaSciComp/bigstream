@@ -221,8 +221,9 @@ def _align_single_block(block_index,
           '->',
           transform.shape)
 
-    return ([c for c in zip(neighbor_abs_coords, neighbor_rel_coords)],
-            transform)
+    return block_coords, transform
+    # return ([c for c in zip(neighbor_abs_coords, neighbor_rel_coords)],
+    #         transform)
 
 
 def _get_neighbor_overlap_abs_coords(neighbor,
@@ -483,17 +484,19 @@ def distributed_alignment_pipeline(
                     transform_block_index,
                     flush=True)
             else:
-                neighbors_coords, transform_block = result
-                print('Calculated displacement vector field for block: ',
-                    transform_block_index,
-                    flush=True)
-                if output_transform is not None:
-                    for neighbor_coords in neighbors_coords:
-                        absolute_coords, relative_coords = neighbor_coords
-                        print('Update displacement vector field for block: ',
-                            transform_block_index,
-                            'at', absolute_coords, 'from', relative_coords,
-                            flush=True)
-                        output_transform[absolute_coords] += transform_block[relative_coords]
+                transform_coords, transform_block = result
+                output_transform[transform_coords] += transform_block
+                # neighbors_coords, transform_block = result
+                # print('Calculated displacement vector field for block: ',
+                #     transform_block_index,
+                #     flush=True)
+                # if output_transform is not None:
+                #     for neighbor_coords in neighbors_coords:
+                #         absolute_coords, relative_coords = neighbor_coords
+                #         print('Update displacement vector field for block: ',
+                #             transform_block_index,
+                #             'at', absolute_coords, 'from', relative_coords,
+                #             flush=True)
+                #         output_transform[absolute_coords] += transform_block[relative_coords]
 
     return output_transform

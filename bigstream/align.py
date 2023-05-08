@@ -197,6 +197,9 @@ def feature_point_ransac_affine_align(
             exclude_border=cc_radius,
         )
 
+    print('Fix spots:', fix_spots.size,
+          'Moving spots:', mov_spots.size,
+          flush=True)
     # TODO: implement masking, remove spots not in foreground
 
     # sort

@@ -115,8 +115,9 @@ def _run_apply_transform(args):
     local_deform, _ = n5_utils.open(args.local_transform,
                                     args.local_transform_subpath)
 
-    if len(args.output_blocksize) > 0:
-        output_blocks = args.output_blocksize
+    if (args.output_blocksize is not None and
+        len(args.output_blocksize) > 0):
+        output_blocks = args.output_blocksize[::-1] # make it zyx
     else:
         # default to output_chunk_size
         output_blocks = (args.output_chunk_size,) * fix_data.ndim

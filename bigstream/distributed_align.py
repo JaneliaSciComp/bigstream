@@ -209,7 +209,8 @@ def _align_single_block(block_index,
                                                             overlaps)
                            for(n, present) in block_neighbors.items()
                                            if present]
-    neighbor_rel_coords = [_get_neighbor_overlap_rel_coords(n, 
+    neighbor_rel_coords = [_get_neighbor_overlap_rel_coords(n,
+                                                            block_coords,
                                                             blocksize,
                                                             overlaps)
                             for(n, present) in block_neighbors.items()

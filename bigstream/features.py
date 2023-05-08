@@ -71,13 +71,16 @@ def get_contexts(image, coords, radius):
 def _stats(arr):
     """
     """
-
-    # compute mean and standard deviation along columns
-    arr = arr.astype(np.float64)
-    means = np.mean(arr, axis=1)
-    sqr_means = np.mean(np.square(arr), axis=1)
-    stddevs = np.sqrt( sqr_means - np.square(means) )
-    return means, stddevs
+    try:
+        # compute mean and standard deviation along columns
+        arr = arr.astype(np.float64)
+        means = np.mean(arr, axis=1)
+        sqr_means = np.mean(np.square(arr), axis=1)
+        stddevs = np.sqrt( sqr_means - np.square(means) )
+        return means, stddevs
+    except Exception as e:
+        print('Stats exception for array of shape', arr.shape, e)
+        raise e
 
 
 def pairwise_correlation(A, B):

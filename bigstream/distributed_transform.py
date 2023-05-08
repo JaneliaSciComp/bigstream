@@ -347,8 +347,6 @@ def distributed_apply_transform_to_coordinates(
         transform_list=transform_list,
     )
 
-    future_keys = [f.key for f in futures]
-
     results = cluster.client.gather(futures)
 
     return np.concatenate(results, axis=0)

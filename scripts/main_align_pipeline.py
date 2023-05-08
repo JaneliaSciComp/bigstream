@@ -422,7 +422,7 @@ def _run_global_alignment(args, steps, global_output_dir):
                                    args.global_aligned_name)
             if (args.output_blocksize is not None and
                 len(args.output_blocksize) > 0):
-                output_blocksize = args.output_blocksize
+                output_blocksize = args.output_blocksize[::-1]
             else:
                 # default to output_chunk_size
                 output_blocksize = (args.output_chunk_size,) * global_alignment.ndim
@@ -500,21 +500,22 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
 
         if (args.output_blocksize is not None and
             len(args.output_blocksize) > 0):
-            output_blocksize = args.output_blocksize
+            # block chunks are define as x,y,z so I am reversing it to z,y,x
+            output_blocksize = args.output_blocksize[::-1]
         else:
             # default to output_chunk_size
             output_blocksize = (args.output_chunk_size,) * fix_highres_ldata.ndim
 
         if (args.local_transform_blocksize is not None and
             len(args.local_transform_blocksize) > 0):
-            local_transform_blocksize = args.local_transform_blocksize
+            local_transform_blocksize = args.local_transform_blocksize[::-1]
         else:
             # default to output blocksize
             local_transform_blocksize = output_blocksize
 
         if (args.local_inv_transform_blocksize is not None and
             len(args.local_inv_transform_blocksize) > 0):
-            local_inv_transform_blocksize = args.local_inv_transform_blocksize
+            local_inv_transform_blocksize = args.local_inv_transform_blocksize[::-1]
         else:
             # default to local transform blocksize
             local_inv_transform_blocksize = local_transform_blocksize

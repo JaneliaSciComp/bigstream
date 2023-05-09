@@ -203,94 +203,12 @@ def _align_single_block(block_index,
         print('Balancing weights failed for', block_index, block_coords,
               traceback.format_exception(e))
 
-    neighbor_abs_coords = [_get_neighbor_overlap_abs_coords(n,
-                                                            block_coords,
-                                                            blocksize,
-                                                            overlaps)
-                           for(n, present) in block_neighbors.items()
-                                           if present]
-    neighbor_rel_coords = [_get_neighbor_overlap_rel_coords(n,
-                                                            block_coords,
-                                                            blocksize,
-                                                            overlaps)
-                            for(n, present) in block_neighbors.items()
-                                            if present]
-
     print('Calculated vector field for block',
           block_coords,
           '->',
           transform.shape)
 
     return block_coords, transform
-    # return ([c for c in zip(neighbor_abs_coords, neighbor_rel_coords)],
-    #         transform)
-
-
-def _get_neighbor_overlap_abs_coords(neighbor,
-                                     block_coords,
-                                     blocksize,
-                                     overlap):
-    return tuple([_get_axis_abs_neighbor_range(neighbor_axis,
-                                               block_coords_axis,
-                                               blocksize_axis,
-                                               overlap_axis)
-                  for (neighbor_axis,
-                       block_coords_axis,
-                       blocksize_axis,
-                       overlap_axis) in zip(neighbor,
-                                            block_coords,
-                                            blocksize,
-                                            overlap)])
-
-
-def _get_axis_abs_neighbor_range(axis_neighbor,
-                                 axis_block_slice,
-                                 axis_blocksize,
-                                 axis_overlap):
-    if axis_neighbor == -1: # left to this block
-        neighbor_slice_start = axis_block_slice.start
-        neighbor_slice_end = min(neighbor_slice_start + axis_overlap, 
-                                 axis_block_slice.stop)
-    elif axis_neighbor == 0: # same as this block
-        neighbor_slice_start = axis_block_slice.start + axis_overlap
-        neighbor_slice_end = min(neighbor_slice_start + axis_blocksize,
-                                 axis_block_slice.stop)
-    else: # which_neighbor == 1 - right to this block
-        neighbor_slice_start = (axis_block_slice.start +
-                                axis_overlap +
-                                axis_blocksize)
-        neighbor_slice_end = min(neighbor_slice_start + axis_overlap,
-                                 axis_block_slice.stop)
-    return slice(neighbor_slice_start, neighbor_slice_end)
-
-
-def _get_neighbor_overlap_rel_coords(neighbor,
-                                     block_coords,
-                                     blocksize,
-                                     overlap):
-    return tuple([_get_axis_rel_neighbor_range(neighbor_axis,
-                                               block_coords_axis,
-                                               blocksize_axis,
-                                               overlap_axis)
-                  for (neighbor_axis,
-                       block_coords_axis,
-                       blocksize_axis,
-                       overlap_axis) in zip(neighbor,
-                                            block_coords,
-                                            blocksize,
-                                            overlap)])
-
-
-def _get_axis_rel_neighbor_range(axis_neighbor,
-                                 axis_block_slice,
-                                 axis_blocksize,
-                                 axis_overlap):
-    abs_slice = _get_axis_abs_neighbor_range(axis_neighbor,
-                                              axis_block_slice,
-                                              axis_blocksize,
-                                              axis_overlap)
-    return slice(abs_slice.start-axis_block_slice.start,
-                 abs_slice.stop-axis_block_slice.start)
 
 
 @cluster

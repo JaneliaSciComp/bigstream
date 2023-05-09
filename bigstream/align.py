@@ -200,6 +200,11 @@ def feature_point_ransac_affine_align(
     print('Fix spots:', fix_spots.size,
           'Moving spots:', mov_spots.size,
           flush=True)
+
+    if fix_spots.size == 0 or mov_spots.size == 0:
+        print('No spots in fixed or moving image', flush=True)
+        return default
+
     # TODO: implement masking, remove spots not in foreground
 
     # sort

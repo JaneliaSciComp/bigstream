@@ -232,13 +232,21 @@ def feature_point_ransac_affine_align(
 
     # check spot counts
     if fix_spots.shape[0] < 50:
-        print('Fewer than 50 spots found in fixed image, returning default')
+        print('Fewer than 50 spots found in fixed image, returning default',
+              fix_spots.shape[0],
+              flush=True)
         return default
     if mov_spots.shape[0] < 50:
-        print('Fewer than 50 spots found in moving image, returning default')
+        print('Fewer than 50 spots found in moving image, returning default',
+              mov_spots.shape[0],
+              flush=True)
         return default
 
     # align
+    print('Found enough spots to estimate the affine',
+          'fix:', fix_spots.shape[0], ',',
+          'moving:', mov_spots.shape[0],
+          flush=True)
     r, Aff, inline = cv2.estimateAffine3D(
         fix_spots, mov_spots,
         ransacThreshold=align_threshold,

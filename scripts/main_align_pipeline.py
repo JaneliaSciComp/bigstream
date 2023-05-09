@@ -474,13 +474,13 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
         print('Run local registration with:', steps, flush=True)
 
         # Read the highres inputs - if highres is not defined default it to lowres
-        fix_highres_path = args.fixed_local if args.fixed_local else args.fixed_global
-        mov_highres_path = args.fixed_local if args.fixed_local else args.fixed_global
+        fix_local_path = args.fixed_local if args.fixed_local else args.fixed_global
+        mov_local_path = args.moving_local if args.moving_local else args.moving_global
 
-        fix_highres_ldata, fix_highres_attrs = n5_utils.open(
-            fix_highres_path, args.fixed_local_subpath)
-        mov_highres_ldata, mov_highres_attrs = n5_utils.open(
-            mov_highres_path, args.moving_local_subpath)
+        fix_highres_ldata, fix_local_attrs = n5_utils.open(
+            fix_local_path, args.fixed_local_subpath)
+        mov_highres_ldata, mov_local_attrs = n5_utils.open(
+            mov_local_path, args.moving_local_subpath)
 
         if (args.dask_config):
             with open(args.dask_config) as f:
@@ -521,10 +521,10 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
             local_inv_transform_blocksize = local_transform_blocksize
 
         _align_local_data(
-            (fix_highres_path, args.fixed_local_subpath, fix_highres_ldata),
-            (mov_highres_path, args.moving_local_subpath, mov_highres_ldata),
-            fix_highres_attrs,
-            mov_highres_attrs,
+            (fix_local_path, args.fixed_local_subpath, fix_highres_ldata),
+            (mov_local_path, args.moving_local_subpath, mov_highres_ldata),
+            fix_local_attrs,
+            mov_local_attrs,
             steps,
             blocks_overlap_factor,
             [global_transform] if global_transform is not None else [],

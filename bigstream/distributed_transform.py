@@ -85,9 +85,9 @@ def distributed_apply_transform(
     """
 
     # get overlap and number of blocks
-    block_partition_size = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix.shape) / block_partition_size).astype(int)
-    overlaps = np.round(block_partition_size * overlap_factor).astype(int)
+    blocksize_array = np.array(blocksize)
+    nblocks = np.ceil(np.array(fix.shape) / blocksize_array).astype(int)
+    overlaps = np.round(blocksize_array * overlap_factor).astype(int)
 
     # ensure there's a 1:1 correspondence between transform spacing 
     # and transform list
@@ -107,15 +107,15 @@ def distributed_apply_transform(
     # prepare block coordinates
     blocks_coords = []
     for (i, j, k) in np.ndindex(*nblocks):
-        start = block_partition_size * (i, j, k) - overlaps
-        stop = start + block_partition_size + 2 * overlaps
+        start = blocksize_array * (i, j, k) - overlaps
+        stop = start + blocksize_array + 2 * overlaps
         start = np.maximum(0, start)
         stop = np.minimum(fix.shape, stop)
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
         blocks_coords.append(block_coords)
 
     print('Transform', len(blocks_coords), 'blocks',
-          'with partition size' ,block_partition_size)
+          'with partition size' ,blocksize_array)
     # align all blocks
     futures = cluster.client.map(
         _transform_single_block,
@@ -124,7 +124,7 @@ def distributed_apply_transform(
         full_mov=mov,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
-        blocksize=block_partition_size,
+        blocksize=blocksize_array,
         blockoverlaps=overlaps,
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,
@@ -463,6 +463,8 @@ def distributed_invert_displacement_vector_field(
         blocks_coords.append(coords)
 
     # invert all blocks
+    print('Invert', len(blocks_coords), 'blocks',
+          'with partition size', blocksize_array)
     futures = cluster.client.map(
         _invert_block,
         blocks_coords,

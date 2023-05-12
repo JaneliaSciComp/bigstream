@@ -2,6 +2,7 @@
 ---
 
 ![warp](resources/warp_interpolation.gif)
+![certificate](resources/rnrexm_certificate.png)
 
 BigStream is a library of tools for 3D registration including images too large to fit into memory and/or too large to register in a single (multi-threaded) process. BigStream can automate chunking of the alignment problem into overlapping blocks, distributes the blocks to independent workers running in parallel, and stitches the results into a single smooth transform. BigStream includes global affine, piecewise affine, and piecewise deformable alignments; it also includes tools for finding feature points of interest, applying transforms, and inverting transforms. The tools can be used individually to construct custom workflows, but pipelines are also provided for specific alignment problems.
 

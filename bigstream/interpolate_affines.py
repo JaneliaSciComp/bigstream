@@ -37,7 +37,11 @@ while not no_updates:
     identity_count = 0
 
     for tile in tiles:
-        affine = np.loadtxt(tile + '/ransac_affine.mat')
+        if path.exists(tile + '/ransac_affine.mat'):
+            affine = np.loadtxt(tile + '/ransac_affine.mat')
+        else:
+            affine = np.eye(4)[:3]
+
         if (affine == np.eye(4)[:3]).all():
             identity_count += 1
             no_updates = False

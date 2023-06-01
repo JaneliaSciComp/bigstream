@@ -63,6 +63,13 @@ def _define_args(global_descriptor, local_descriptor):
                              dest='fixed_global_subpath',
                              help='Fixed global (low resolution) subpath')
 
+    args_parser.add_argument('--fixed-global-mask',
+                             dest='fixed_global_mask',
+                             help='Fixed global (low resolution) mask path')
+    args_parser.add_argument('--fixed-global-mask-subpath',
+                             dest='fixed_global_mask_subpath',
+                             help='Fixed global (low resolution) mask subpath')
+
     args_parser.add_argument('--moving-global',
                              dest='moving_global',
                              help='Moving global (low resolution) volume path')
@@ -71,6 +78,13 @@ def _define_args(global_descriptor, local_descriptor):
                              dest='moving_global_subpath',
                              help='Moving global (low resolution) subpath')
 
+    args_parser.add_argument('--moving-global-mask',
+                             dest='moving_global_mask',
+                             help='Moving global (low resolution) mask path')
+    args_parser.add_argument('--moving-global-mask-subpath',
+                             dest='moving_global_mask_subpath',
+                             help='Moving global (low resolution) mask subpath')
+
     args_parser.add_argument('--fixed-local',
                              dest='fixed_local',
                              help='Path to the fixed local (high resolution) volume')
@@ -78,12 +92,26 @@ def _define_args(global_descriptor, local_descriptor):
                              dest='fixed_local_subpath',
                              help='Fixed local (high resolution) subpath')
 
+    args_parser.add_argument('--fixed-local-mask',
+                             dest='fixed_local_mask',
+                             help='Fixed local (high resolution) mask path')
+    args_parser.add_argument('--fixed-local-mask-subpath',
+                             dest='fixed_local_mask_subpath',
+                             help='Fixed local (high resolution) mask subpath')
+
     args_parser.add_argument('--moving-local',
                              dest='moving_local',
                              help='Path to the moving local (high resolution) volume')
     args_parser.add_argument('--moving-local-subpath',
                              dest='moving_local_subpath',
                              help='Moving local (high resolution) subpath')
+
+    args_parser.add_argument('--moving-local-mask',
+                             dest='moving_local_mask',
+                             help='Moving local (high resolution) mask path')
+    args_parser.add_argument('--moving-local-mask-subpath',
+                             dest='moving_local_mask_subpath',
+                             help='Moving local (high resolution) mask subpath')
 
     args_parser.add_argument('--use-existing-global-transform',
                              dest='use_existing_global_transform',
@@ -251,6 +279,26 @@ def _define_ransac_args(ransac_args, args):
 
 
 def _define_affine_args(affine_args, args):
+    affine_args.add_argument(args._argflag('metric'),
+                             dest=args._argdest('metric'),
+                             type=str,
+                             default='MMI',
+                             help='Metric')
+    affine_args.add_argument(args._argflag('optimizer'),
+                             dest=args._argdest('optimizer'),
+                             type=str,
+                             default='RSGD',
+                             help='Optimizer')
+    affine_args.add_argument(args._argflag('sampling'),
+                             dest=args._argdest('sampling'),
+                             type=str,
+                             default='NONE',
+                             help='Sampling')
+    affine_args.add_argument(args._argflag('interpolator'),
+                             dest=args._argdest('interpolator'),
+                             type=str,
+                             default='1',
+                             help='Interpolator')
     affine_args.add_argument(args._argflag('shrink-factors'),
                              dest=args._argdest('shrink_factors'),
                              metavar='sf1,...,sfn',
@@ -273,6 +321,14 @@ def _define_affine_args(affine_args, args):
                              dest=args._argdest('iterations'),
                              type=int, default=100,
                              help='Number of iterations')
+    affine_args.add_argument(args._argflag('sampling-percentage'),
+                             dest=args._argdest('sampling_percentage'),
+                             type=float,
+                             help='Sampling percentage')
+    affine_args.add_argument(args._argflag('alignment-spacing'),
+                             dest=args._argdest('alignment_spacing'),
+                             type=float,
+                             help='Alignment spacing')
 
 
 def _define_deform_args(deform_args, args):
@@ -327,6 +383,18 @@ def _extract_affine_args(args, argdescriptor):
 
 
 def _extract_affine_args_to(args, argdescriptor, affine_args):
+    if _check_attr(args, argdescriptor, 'metric'):
+        affine_args['metric'] = getattr(
+            args, argdescriptor._argdest('metric'))
+    if _check_attr(args, argdescriptor, 'optimizer'):
+        affine_args['optimizer'] = getattr(
+            args, argdescriptor._argdest('optimizer'))
+    if _check_attr(args, argdescriptor, 'sampling'):
+        affine_args['sampling'] = getattr(
+            args, argdescriptor._argdest('sampling'))
+    if _check_attr(args, argdescriptor, 'interpolator'):
+        affine_args['interpolator'] = getattr(
+            args, argdescriptor._argdest('interpolator'))
     if _check_attr(args, argdescriptor, 'shrink_factors'):
         affine_args['shrink_factors'] = getattr(
             args, argdescriptor._argdest('shrink_factors'))
@@ -342,6 +410,12 @@ def _extract_affine_args_to(args, argdescriptor, affine_args):
     if _check_attr(args, argdescriptor, 'iterations'):
         affine_args['optimizer_args']['numberOfIterations'] = getattr(
             args, argdescriptor._argdest('iterations'))
+    if _check_attr(args, argdescriptor, 'sampling_percentage'):
+        affine_args['sampling_percentage'] = getattr(
+            args, argdescriptor._argdest('sampling_percentage'))
+    if _check_attr(args, argdescriptor, 'alignment_spacing'):
+        affine_args['alignment_spacing'] = getattr(
+            args, argdescriptor._argdest('alignment_spacing'))
 
 
 def _extract_deform_args(args, argdescriptor):
@@ -678,7 +752,10 @@ if __name__ == '__main__':
     if args.global_registration_steps:
         args_for_global_steps = {
             'ransac': _extract_ransac_args(args, global_descriptor),
+            'random': _extract_affine_args(args, global_descriptor),
             'affine': _extract_affine_args(args, global_descriptor),
+            'rigid': _extract_affine_args(args, global_descriptor),
+            'deform': _extract_deform_args(args, global_descriptor),
         }
         global_steps = [(s, args_for_global_steps.get(s, {}))
                         for s in args.global_registration_steps]
@@ -694,6 +771,9 @@ if __name__ == '__main__':
     if args.local_registration_steps:
         args_for_local_steps = {
             'ransac': _extract_ransac_args(args, local_descriptor),
+            'random': _extract_affine_args(args, local_descriptor),
+            'affine': _extract_affine_args(args, local_descriptor),
+            'rigid': _extract_affine_args(args, local_descriptor),
             'deform': _extract_deform_args(args, local_descriptor),
         }
         local_steps = [(s, args_for_local_steps.get(s, {}))

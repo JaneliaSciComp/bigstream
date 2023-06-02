@@ -1,5 +1,6 @@
 import argparse
 import numpy as np
+import bigstream.io_utils as io_utils
 import bigstream.n5_utils as n5_utils
 import yaml
 
@@ -470,12 +471,28 @@ def _run_global_alignment(args, steps, global_output_dir):
         print('Moving lowres volume attributes:',
               mov_arraydata.shape, mov_voxel_spacing, flush=True)
 
+        if args.fixed_global_mask:
+            fix_maskarray, _ = io_utils.open(
+                args.fixed_global_mask, args.fixed_global_mask_subpath
+            )
+        else:
+            fix_maskarray = None
+
+        if args.moving_global_mask:
+            mov_maskarray, _ = io_utils.open(
+                args.moving_global_mask, args.moving_global_mask_subpath
+            )
+        else:
+            mov_maskarray = None
+
         global_transform, global_alignment = _align_global_data(
             fix_arraydata[...],  # read image in memory
             mov_arraydata[...],
             fix_voxel_spacing,
             mov_voxel_spacing,
-            steps)
+            steps,
+            fix_maskarray,
+            mov_maskarray)
 
         if global_transform_file:
             print('Save global transformation to', global_transform_file)
@@ -525,13 +542,17 @@ def _align_global_data(fix_data,
                        mov_data,
                        fix_spacing,
                        mov_spacing,
-                       steps):
+                       steps,
+                       fix_mask,
+                       mov_mask):
     print('Run low res alignment:', steps, flush=True)
     affine = alignment_pipeline(fix_data,
                                 mov_data,
                                 fix_spacing,
                                 mov_spacing,
-                                steps)
+                                steps,
+                                fix_mask=fix_mask,
+                                mov_mask=mov_mask)
     print('Apply affine transform', flush=True)
     # apply transform
     aligned = apply_transform(fix_data,
@@ -594,6 +615,20 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
             # default to local transform blocksize
             local_inv_transform_blocksize = local_transform_blocksize
 
+        if args.fixed_local_mask:
+            fix_maskarray, _ = io_utils.open(
+                args.fixed_local_mask, args.fixed_local_mask_subpath
+            )
+        else:
+            fix_maskarray = None
+
+        if args.moving_local_mask:
+            mov_maskarray, _ = io_utils.open(
+                args.moving_local_mask, args.moving_local_mask_subpath
+            )
+        else:
+            mov_maskarray = None
+
         _align_local_data(
             (fix_local_path, args.fixed_local_subpath, fix_highres_ldata),
             (mov_local_path, args.moving_local_subpath, mov_highres_ldata),
@@ -601,6 +636,8 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
             mov_local_attrs,
             steps,
             blocks_overlap_factor,
+            fix_maskarray,
+            mov_maskarray,
             [global_transform] if global_transform is not None else [],
             output_dir,
             args.local_transform_name,
@@ -626,6 +663,8 @@ def _align_local_data(fix_input,
                       mov_attrs,
                       steps,
                       blocks_overlap_factor,
+                      fix_mask,
+                      mov_mask,
                       global_transforms_list,
                       output_dir,
                       local_transform_name,
@@ -678,6 +717,8 @@ def _align_local_data(fix_input,
         steps,
         output_blocksize, # parallelize on the block chunk size
         overlap_factor=blocks_overlap_factor,
+        fix_mask=fix_mask,
+        mov_mask=mov_mask,
         static_transform_list=global_transforms_list,
         output_transform=local_deform,
         cluster=cluster,
@@ -732,6 +773,8 @@ def _align_local_data(fix_input,
             fix_spacing, mov_spacing,
             output_blocksize, # use block chunk size for distributing work
             overlap_factor=blocks_overlap_factor,
+            fix_mask=fix_maskarray,
+            mov_mask=mov_maskarray,
             transform_list=global_transforms_list + [local_deform],
             aligned_data=local_aligned,
             cluster=cluster,

@@ -70,7 +70,8 @@ if __name__ == '__main__':
         grid       = position_grid(grid) * vox
         grid       = transform_grid(matrix, grid)
     elif ext in ['', '.n5']:
-        grid       = read_n5_transform(txm_path, ref_img_subpath)
+        scalepath = ref_img_subpath.split('/')[-1]
+        grid       = read_n5_transform(txm_path, '/' + scalepath)
 
     if points_path is None:
         im  = read_n5_data(mov_img_path, mov_img_subpath)

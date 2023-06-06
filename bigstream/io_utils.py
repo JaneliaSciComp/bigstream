@@ -1,7 +1,8 @@
 import os
 import nrrd
 import numpy as np
-import .n5_utils as n5_utils
+
+import bigstream.n5_utils as n5_utils
 
 from skimage import io
 

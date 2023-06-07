@@ -7,7 +7,7 @@ from dask.distributed import as_completed, wait
 from ClusterWrap.decorator import cluster
 import bigstream.utility as ut
 from bigstream.align import alignment_pipeline
-from bigstream.transform import apply_transform
+from bigstream.transform import apply_transform, compose_transform_list
 from bigstream.transform import apply_transform_to_coordinates
 from bigstream.transform import compose_transforms
 
@@ -139,21 +139,22 @@ def distributed_piecewise_alignment_pipeline(
     temporary_directory = tempfile.TemporaryDirectory(
         prefix='.', dir=temporary_directory or os.getcwd(),
     )
+    zarr_blocks = [128,] * fix.ndim
     fix_zarr_path = temporary_directory.name + '/fix.zarr'
     mov_zarr_path = temporary_directory.name + '/mov.zarr'
     fix_mask_zarr_path = temporary_directory.name + '/fix_mask.zarr'
     mov_mask_zarr_path = temporary_directory.name + '/mov_mask.zarr'
-    fix_zarr = ut.numpy_to_zarr(fix, blocksize, fix_zarr_path)
-    mov_zarr = ut.numpy_to_zarr(mov, blocksize, mov_zarr_path)
-    if fix_mask is not None: fix_mask_zarr = ut.numpy_to_zarr(fix_mask, blocksize, fix_mask_zarr_path)
-    if mov_mask is not None: mov_mask_zarr = ut.numpy_to_zarr(mov_mask, blocksize, mov_mask_zarr_path)
+    fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
+    mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
+    if fix_mask is not None: fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
+    if mov_mask is not None: mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
 
     # zarr files for initial deformations
     new_list = []
     for iii, transform in enumerate(static_transform_list):
         if transform.shape != (4, 4) and len(transform.shape) != 1:
             path = temporary_directory.name + f'/deform{iii}.zarr'
-            transform = ut.numpy_to_zarr(transform, tuple(blocksize) + (transform.shape[-1],), path)
+            transform = ut.numpy_to_zarr(transform, tuple(zarr_blocks) + (transform.shape[-1],), path)
         new_list.append(transform)
     static_transform_list = new_list
 
@@ -368,32 +369,27 @@ def distributed_piecewise_alignment_pipeline(
         return output_transform
 
 
-# TODO: this function not yet refactored
+# TODO: THIS FUNCTION CURRENTLY DOES NOT WORK FOR LARGER THAN MEMORY TRANSFORMS
 @cluster
 def nested_distributed_piecewise_alignment_pipeline(
     fix,
     mov,
     fix_spacing,
     mov_spacing,
-    block_schedule,
-    parameter_schedule=None,
-    initial_transform_list=None,
+    schedule,
+    static_transform_list=None,
     fix_mask=None,
     mov_mask=None,
-    intermediates_path=None,
     cluster=None,
     cluster_kwargs={},
+    temporary_directory=None,
+    write_path=None,
     **kwargs,
 ):
     """
-    Nested piecewise affine alignments.
-    Two levels of nesting: outer levels and inner levels.
-    Transforms are averaged over inner levels and composed
-    across outer levels. See the `block_schedule` parameter
-    for more details.
-
-    This method is good at capturing large bends and twists that
-    cannot be captured with global rigid and affine alignment.
+    Compose multiple calls to distributed_piecewise_alignment_pipeline with one function call.
+    Be sure you understand how distributed_piecewise_alignment_pipeline and all its arguments
+    work before you use this function.
 
     Parameters
     ----------
@@ -401,7 +397,7 @@ def nested_distributed_piecewise_alignment_pipeline(
         the fixed image
 
     mov : ndarray
-        the moving image; if `initial_transform_list` is None then
+        the moving image; if `static_transform_list` is None then
         `fix.shape` must equal `mov.shape`
 
     fix_spacing : 1d array
@@ -414,60 +410,38 @@ def nested_distributed_piecewise_alignment_pipeline(
         of the moving image.
         Length must equal `mov.ndim`
 
-    block_schedule : list of lists of tuples of ints.
-        Block structure for outer and inner levels.
-        Tuples must all be of length `fix.ndim`
+    schedule : list of tuples in this form [(tuple, [(str, dict), (str, dict), ...]), ...]
+        The blocksize and steps arguments for each call to distributed_piecewise_alignment_pipeline
+        An example:
+            step1 = ( (256, 256, 256), [('affine', affine_kwargs)] )
+            step2 = ( (128, 128, 128), [('affine', affine_kwargs), ('deform', deform_kwargs)] )
+            schedule = [step1, step2]
+        In this example, affine alignment will be done on all 256^3 blocks of the image.
+        Subsequently, affine + deformable alignment will be done on all 128^3 blocks of the image.
 
-        Example:
-            [ [(2, 1, 1), (1, 2, 1),],
-              [(3, 1, 1), (1, 1, 2),],
-              [(4, 1, 1), (2, 2, 1), (2, 2, 2),], ]
-
-            This block schedule specifies three outer levels:
-            1) This outer level contains two inner levels:
-                1.1) Piecewise rigid+affine with 2 blocks along first axis
-                1.2) Piecewise rigid+affine with 2 blocks along second axis
-            2) This outer level contains two inner levels:
-                2.1) Piecewise rigid+affine with 3 blocks along first axis
-                2.2) Piecewise rigid+affine with 2 blocks along third axis
-            3) This outer level contains three inner levels:
-                3.1) Piecewise rigid+affine with 4 blocks along first axis
-                3.2) Piecewise rigid+affine with 4 blocks total: the first
-                     and second axis are each cut into 2 blocks
-                3.3) Piecewise rigid+affine with 8 blocks total: all axes
-                     are cut into 2 blocks
-
-            1.1 and 1.2 are computed (serially) then averaged. This result
-            is stored. 2.1 and 2.2 are computed (serially) then averaged.
-            This is then composed with the result from the first level.
-            This process proceeds for as many levels that are specified.
-
-            Each instance of a piecewise rigid+affine alignment is handled
-            by `distributed_piecewise_affine_alignment` and is therefore
-            parallelized over blocks on distributed hardware.
-
-    parameter_schedule : list of type dict (default: None)
-        Overrides the general parameter `distributed_piecewise_affine_align`
-        parameter settings for individual instances. Length of the list
-        (total number of dictionaries) must equal the total number of
-        tuples in `block_schedule`.
-
-    initial_transform_list : list of ndarrays (default: None)
-        A list of transforms to apply to the moving image before running
-        twist alignment. If `fix.shape` does not equal `mov.shape`
-        then an `initial_transform_list` must be given.
+    static_transform_list : list of numpy arrays (default: [])
+        Transforms applied to moving image before applying query transform
+        Assumed to have the same domain as the fixed image, though sampling
+        can be different. I.e. the origin and span are the same (in physical
+        units) but the number of voxels can be different.
 
     fix_mask : binary ndarray (default: None)
         A mask limiting metric evaluation region of the fixed image
+        Assumed to have the same domain as the fixed image, though sampling
+        can be different. I.e. the origin and span are the same (in physical
+        units) but the number of voxels can be different.
 
     mov_mask : binary ndarray (default: None)
         A mask limiting metric evaluation region of the moving image
-
-    intermediates_path : string (default: None)
-        Path to folder where intermediate results are written.
-        The deform, transformed moving image, and transformed
-        moving image mask (if given) are stored on disk as npy files.
+        Assumed to have the same domain as the moving image, though sampling
+        can be different. I.e. the origin and span are the same (in physical
+        units) but the number of voxels can be different.
     
+    cluster : ClusterWrap.cluster object (default: None)
+        Only set if you have constructed your own static cluster. The default behavior
+        is to construct a cluster for the duration of this function, then close it
+        when the function is finished.
+
     cluster_kwargs : dict (default: {})
         Arguments passed to ClusterWrap.cluster
         If working with an LSF cluster, this will be
@@ -475,104 +449,70 @@ def nested_distributed_piecewise_alignment_pipeline(
         this will be ClusterWrap.local_cluster.
         This is how distribution parameters are specified.
 
+    temporary_directory : string (default: None)
+        Temporary files are created during alignment. The temporary files will be
+        in their own folder within the `temporary_directory`. The default is the
+        current directory. Temporary files are removed if the function completes
+        successfully.
+
+    write_path : string (default: None)
+        If the transforms found by this function are too large to fit into main
+        process memory, set this parameter to a folder where the transforms
+        can be written to disk as separate zarr files
+
     kwargs : any additional arguments
-        Passed to `distributed_piecewise_affine_align`
+        Passed to `distributed_piecewise_alignment_pipeline`
 
     Returns
     -------
-    field : ndarray
-        Composition of all outer level transforms. A displacement vector
-        field of the shape `fix.shape` + (3,) where the last dimension
-        is the vector dimension.
+    field : nd array or zarr.core.Array
+        Composition of all alignments into a single displacement vector field.
     """
 
-    # set working copies of moving data
-    if initial_transform_list is not None:
-        current_moving = apply_transform(
-            fix, mov, fix_spacing, mov_spacing,
-            transform_list=initial_transform_list,
+    # temporary file paths and create zarr images
+    temporary_directory = tempfile.TemporaryDirectory(
+        prefix='.', dir=temporary_directory or os.getcwd(),
+    )
+    zarr_blocks = [128,] * fix.ndim
+    fix_zarr_path = temporary_directory.name + '/fix.zarr'
+    mov_zarr_path = temporary_directory.name + '/mov.zarr'
+    fix_mask_zarr_path = temporary_directory.name + '/fix_mask.zarr'
+    mov_mask_zarr_path = temporary_directory.name + '/mov_mask.zarr'
+    fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
+    mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
+    fix_mask_zarr = None
+    if fix_mask is not None: fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
+    mov_mask_zarr = None
+    if mov_mask is not None: mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
+
+    # zarr files for initial deformations
+    new_list = []
+    for iii, transform in enumerate(static_transform_list):
+        if transform.shape != (4, 4) and len(transform.shape) != 1:
+            path = temporary_directory.name + f'/deform{iii}.zarr'
+            transform = ut.numpy_to_zarr(transform, tuple(zarr_blocks) + (transform.shape[-1],), path)
+        new_list.append(transform)
+    static_transform_list = new_list
+
+    # loop over the schedule
+    for iii, (blocksize, steps) in enumerate(schedule):
+        local_write_path = None
+        if write_path: local_write_path = write_path + '/{iii}.zarr'
+        deform = distributed_piecewise_alignment_pipeline(
+            fix_zarr, mov_zarr, fix_spacing, mov_spacing,
+            steps, blocksize,
+            static_transform_list=static_transform_list,
+            fix_mask=fix_mask_zarr,
+            mov_mask=mov_mask_zarr,
+            write_path=local_write_path,
+            cluster=cluster,
+            **kwargs,
         )
-        current_moving_mask = None
-        if mov_mask is not None:
-            current_moving_mask = apply_transform(
-                fix, mov_mask, fix_spacing, mov_spacing,
-                transform_list=initial_transform_list,
-            )
-            current_moving_mask = (current_moving_mask > 0).astype(np.uint8)
-    else:
-        current_moving = np.copy(mov)
-        current_moving_mask = None if mov_mask is None else np.copy(mov_mask)
+        # TODO: THIS DOES NOT WORK WITH LARGER THAN MEMORY TRANSFORMS
+        if iii > 0:
+            deform = compose_transforms(static_transform_list.pop(), deform, fix_spacing)
+        static_transform_list.append(deform)
 
-    # initialize container and Loop over outer levels
-    counter = 0  # count each call to distributed_piecewise_affine_align
-    deform = np.zeros(fix.shape + (3,), dtype=np.float32)
-    for outer_level, inner_list in enumerate(block_schedule):
-
-        # initialize inner container and Loop over inner levels
-        ddd = np.zeros_like(deform)
-        for inner_level, nblocks in enumerate(inner_list):
-
-            # determine parameter settings
-            if parameter_schedule is not None:
-                instance_kwargs = {**kwargs, **parameter_schedule[counter]}
-            else:
-                instance_kwargs = kwargs
-
-            # align
-            ddd += distributed_piecewise_alignment_pipeline(
-                fix, current_moving,
-                fix_spacing, fix_spacing,  # images should be on same grid
-                nblocks=nblocks,
-                fix_mask=fix_mask,
-                mov_mask=current_moving_mask,
-                cluster=cluster,
-                cluster_kwargs=cluster_kwargs,
-                **instance_kwargs,
-            )
-
-            # increment counter
-            counter += 1
-
-        # take mean
-        ddd = ddd / len(inner_list)
-
-        # if not first iteration, compose with existing deform
-        if outer_level > 0:
-            deform = compose_transforms(deform, ddd, fix_spacing,)
-        else:
-            deform = ddd
-
-        # combine with initial transforms if given
-        if initial_transform_list is not None:
-            transform_list = initial_transform_list + [deform,]
-        else:
-            transform_list = [deform,]
-
-        # update working copy of image
-        current_moving = apply_transform(
-            fix, mov, fix_spacing, mov_spacing,
-            transform_list=transform_list,
-        )
-        # update working copy of mask
-        if mov_mask is not None:
-            current_moving_mask = apply_transform(
-                fix, mov_mask, fix_spacing, mov_spacing,
-                transform_list=transform_list,
-            )
-            current_moving_mask = (current_moving_mask > 0).astype(np.uint8)
-
-        # write intermediates
-        if intermediates_path is not None:
-            ois = str(outer_level)
-            deform_path = (intermediates_path + '/twist_deform_{}.npy').format(ois)
-            image_path = (intermediates_path + '/twist_image_{}.npy').format(ois)
-            mask_path = (intermediates_path + '/twist_mask_{}.npy').format(ois)
-            np.save(deform_path, deform)
-            np.save(image_path, current_moving)
-            if mov_mask is not None:
-                np.save(mask_path, current_moving_mask)
-
-    # return deform
-    return deform
-    
+    # return in the requested format
+    return static_transform_list.pop()
 

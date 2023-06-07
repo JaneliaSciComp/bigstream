@@ -278,7 +278,7 @@ def physical_parameters_to_affine_matrix(params, center):
     return np.matmul(x, aff)
 
 
-def matrix_to_displacement_field(matrix, shape, spacing=None):
+def matrix_to_displacement_field(matrix, shape, spacing=None, centered=False):
     """
     Convert an affine matrix into a displacement vector field
 
@@ -303,6 +303,7 @@ def matrix_to_displacement_field(matrix, shape, spacing=None):
     nrows, ncols, nstacks = shape
     grid = np.array(np.mgrid[:nrows, :ncols, :nstacks])
     grid = grid.transpose(1,2,3,0) * spacing
+    if centered: grid += 0.5 * spacing
     mm, tt = matrix[:3, :3], matrix[:3, -1]
     return np.einsum('...ij,...j->...i', mm, grid) + tt - grid
 

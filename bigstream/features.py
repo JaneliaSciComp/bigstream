@@ -1,12 +1,15 @@
 import numpy as np
-from fishspot.filter import white_tophat
+from fishspot.filter import white_tophat, apply_foreground_mask
 from fishspot.detect import detect_spots_log
+from scipy.stats.mstats import winsorize
 
 
 def blob_detection(
     image,
     min_blob_radius,
     max_blob_radius,
+    winsorize_limits=(0.02, 0.02),
+    mask=None,
     **kwargs,
 ):
     """
@@ -31,6 +34,7 @@ def blob_detection(
         detected coordinate location.
     """
 
+    image = winsorize(image, limits=winsorize_limits)
     wth = white_tophat(image, max_blob_radius)
     spots = detect_spots_log(
         wth,
@@ -38,6 +42,7 @@ def blob_detection(
         max_blob_radius,
         **kwargs,
     ).astype(int)
+    if mask is not None: spots = apply_foreground_mask(spots, mask)
     intensities = image[spots[:, 0], spots[:, 1], spots[:, 2]]
     return np.hstack((spots[:, :3], intensities[..., None]))
 

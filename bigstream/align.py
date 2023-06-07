@@ -184,28 +184,36 @@ def feature_point_ransac_affine_align(
         )
 
     # get spots
+    print('computing fixed spots', flush=True)
     if fix_spots is None:
         fix_spots = features.blob_detection(
             fix, blob_sizes[0], blob_sizes[1],
             num_sigma=min(blob_sizes[1]-blob_sizes[0], num_sigma_max),
             exclude_border=cc_radius,
+            winsorize_limits=(0.02, 0.02),
+            mask=fix_mask,
         )
+    print(f'found {len(fix_spots)} fixed spots')
+    print('computing moving spots', flush=True)
     if mov_spots is None:
         mov_spots = features.blob_detection(
             mov, blob_sizes[0], blob_sizes[1],
             num_sigma=min(blob_sizes[1]-blob_sizes[0], num_sigma_max),
             exclude_border=cc_radius,
+            winsorize_limits=(0.02, 0.02),
+            mask=mov_mask,
         )
-
-    # TODO: implement masking, remove spots not in foreground
+    print(f'found {len(mov_spots)} moving spots')
 
     # sort
+    print('sorting spots', flush=True)
     sort_idx = np.argsort(fix_spots[:, 3])[::-1]
     fix_spots = fix_spots[sort_idx, :3][:nspots]
     sort_idx = np.argsort(mov_spots[:, 3])[::-1]
     mov_spots = mov_spots[sort_idx, :3][:nspots]
 
     # get contexts
+    print('extracting contexts', flush=True)
     fix_spot_contexts = features.get_contexts(fix, fix_spots, cc_radius)
     mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
 
@@ -214,6 +222,7 @@ def feature_point_ransac_affine_align(
     mov_spots = mov_spots * mov_spacing
 
     # get point correspondences
+    print('computing pairwise correlations', flush=True)
     correlations = features.pairwise_correlation(
         fix_spot_contexts, mov_spot_contexts,
     )
@@ -221,6 +230,8 @@ def feature_point_ransac_affine_align(
         fix_spots, mov_spots,
         correlations, match_threshold,
     )
+    print(f'{len(fix_spots)} matched fixed spots')
+    print(f'{len(mov_spots)} matched moving spots')
 
     # check spot counts
     if fix_spots.shape[0] < 50:
@@ -231,6 +242,7 @@ def feature_point_ransac_affine_align(
         return default
 
     # align
+    print('aligning', flush=True)
     r, Aff, inline = cv2.estimateAffine3D(
         fix_spots, mov_spots,
         ransacThreshold=align_threshold,

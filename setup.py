@@ -21,6 +21,7 @@ setuptools.setup(
         'dask[distributed]>=2022.9.1',
         'ClusterWrap>=0.3.0',
         'zarr>=2.12.0',
+        'h5py>=3.8.0',
         'numcodecs>=0.9.1',
         'fishspot>=0.2.3',
         'SimpleITK>=2.2.0',

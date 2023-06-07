@@ -772,10 +772,8 @@ def _align_local_data(fix_input,
             fix_dataarray, mov_dataarray,
             fix_spacing, mov_spacing,
             output_blocksize, # use block chunk size for distributing work
+            global_transforms_list + [local_deform], # transform_list
             overlap_factor=blocks_overlap_factor,
-            fix_mask=fix_mask,
-            mov_mask=mov_mask,
-            transform_list=global_transforms_list + [local_deform],
             aligned_data=local_aligned,
             cluster=cluster,
         )

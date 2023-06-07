@@ -145,7 +145,7 @@ def _run_apply_transform(args):
 
         warped_coords = distributed_apply_transform_to_coordinates(
             coords,
-            affine_transforms_list + [local_deform],
+            affine_transforms_list + [local_deform], # transform_list
             partition_size=args.partition_size,
             coords_spacing=voxel_spacing,
             cluster=cluster,

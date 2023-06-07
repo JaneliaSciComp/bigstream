@@ -147,8 +147,8 @@ def _run_apply_transform(args):
             fix_data, mov_data,
             fix_voxel_spacing, mov_voxel_spacing,
             output_blocks, # use block chunk size for distributing the work
+            affine_transforms_list + [local_deform], # transform_list
             overlap_factor=args.blocks_overlap_factor,
-            transform_list=affine_transforms_list + [local_deform],
             aligned_data=output_dataarray,
             cluster=cluster,
         )

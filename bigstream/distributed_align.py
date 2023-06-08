@@ -104,7 +104,7 @@ def _align_single_block(block_index,
 
     # read masks
     fix_block_mask, mov_block_mask = None, None
-    if fix_mask:
+    if fix_mask is not None:
         ratio = np.array(fix_mask.shape) / full_fix.shape
         fix_mask_start = np.round(ratio * fix_block_coords[0]).astype(int)
         fix_mask_stop = np.round(
@@ -113,7 +113,7 @@ def _align_single_block(block_index,
                                 for a, b in zip(fix_mask_start, fix_mask_stop))
         fix_block_mask = fix_mask[fix_mask_slices]
 
-    if mov_mask:
+    if mov_mask is not None:
         ratio = np.array(mov_mask.shape) / full_mov.shape
         mov_mask_start = np.round(ratio * mov_start).astype(int)
         mov_mask_stop = np.round(ratio * mov_stop).astype(int)

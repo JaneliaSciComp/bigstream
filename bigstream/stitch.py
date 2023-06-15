@@ -10,6 +10,34 @@ from xml.etree import ElementTree
 from itertools import product
 
 
+def _get_tile_info(czi_file_path):
+    """"""
+
+    # access czi file, get spacing, get channel axis, get spatial axes
+    reader = CziReader(czi_file_path)
+    spacing = reader.physical_pixel_sizes
+    channel_axis = reader.dims.order.index('C')
+    spatial_axes = tuple(reader.dims.order.index(x) for x in 'ZYX')
+
+    # get tile/mosaic/vector axis (has different names), get tile positions
+    if 'M' in reader.dims.order:
+        tile_axis = reader.dims.order.index('M')
+        tile_positions = np.array(reader.get_mosaic_tile_positions())
+        # TODO: ensure all axes are present in tile_positions for this case
+    elif 'V' in reader.dims.order:
+        tile_axis = reader.dims.order.index('V')
+        tile_positions = [x.attrib for x in reader.metadata.findall('.//TilesSetup//Position')]
+        tile_positions = np.array([[float(x[y]) for y in 'ZYX'] for x in tile_positions])
+        tile_positions = (tile_positions - np.min(tile_positions, axis=0)) / spacing / 1e-6  # spacing in microns
+        # TODO: keep physical tile positions for sub voxel accuracy later
+        tile_positions = np.round(tile_positions).astype(int)
+    else:
+        print("Error: no tile axis found\n")
+        # TODO: graceful exit
+
+    return reader, spacing, channel_axis, spatial_axes, tile_axis, tile_positions
+
+
 @cluster
 def distributed_stitch(
     czi_file_path,
@@ -43,26 +71,14 @@ def distributed_stitch(
         This is how distribution parameters are specified.
     """
 
-    # access czi file, get spacing, get channel axis, get spatial axes
-    reader = CziReader(czi_file_path)
-    spacing = reader.physical_pixel_sizes
-    channel_axis = reader.dims.order.index('C')
-    spatial_axes = tuple(reader.dims.order.index(x) for x in 'ZYX')
-
-    # get tile/mosaic/vector axis (has different names), get tile positions
-    if 'M' in reader.dims.order:
-        tile_axis = reader.dims.order.index('M')
-        tile_positions = np.array(reader.get_mosaic_tile_positions())
-        # TODO: ensure all axes are present in tile_positions for this case
-    elif 'V' in reader.dims.order:
-        tile_axis = reader.dims.order.index('V')
-        tile_positions = [x.attrib for x in reader.metadata.findall('.//TilesSetup//Position')]
-        tile_positions = np.array([[float(x[y]) for y in 'ZYX'] for x in tile_positions])
-        tile_positions = (tile_positions - np.min(tile_positions, axis=0)) / spacing / 1e-6  # spacing in microns
-        tile_positions = np.round(tile_positions).astype(int)
-    else:
-        print("Error: no tile axis found\n")
-        # TODO: graceful exit
+    # get all the relevant info about tiles
+    tile_info = _get_tile_info(czi_file_path)
+    reader = tile_info[0]
+    spacing = tile_info[1]
+    channel_axis = tile_info[2]
+    spatial_axes = tile_info[3]
+    tile_axis = tile_info[4]
+    tile_positions = tile_info[5]
 
     # construct list of neighbors/alignments to do
     neighbors_list = []
@@ -108,6 +124,7 @@ def distributed_stitch(
 
         # define registration parameters
         default_affine_kwargs = {
+            'rigid':True,
             'metric':'MS',
             'alignment_spacing':np.min(spacing) * 4,
             'shrink_factors':(2,),
@@ -118,7 +135,7 @@ def distributed_stitch(
                 'numberOfIterations':100,
             },
         }
-        kwargs = {**default_affine_kwargs, **affine_kwargs, 'rigid':True}
+        kwargs = {**default_affine_kwargs, **affine_kwargs}
 
         # run the alignment
         return affine_align(
@@ -130,9 +147,31 @@ def distributed_stitch(
     # map align_neighbors to all neighbors
     transforms = cluster.client.gather(cluster.client.map(align_neighbors, neighbors_list))
 
-    # TODO: global adjustement of transforms - translation and rotation must be on the same scale
-    # or possibly just done separately
-
     # TODO: what else do I need to keep in order to properly identify transforms - the neighbors_list?
     # TODO: user needs a way to write tranforms to disk. Look at motion correction json save.
 
+    # TODO: global adjustment of transforms for consistency
+
+
+@cluster
+def distributed_apply_stitch(
+    czi_file_path,
+    transforms,
+    channel=0,
+    affine_kwargs={},
+    cluster=None,
+    cluster_kwargs={},
+):
+    """
+    """
+
+    # get all the relevant info about tiles
+    tile_info = _get_tile_info(czi_file_path)
+    reader = tile_info[0]
+    spacing = tile_info[1]
+    channel_axis = tile_info[2]
+    spatial_axes = tile_info[3]
+    tile_axis = tile_info[4]
+    tile_positions = tile_info[5]
+
+    

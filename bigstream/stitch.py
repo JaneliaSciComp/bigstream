@@ -142,15 +142,36 @@ def distributed_stitch(
             fix, mov, spacing, spacing,
             fix_origin=origin, mov_origin=origin,
             **kwargs,
-        )
+        )[:3, :]
 
     # map align_neighbors to all neighbors
-    transforms = cluster.client.gather(cluster.client.map(align_neighbors, neighbors_list))
+    neighbor_transforms = cluster.client.gather(cluster.client.map(align_neighbors, neighbors_list))
+    neighbor_transforms = np.array(neighbor_transform).flatten()
 
-    # TODO: what else do I need to keep in order to properly identify transforms - the neighbors_list?
+    # build neighbors matrix
+    N = np.zeros((12 * len(neighbors_list), 12 * len(tile_positions)))
+    for iii, neighbors in enumerate(neighbors_list):
+        row_start, col_start = 12 * iii, 12 * neighbors[0]
+        fancy_index = (range(row_start, row_start+12), range(col_start, col_start+12))
+        N[fancy_index] = -1
+        row_start, col_start = 12 * iii, 12 * neighbors[1]
+        fancy_index = (range(row_start, row_start+12), range(col_start, col_start+12))
+        N[fancy_index] = 1
+
+    # compute tile transforms as least squares solution to neighbor_transforms
+    neighbors_factor = np.matmul(np.linalg.inv(np.matmul(N.T, N)), N.T)
+    tile_parameters = np.matmul(neighbors_factor, neighbor_transforms)
+
+    # reformat
+    tile_transforms = np.zeros((len(tile_positions), 4, 4))
+    for iii in range(len(tile_positions)):
+        tile_transforms[iii, :3, :] = tile_parameters[12*iii:12*iii+12].reshape((3, 4))
+        tile_transforms[iii, 3, :] = (0, 0, 0, 1)
+
+    return tile_transforms
+
     # TODO: user needs a way to write tranforms to disk. Look at motion correction json save.
 
-    # TODO: global adjustment of transforms for consistency
 
 
 @cluster

@@ -29,7 +29,8 @@ if __name__ == '__main__':
     stride        = np.array([xy_stride, xy_stride, z_stride], dtype=np.uint16)
     overlap       = np.array([xy_overlap, xy_overlap, z_overlap], dtype=np.uint16)
     tile_grid     = [ x//y+1 if x % y >= min_tile_size else x//y for x, y in zip(grid, stride-overlap) ]
-   
+    tile_grid     = [ x if x != 0 else 1 for x in tile_grid ]
+
     vox           = n5mu.read_voxel_spacing(ref_img_path, ref_img_subpath) 
     grid          = grid * vox
     stride        = stride * vox

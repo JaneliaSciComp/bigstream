@@ -74,12 +74,16 @@ def feature_point_ransac_affine_align(
     fix_spacing,
     mov_spacing,
     blob_sizes,
+    alignment_spacing=None,
     num_sigma_max=15,
     cc_radius=12,
     nspots=5000,
     match_threshold=0.7,
     align_threshold=2.0,
-    diagonal_constraint=0.75,
+    diagonal_constraint=0.25,
+    fix_spot_detection_kwargs={},
+    mov_spot_detection_kwargs={},
+    ransac_affine_kwargs={},
     fix_spots=None,
     mov_spots=None,
     fix_mask=None,
@@ -174,6 +178,22 @@ def feature_point_ransac_affine_align(
     # establish default
     if default is None: default = np.eye(fix.ndim + 1)
 
+    # skip sample and determine mask spacings
+    X = resolve_sampling(
+        fix, mov,
+        fix_mask, mov_mask,
+        fix_spacing, mov_spacing,
+        alignment_spacing,
+    )
+    fix = X[0]
+    mov = X[1]
+    fix_mask = X[2]
+    mov_mask = X[3]
+    fix_spacing = X[4]
+    mov_spacing = X[5]
+    fix_mask_spacing = X[6]
+    mov_mask_spacing = X[7]
+
     # apply static transforms
     if static_transform_list:
         mov = apply_transform(
@@ -182,28 +202,51 @@ def feature_point_ransac_affine_align(
             fix_origin=fix_origin,
             mov_origin=mov_origin,
         )
+        if mov_mask is not None:
+            mov_mask = apply_transform(
+                fix.astype(mov_mask.dtype), mov_mask, fix_spacing, mov_spacing,
+                transform_list=static_transform_list,
+                fix_origin=fix_origin, 
+                mov_origin=mov_origin,
+                interpolate_with_nn=True,
+            )
+        mov_spacing = fix_spacing
 
-    # get spots
+    # get fix spots
     print('computing fixed spots', flush=True)
     if fix_spots is None:
+        fix_kwargs = {
+            'num_sigma':min(blob_sizes[1] - blob_sizes[0], num_sigma_max),
+            'exclude_border':cc_radius,
+            'mask':fix_mask,
+        }
+        fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
         fix_spots = features.blob_detection(
             fix, blob_sizes[0], blob_sizes[1],
-            num_sigma=min(blob_sizes[1]-blob_sizes[0], num_sigma_max),
-            exclude_border=cc_radius,
-            winsorize_limits=(0.02, 0.02),
-            mask=fix_mask,
+            **fix_kwargs,
         )
     print(f'found {len(fix_spots)} fixed spots')
+    if len(fix_spots) < 100:
+        print('insufficient fixed spots found, returning default', flush=True)
+        return default
+
+    # get mov spots
     print('computing moving spots', flush=True)
     if mov_spots is None:
+        mov_kwargs = {
+            'num_sigma':min(blob_sizes[1] - blob_sizes[0], num_sigma_max),
+            'exclude_border':cc_radius,
+            'mask':mov_mask,
+        }
+        mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
         mov_spots = features.blob_detection(
             mov, blob_sizes[0], blob_sizes[1],
-            num_sigma=min(blob_sizes[1]-blob_sizes[0], num_sigma_max),
-            exclude_border=cc_radius,
-            winsorize_limits=(0.02, 0.02),
-            mask=mov_mask,
+            **mov_kwargs,
         )
     print(f'found {len(mov_spots)} moving spots')
+    if len(mov_spots) < 100:
+        print('insufficient moving spots found, returning default', flush=True)
+        return default
 
     # sort
     print('sorting spots', flush=True)
@@ -230,15 +273,9 @@ def feature_point_ransac_affine_align(
         fix_spots, mov_spots,
         correlations, match_threshold,
     )
-    print(f'{len(fix_spots)} matched fixed spots')
-    print(f'{len(mov_spots)} matched moving spots')
-
-    # check spot counts
-    if fix_spots.shape[0] < 50:
-        print('Fewer than 50 spots found in fixed image, returning default')
-        return default
-    if mov_spots.shape[0] < 50:
-        print('Fewer than 50 spots found in moving image, returning default')
+    print(f'{len(fix_spots)} matched spots')
+    if len(fix_spots) < 50 or len(mov_spots) < 50:
+        print('insufficient point matches found, returning default', flush=True)
         return default
 
     # align
@@ -251,8 +288,8 @@ def feature_point_ransac_affine_align(
     )
 
     # ensure affine is sensible
-    if np.any( np.diag(Aff) < diagonal_constraint ):
-        print("Degenerate affine produced, returning default")
+    if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
+        print("Degenerate affine produced, returning default", flush=True)
         return default
 
     # augment to 4x4 matrix and return

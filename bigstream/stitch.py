@@ -42,10 +42,15 @@ def _get_tile_info(czi_file_path):
 def distributed_stitch(
     czi_file_path,
     channel=0,
+    minimum_overlap_correlation=0.3,
+    global_optimization_iterations=100,
+    global_optimization_learning_rate=0.1,
     affine_kwargs={},
     cluster=None,
     cluster_kwargs={},
 ):
+    # TODO: think over the function API
+    # TODO: complete docstring
     """
     Stitch the tiles in a czi file into one continuous volume.
     Overlapping regions are rigid aligned.
@@ -82,12 +87,14 @@ def distributed_stitch(
 
     # construct list of neighbors/alignments to do
     neighbors_list = []
+    fixed_image = {0:True}
     smallest_diffs = np.min(np.ma.masked_equal(tile_positions, 0), axis=0) + 1
     smallest_diffs[smallest_diffs.mask] = 0
     for iii, jjj in product(range(len(tile_positions)), repeat=2):
         diffs = tile_positions[jjj] - tile_positions[iii]
         diffs_indx = diffs.nonzero()[0]
         if len(diffs_indx) == 1 and 0 < diffs[diffs_indx[0]] <= smallest_diffs[diffs_indx[0]]:
+            fixed_image[jjj] = False if fixed_image[iii] else True
             neighbors_list.append((iii, jjj, diffs_indx[0]))
 
     # determine overlap sizes per axis
@@ -98,29 +105,32 @@ def distributed_stitch(
     def align_neighbors(neighbors):
 
         # determine fixed tile slice object
-        fix_tile_coords = [slice(None),] * len(reader.dims.order)
-        fix_tile_coords[channel_axis] = slice(channel, channel+1)
-        fix_tile_coords[tile_axis] = slice(neighbors[0], neighbors[0]+1)
-        fix_tile_coords[spatial_axes[neighbors[2]]] = slice(-overlaps[neighbors[2]], None)
+        A_tile_coords = [slice(None),] * len(reader.dims.order)
+        A_tile_coords[channel_axis] = slice(channel, channel+1)
+        A_tile_coords[tile_axis] = slice(neighbors[0], neighbors[0]+1)
+        A_tile_coords[spatial_axes[neighbors[2]]] = slice(-overlaps[neighbors[2]], None)
 
         # determine moving tile slice object
-        mov_tile_coords = [slice(None),] * len(reader.dims.order)
-        mov_tile_coords[channel_axis] = slice(channel, channel+1)
-        mov_tile_coords[tile_axis] = slice(neighbors[1], neighbors[1]+1)
-        mov_tile_coords[spatial_axes[neighbors[2]]] = slice(0, overlaps[neighbors[2]])
+        B_tile_coords = [slice(None),] * len(reader.dims.order)
+        B_tile_coords[channel_axis] = slice(channel, channel+1)
+        B_tile_coords[tile_axis] = slice(neighbors[1], neighbors[1]+1)
+        B_tile_coords[spatial_axes[neighbors[2]]] = slice(0, overlaps[neighbors[2]])
 
-        # read data
+        # read data, assign fixed and moving, define origin relative to complete image
         # TODO: reading data like this in distributed case is calling dask inside dask
         #       it spawns a bunch of extra tasks and data is shuffled between workers
-        #       I need a more elegant way to read the data, streamlined
+        #       I need a more streamlined way to read the data
         lazy_data = CziReader(czi_file_path).dask_data
-        fix = lazy_data[tuple(fix_tile_coords)].compute().squeeze()
-        mov = lazy_data[tuple(mov_tile_coords)].compute().squeeze()
-
-        # define origin relative to complete image grid
+        A = lazy_data[tuple(A_tile_coords)].compute().squeeze()
+        B = lazy_data[tuple(B_tile_coords)].compute().squeeze()
+        fix, mov = (A, B) if fixed_image[neighbors[0]] else (B, A)
         origin = tile_positions[neighbors[1]] * spacing
 
-        # TODO: probably need a way to not align overlaps that contain no foreground data
+        # check if overlap has sufficient common foreground to try and register
+        corr = np.corrcoef(fix.flatten(), mov.flatten())[0, 1]
+        if corr < minimum_overlap_correlation:
+            print(f'Insufficient overlap correlation for tile pair {neighbors}.', flush=True)
+            return None
 
         # define registration parameters
         default_affine_kwargs = {
@@ -142,36 +152,72 @@ def distributed_stitch(
             fix, mov, spacing, spacing,
             fix_origin=origin, mov_origin=origin,
             **kwargs,
-        )[:3, :]
+        )
 
     # map align_neighbors to all neighbors
-    neighbor_transforms = cluster.client.gather(cluster.client.map(align_neighbors, neighbors_list))
-    neighbor_transforms = np.array(neighbor_transform).flatten()
+    neighbor_transforms = cluster.client.map(align_neighbors, neighbors_list)
+    neighbor_transforms = cluster.client.gather(neighbor_transforms)
 
-    # build neighbors matrix
-    N = np.zeros((12 * len(neighbors_list), 12 * len(tile_positions)))
+    # filter out bad overlaps
+    new_neighbors_list, new_neighbor_transforms = [], []
+    for a, b in zip(neighbors_list, neighbor_transforms):
+        if b is not None:
+            new_neighbors_list.append(a)
+            new_neighbor_transforms.append(b)
+    neighbors_list = new_neighbors_list
+    neighbor_transforms = np.array(new_neighbor_transforms)
+
+    # build transform composition matrix
+    A = np.zeros((len(tile_positions), len(tile_positions), len(neighbors_list)))
     for iii, neighbors in enumerate(neighbors_list):
-        row_start, col_start = 12 * iii, 12 * neighbors[0]
-        fancy_index = (range(row_start, row_start+12), range(col_start, col_start+12))
-        N[fancy_index] = -1
-        row_start, col_start = 12 * iii, 12 * neighbors[1]
-        fancy_index = (range(row_start, row_start+12), range(col_start, col_start+12))
-        N[fancy_index] = 1
+        a, b = neighbors[0], neighbors[1]
+        fi, mi = (a, b) if fixed_image[a] else (b, a)
+        A[mi, fi, iii] = 1
 
-    # compute tile transforms as least squares solution to neighbor_transforms
-    neighbors_factor = np.matmul(np.linalg.inv(np.matmul(N.T, N)), N.T)
-    tile_parameters = np.matmul(neighbors_factor, neighbor_transforms)
-
-    # reformat
-    tile_transforms = np.zeros((len(tile_positions), 4, 4))
+    # initialize tile transforms as identity
+    tile_transforms = np.empty((len(tile_positions), 4, 4))
     for iii in range(len(tile_positions)):
-        tile_transforms[iii, :3, :] = tile_parameters[12*iii:12*iii+12].reshape((3, 4))
-        tile_transforms[iii, 3, :] = (0, 0, 0, 1)
+        tile_transforms[iii] = np.eye(4)
 
+    # gradient descent loop
+    print('Starting global consistency optimization')
+    for iii in range(global_optimization_iterations):
+
+        # with respect to moving parameters
+        factor = np.einsum('mij,nmo', tile_transforms, A)
+        reconstruction = np.einsum('nij,jkno', tile_transforms, factor)
+        left = np.einsum('ijno,jko', factor, reconstruction)
+        right = np.einsum('ijno,ojk', factor, neighbor_transforms)
+        gradient = left - right
+
+        # with respect to fixed parameters
+        factor = np.einsum('nij,nmo', tile_transforms, A)
+        reconstruction = np.einsum('nij,jkno', tile_transforms, factor)
+        left = np.einsum('ijno,jko', factor, reconstruction)
+        right = np.einsum('ijno,ojk', factor, neighbor_transforms)
+        gradient = (gradient + left - right).transpose(2, 0, 1)
+
+        # print feedback
+        objective = np.sum( (neighbor_transforms - reconstruction.transpose(2, 0, 1))**2 )
+        print(f'ITERATION: {iii}  OBJECTIVE VALUE: {objective}')
+
+        # take a step
+        tile_transforms = tile_transforms - global_optimization_learning_rate * gradient
+
+    # invert all fixed transforms
+    for iii in range(len(tile_transforms)):
+        if fixed_image[iii]:
+            tile_transforms[iii] = np.linalg.inv(tile_transforms[iii])
+
+    # all done!
     return tile_transforms
 
-    # TODO: user needs a way to write tranforms to disk. Look at motion correction json save.
 
+def save_transforms(path, transforms):
+    """
+    """
+    # TODO: discuss with JB best format to be consistent with other tools
+    return None
 
 
 @cluster
@@ -185,6 +231,12 @@ def distributed_apply_stitch(
 ):
     """
     """
+
+    # TODO: each tile is resampled on a separate worker
+    #       reference for resampling is the same coordinate region as the tile
+    #       but with a buffer around it to make sure no data is lost
+    #       tiles are resampled into a pyramid
+    #       tiles are merged into an OME-NGFF-ZARR array on disk
 
     # get all the relevant info about tiles
     tile_info = _get_tile_info(czi_file_path)

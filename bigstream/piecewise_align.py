@@ -146,7 +146,9 @@ def distributed_piecewise_alignment_pipeline(
     mov_mask_zarr_path = temporary_directory.name + '/mov_mask.zarr'
     fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
     mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
+    fix_mask_zarr = None
     if fix_mask is not None: fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
+    mov_mask_zarr = None
     if mov_mask is not None: mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
 
     # zarr files for initial deformations
@@ -205,6 +207,7 @@ def distributed_piecewise_alignment_pipeline(
     # establish all keyword arguments
     steps = [(a, {**kwargs, **b}) for a, b in steps]
 
+
     # closure for alignment pipeline
     def align_single_block(
         indices,
@@ -259,15 +262,16 @@ def distributed_piecewise_alignment_pipeline(
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
         mov = mov_zarr[mov_slices]
 
+        # XXX if input masks are zarr arrays this doesn't work, nothing at paths
         # read masks
         fix_mask, mov_mask = None, None
-        if os.path.isdir(fix_mask_zarr_path):
+        if fix_mask_zarr is not None:
             ratio = np.array(fix_mask_zarr.shape) / fix_zarr.shape
             start = np.round( ratio * fix_block_coords[0] ).astype(int)
             stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)
             fix_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
             fix_mask = fix_mask_zarr[fix_mask_slices]
-        if os.path.isdir(mov_mask_zarr_path):
+        if mov_mask_zarr is not None:
             ratio = np.array(mov_mask_zarr.shape) / mov_zarr.shape
             start = np.round( ratio * mov_start ).astype(int)
             stop = np.round( ratio * mov_stop ).astype(int)
@@ -348,6 +352,7 @@ def distributed_piecewise_alignment_pipeline(
             output_transform[fix_slices] = output_transform[fix_slices] + transform
             return True
     # END CLOSURE
+
 
     # submit all alignments to cluster
     futures = cluster.client.map(

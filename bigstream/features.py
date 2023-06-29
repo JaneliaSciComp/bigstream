@@ -8,7 +8,8 @@ def blob_detection(
     image,
     min_blob_radius,
     max_blob_radius,
-    winsorize_limits=(0.02, 0.02),
+    winsorize_limits=None,
+    background_subtract=False,
     mask=None,
     **kwargs,
 ):
@@ -34,10 +35,13 @@ def blob_detection(
         detected coordinate location.
     """
 
-    image = winsorize(image, limits=winsorize_limits)
-    wth = white_tophat(image, max_blob_radius)
+    processed_image = np.copy(image)
+    if winsorize_limits is not None:
+        processed_image = winsorize(processed_image, limits=winsorize_limits)
+    if background_subtract:
+        processed_image = white_tophat(processed_image, max_blob_radius)
     spots = detect_spots_log(
-        wth,
+        processed_image,
         min_blob_radius,
         max_blob_radius,
         **kwargs,

@@ -3,11 +3,11 @@ from scipy.spatial.transform import Rotation
 import SimpleITK as sitk
 import zarr
 from zarr.indexing import BasicIndexer
-from numcodecs import Blosc
 from distributed import Lock
 import glob
 import h5py
 from ClusterWrap.decorator import cluster
+from zarr import blosc
 
 
 def skip_sample(image, spacing, ss_spacing):
@@ -394,7 +394,7 @@ def bspline_to_displacement_field(
         shape[::-1], origin[::-1], spacing[::-1],
         direction[::-1, ::-1].ravel(),
     )
-    return sitk.GetArrayFromImage(df).astype(np.float32)[..., ::-1]
+    return sitk.GetArrayViewFromImage(df).astype(np.float32)[..., ::-1]
 
 
 # TODO: function that takes a numpy array and return transform type
@@ -467,7 +467,15 @@ def transform_list_to_composite_transform(transform_list, spacing=None, origin=N
     return transform
 
 
-def create_zarr(path, shape, chunks, dtype, chunk_locked=False, client=None):
+def create_zarr(
+    path,
+    shape,
+    chunks,
+    dtype,
+    multithreaded=False,
+    chunk_locked=False,
+    client=None,
+):
     """
     Create a new zarr array on disk
 
@@ -497,15 +505,16 @@ def create_zarr(path, shape, chunks, dtype, chunk_locked=False, client=None):
         Reference to the newly created zarr array on disk
     """
 
-    compressor = Blosc(
-        cname='zstd', clevel=4, shuffle=Blosc.BITSHUFFLE,
-    )
+    synchronizer = None
+    if multithreaded:
+        blosc.use_threads = True
+        synchronizer = zarr.ThreadSynchronizer()
     zarr_disk = zarr.open(
         path, 'w',
         shape=shape,
         chunks=chunks,
         dtype=dtype,
-        compressor=compressor,
+        synchronizer=synchronizer,
     )
 
     # this code is currently never used within bigstream
@@ -521,7 +530,7 @@ def create_zarr(path, shape, chunks, dtype, chunk_locked=False, client=None):
         )
 
     return zarr_disk
-    
+
 
 def numpy_to_zarr(array, chunks, path):
     """

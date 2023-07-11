@@ -5,9 +5,16 @@ from bigstream.align import affine_align
 from bigstream.transform import apply_transform
 from scipy.ndimage import zoom
 import zarr
+from zarr import blosc
 from aicsimageio.readers import CziReader
 from xml.etree import ElementTree
 from itertools import product
+import json
+from distributed import Event
+import time
+import os
+import psutil
+import aicspylibczi
 
 
 def _get_tile_info(czi_file_path):
@@ -35,7 +42,24 @@ def _get_tile_info(czi_file_path):
         print("Error: no tile axis found\n")
         # TODO: graceful exit
 
-    return reader, spacing, channel_axis, spatial_axes, tile_axis, tile_positions
+    # get (i, j, k) tile grid positions
+    tile_grid_indices = []
+    steps = [np.sort(np.unique(tile_positions[:, x])) for x in range(tile_positions.shape[1])]
+    for tile in tile_positions:
+        tile_grid_indices.append( tuple(np.where(s == x)[0][0] for s, x in zip(steps, tile)) )
+
+    # get tile shape
+    tile_shape = np.array([reader.shape[x] for x in spatial_axes])
+
+    # get overlap shapes
+    smallest_diffs = np.min(np.ma.masked_equal(tile_positions, 0), axis=0) + 1
+    smallest_diffs[smallest_diffs.mask] = 0
+    overlaps = tile_shape - smallest_diffs + 1
+    overlaps = np.array([o if o != s+1 else 0 for o, s in zip(overlaps, tile_shape)])
+
+    return (reader, spacing, channel_axis,
+            spatial_axes, tile_axis, tile_positions,
+            tile_grid_indices, tile_shape, overlaps,)
 
 
 @cluster
@@ -84,6 +108,9 @@ def distributed_stitch(
     spatial_axes = tile_info[3]
     tile_axis = tile_info[4]
     tile_positions = tile_info[5]
+    tile_grid_indices = tile_info[6]
+    tile_shape = tile_info[7]
+    overlaps = tile_info[8]
 
     # construct list of neighbors/alignments to do
     neighbors_list = []
@@ -97,32 +124,39 @@ def distributed_stitch(
             fixed_image[jjj] = False if fixed_image[iii] else True
             neighbors_list.append((iii, jjj, diffs_indx[0]))
 
-    # determine overlap sizes per axis
-    tile_shape = np.array([reader.shape[x] for x in spatial_axes])
-    overlaps = tile_shape - smallest_diffs + 1
-
     # define how to align a single pair of neighbors
     def align_neighbors(neighbors):
 
-        # determine fixed tile slice object
-        A_tile_coords = [slice(None),] * len(reader.dims.order)
-        A_tile_coords[channel_axis] = slice(channel, channel+1)
-        A_tile_coords[tile_axis] = slice(neighbors[0], neighbors[0]+1)
-        A_tile_coords[spatial_axes[neighbors[2]]] = slice(-overlaps[neighbors[2]], None)
+        # get number of cores
+        if "LSB_DJOB_NUMPROC" in os.environ:
+            ncores = int(os.environ["LSB_DJOB_NUMPROC"])
+        else:
+            ncores = psutil.cpu_count(logical=False)
 
-        # determine moving tile slice object
-        B_tile_coords = [slice(None),] * len(reader.dims.order)
-        B_tile_coords[channel_axis] = slice(channel, channel+1)
-        B_tile_coords[tile_axis] = slice(neighbors[1], neighbors[1]+1)
-        B_tile_coords[spatial_axes[neighbors[2]]] = slice(0, overlaps[neighbors[2]])
+        # read the first region
+        other_reader = aicspylibczi.CziFile(czi_file_path)
+        A_read_spec = {
+            reader.dims.order[channel_axis]:channel,
+            reader.dims.order[tile_axis]:neighbors[0],
+            'cores':2*ncores,
+        }
+        A_slice = [slice(None),] * len(spatial_axes)
+        A_slice[neighbors[2]] = slice(-overlaps[neighbors[2]], None)
+        # the copy prevents storage of entire tile in memory
+        # without the copy, it stores a view into the entire tile
+        A = np.copy(other_reader.read_image(**A_read_spec)[0].squeeze()[tuple(A_slice)])
 
-        # read data, assign fixed and moving, define origin relative to complete image
-        # TODO: reading data like this in distributed case is calling dask inside dask
-        #       it spawns a bunch of extra tasks and data is shuffled between workers
-        #       I need a more streamlined way to read the data
-        lazy_data = CziReader(czi_file_path).dask_data
-        A = lazy_data[tuple(A_tile_coords)].compute().squeeze()
-        B = lazy_data[tuple(B_tile_coords)].compute().squeeze()
+        # read the second region
+        B_read_spec = {
+            reader.dims.order[channel_axis]:channel,
+            reader.dims.order[tile_axis]:neighbors[1],
+            'cores':2*ncores,
+        }
+        B_slice = [slice(None),] * len(spatial_axes)
+        B_slice[neighbors[2]] = slice(0, overlaps[neighbors[2]])
+        B = np.copy(other_reader.read_image(**B_read_spec)[0].squeeze()[tuple(B_slice)])
+
+        # determine fix and moving, define origin relative to whole image
         fix, mov = (A, B) if fixed_image[neighbors[0]] else (B, A)
         origin = tile_positions[neighbors[1]] * spacing
 
@@ -155,7 +189,7 @@ def distributed_stitch(
         )
 
     # map align_neighbors to all neighbors
-    neighbor_transforms = cluster.client.map(align_neighbors, neighbors_list)
+    neighbor_transforms = cluster.client.map(align_neighbors, neighbors_list, resources={'concurrency':1})
     neighbor_transforms = cluster.client.gather(neighbor_transforms)
 
     # filter out bad overlaps
@@ -209,6 +243,10 @@ def distributed_stitch(
         if fixed_image[iii]:
             tile_transforms[iii] = np.linalg.inv(tile_transforms[iii])
 
+    # TODO: consider fixing one tile
+    #       i.e. find inverse of one transform and compose that with
+    #       all other transforms
+
     # all done!
     return tile_transforms
 
@@ -217,26 +255,34 @@ def save_transforms(path, transforms):
     """
     """
     # TODO: discuss with JB best format to be consistent with other tools
-    return None
+    n = transforms.shape[0]
+    d = {i:transforms[i].tolist() for i in range(n)}
+    with open(path, 'w') as f:
+        json.dump(d, f, indent=4)
+
+
+def read_transforms(path):
+    """
+    """
+
+    with open(path, 'r') as f:
+        d = json.load(f)
+    return np.array([d[str(i)] for i in range(len(d))])
 
 
 @cluster
 def distributed_apply_stitch(
     czi_file_path,
     transforms,
+    write_path,
+    resample_padding=0.2,
+    write_group_interval=60,
     channel=0,
-    affine_kwargs={},
     cluster=None,
     cluster_kwargs={},
 ):
     """
     """
-
-    # TODO: each tile is resampled on a separate worker
-    #       reference for resampling is the same coordinate region as the tile
-    #       but with a buffer around it to make sure no data is lost
-    #       tiles are resampled into a pyramid
-    #       tiles are merged into an OME-NGFF-ZARR array on disk
 
     # get all the relevant info about tiles
     tile_info = _get_tile_info(czi_file_path)
@@ -246,5 +292,117 @@ def distributed_apply_stitch(
     spatial_axes = tile_info[3]
     tile_axis = tile_info[4]
     tile_positions = tile_info[5]
+    tile_grid_indices = tile_info[6]
+    tile_shape = tile_info[7]
+    overlaps = tile_info[8]
 
-    
+    # generate zarr file for writing
+    zarr_blocks = tuple(np.round(tile_shape / 2).astype(int))
+    full_shape = np.max(tile_positions, axis=0) + reader.dims[['Z', 'Y', 'X']]
+    output_zarr = ut.create_zarr(
+        write_path, full_shape, zarr_blocks, reader.dtype, multithreaded=True,
+    )
+
+    def resample_tile(tile_number, transform):
+
+        print(f'starting {tile_number}', flush=True)
+
+        # get number of cores
+        if "LSB_DJOB_NUMPROC" in os.environ:
+            ncores = int(os.environ["LSB_DJOB_NUMPROC"])
+        else:
+            ncores = psutil.cpu_count(logical=False)
+
+        # read tile data
+        other_reader = aicspylibczi.CziFile(czi_file_path)
+        read_spec = {
+            reader.dims.order[channel_axis]:channel,
+            reader.dims.order[tile_axis]:tile_number,
+            'cores':2*ncores,
+        }
+        tile = other_reader.read_image(**read_spec)[0].squeeze()
+        mov_origin = tile_positions[tile_number]
+
+        print(f'weighting tile {tile_number}', flush=True)
+
+        # apply linear blending weights to overlap region, per axis
+        for axis in range(3):
+            # only if we cut tiles along this axis
+            if overlaps[axis] != 0:
+                # construct weights array for this axis
+                shape = list(tile.shape)
+                shape[axis] = 1
+                pads = [(0, 0),]*3
+                pads[axis] = (overlaps[axis], 0)
+                weights = np.pad(np.ones(shape, dtype=np.float32), pads, mode='linear_ramp')
+                # left side, only if it's not on the left edge
+                if tile_grid_indices[tile_number][axis] > 0:
+                    region = [slice(None),]*3
+                    region[axis] = slice(0, overlaps[axis]+1)
+                    region = tuple(region)
+                    tile[region] = np.round( tile[region] * weights ).astype(tile.dtype)
+                # right side, only if it's not on the right edge
+                if tile_grid_indices[tile_number][axis] < np.max(tile_grid_indices, axis=0)[axis]:
+                    region = [slice(None),]*3
+                    region[axis] = slice(-overlaps[axis]-1, None)
+                    region = tuple(region)
+                    reflect = [slice(None),]*3
+                    reflect[axis] = slice(None, None, -1)
+                    reflect = tuple(reflect)
+                    tile[region] = np.round( tile[region] * weights[reflect] ).astype(tile.dtype)
+
+        # generate reference
+        fix_origin = mov_origin - np.round(np.array(tile.shape) * resample_padding).astype(int)
+        fix_end = fix_origin + np.round(np.array(tile.shape) * (1 + 2*resample_padding)).astype(int)
+        fix_origin = np.maximum(fix_origin, 0)
+        fix_end = np.minimum(fix_end, output_zarr.shape)
+        fix_shape = tuple(int(b - a) for a, b in zip(fix_origin, fix_end))
+
+        print(f'aligning {tile_number}', flush=True)
+
+        # apply transform
+        aligned = apply_transform(
+            fix_shape, tile, spacing, spacing,
+            transform_list=[transform,],
+            fix_origin=fix_origin * spacing,
+            mov_origin=mov_origin * spacing,
+        )
+
+        # register as ready to write
+        write_region = tuple(slice(a, b) for a, b in zip(fix_origin, fix_end))
+        blosc.set_nthreads(2*ncores)
+
+        # get neighbors info
+        neighbor_events = []
+        for delta in product((-1, 0, 1), repeat=3):
+            if delta == (0, 0, 0): continue
+            neighbor_index = tuple(a + b for a, b in zip(tile_grid_indices[tile_number], delta))
+            neighbor_events.append(Event(f'{neighbor_index}'))
+
+        # wait until its clear to write
+        print(f'waiting {tile_number}', flush=True)
+        while True:
+            if np.all( [not e.is_set() for e in neighbor_events] ):
+                done_event = Event(f'{tile_grid_indices[tile_number]}')
+                done_event.set()
+                break
+            else: time.sleep(1)
+
+        # write result to disk
+        print(f'writing {tile_number}, {time.ctime(time.time())}', flush=True)
+        output_zarr[write_region] = output_zarr[write_region] + aligned
+        print(f'done writing {tile_number}, {time.ctime(time.time())}', flush=True)
+
+        # unset write flag, return
+        done_event.clear()
+        print(f'done with {tile_number}', flush=True)
+        return True
+
+    futures = cluster.client.map(resample_tile, range(len(transforms)), transforms, resources={'concurrency':1})
+    all_events = cluster.client.gather(futures)
+    return output_zarr
+        
+
+    # TODO separate function for Matt's tools: OME-NGFF-ZARR
+    # TODO: tiles are resampled into a pyramid
+    #       tiles are merged into an OME-NGFF-ZARR array on disk

@@ -6,6 +6,7 @@ from bigstream.configure_irm import configure_irm
 from bigstream.transform import apply_transform, compose_transform_list
 from bigstream.metrics import patch_mutual_information
 from bigstream import features
+from scipy.spatial import cKDTree
 import cv2
 
 # TODO: bug! fix_spacing is overwritten after resolve_sampling is called
@@ -79,6 +80,7 @@ def feature_point_ransac_affine_align(
     cc_radius=12,
     nspots=5000,
     match_threshold=0.7,
+    max_spot_match_distance=None,
     align_threshold=2.0,
     diagonal_constraint=0.25,
     fix_spot_detection_kwargs={},
@@ -264,11 +266,23 @@ def feature_point_ransac_affine_align(
     fix_spots = fix_spots * fix_spacing
     mov_spots = mov_spots * mov_spacing
 
-    # get point correspondences
+    # get pairwise correlations
     print('computing pairwise correlations', flush=True)
     correlations = features.pairwise_correlation(
         fix_spot_contexts, mov_spot_contexts,
     )
+
+    # apply distance filter
+    if max_spot_match_distance is not None:
+        fix_kdtree = cKDTree(fix_spots)
+        valid_pairs = fix_kdtree.query_ball_tree(
+            cKDTree(mov_spots), max_spot_match_distance,
+        )
+        for iii, fancy_index in enumerate(valid_pairs):
+            correlations[iii, fancy_index] += 1
+        match_threshold += 1
+
+    # get matching points
     fix_spots, mov_spots = features.match_points(
         fix_spots, mov_spots,
         correlations, match_threshold,

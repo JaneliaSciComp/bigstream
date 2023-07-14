@@ -35,7 +35,8 @@ def ransac_align_points(
         if default is not None:
             print("Degenerate affine produced")
             print("Returning default")
-            return default
+            print("MANUAL OVERRIDE RETURNING AFFINE")
+            # return default
         else:
             message = "Degenerate affine produced"
             message += ", ransac failed"

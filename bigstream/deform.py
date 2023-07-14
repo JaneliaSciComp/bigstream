@@ -1,6 +1,8 @@
 import numpy as np
 import greedypy.greedypy_registration_method as gprm
-import dask_stitch as ds
+# import dask_stitch as ds
+from dask_stitch.stitch import stitch_blocks
+from dask_stitch.local_affine import position_grid, local_affines_to_field
 from bigstream import transform
 import dask.array as da
 
@@ -75,7 +77,7 @@ def prepare_piecewise_deformable_align(
     overlap = tuple([int(round(x/8)) for x in blocksize])
     affine_pf = None
     if total_affines is not None:
-        affine_pf = ds.local_affine.local_affines_to_field(
+        affine_pf = local_affines_to_field(
             original_shape, fix_spacing, total_affines,
             blocksize, overlap,
             displacement=False,
@@ -124,7 +126,7 @@ def prepare_piecewise_deformable_align(
     )
 
     # stitch neighboring displacement fields
-    warps = ds.stitch.stitch_blocks(warps, blocksize, overlap)
+    warps = stitch_blocks(warps, blocksize, overlap)
 
     # crop any pads
     warps = warps[:original_shape[0],
@@ -137,7 +139,7 @@ def prepare_piecewise_deformable_align(
     if affine_pf is not None:
         final_field = affine_pf + warps
     else:
-        final_field = warps + ds.local_affine.position_grid(
+        final_field = warps + position_grid(
             original_shape, blocksize,
         )
 

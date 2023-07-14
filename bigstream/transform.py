@@ -6,11 +6,13 @@ import dask.delayed as delayed
 from dask_stitch.local_affine import local_affines_to_field
 
 
-def position_grid(shape):
+def position_grid(shape, offset=None):
     """
     """
-
-    coords = np.meshgrid(*[range(x) for x in shape], indexing='ij')
+    if offset is not None:
+        coords = np.meshgrid(*[range(x.start, x.stop) for x in offset], indexing='ij')
+    else:
+        coords = np.meshgrid(*[range(x) for x in shape], indexing='ij')
     coords = np.array(coords).astype(np.int16)
     return np.ascontiguousarray(np.moveaxis(coords, 0, -1))
 
@@ -24,6 +26,7 @@ def affine_to_grid(matrix, grid, displacement=True):
     result = np.einsum('...ij,...j->...i', mm, grid) + tt
     if displacement:
         result = result - grid
+    print("affine_to_grid shape", result.shape, flush=True)
     return result
 
 
@@ -32,11 +35,11 @@ def interpolate_image(image, X, order=1):
     """
 
     X = np.moveaxis(X, -1, 0)
-    return map_coordinates(image, X, order=order, mode='constant')
+    return map_coordinates(image, X, order=1, mode='constant')
 
 
 def apply_global_affine(
-    fix, mov,
+    fix_shape, mov,
     fix_spacing, mov_spacing,
     affine,
     order=1,
@@ -44,9 +47,24 @@ def apply_global_affine(
     """
     """
 
-    grid = position_grid(fix.shape) * fix_spacing
+    grid = position_grid(fix_shape) * fix_spacing
     coords = affine_to_grid(affine, grid, displacement=False) / mov_spacing
     return interpolate_image(mov, coords, order=order)
+
+def apply_global_affine_offset(
+    fix, mov,
+    fix_spacing, mov_spacing,
+    affine,
+    fix_coords,
+    order=1,
+):
+    """
+    """
+
+    grid = position_grid(fix.shape, fix_coords) * fix_spacing
+    print('grid_shape', grid.shape, flush=True)
+    coords = affine_to_grid(affine, grid, displacement=False) / mov_spacing
+    return interpolate_image(mov, coords, order=order), coords
 
 
 def compose_affines(global_affine, local_affines):
@@ -68,7 +86,7 @@ def compose_affines(global_affine, local_affines):
 
 
 def prepare_apply_position_field(
-    fix, mov,
+    fix_shape, mov,
     fix_spacing, mov_spacing,
     transform,
     blocksize,
@@ -121,7 +139,7 @@ def prepare_apply_position_field(
 
 
 def prepare_apply_local_affines(
-    fix, mov,
+    fix_shape, mov,
     fix_spacing, mov_spacing,
     local_affines,
     blocksize,
@@ -141,8 +159,9 @@ def prepare_apply_local_affines(
         total_affines = compose_affines(global_affine, local_affines)
 
     # get shape and overlap for position field
-    pf_shape = fix.shape if not transpose[0] else fix.shape[::-1]
-    overlap = [int(round(x/8)) for x in blocksize]
+    pf_shape = fix_shape if not transpose[0] else fix_shape[::-1]
+    # overlap = [int(round(x/8)) for x in blocksize]
+    overlap = [1 for x in blocksize]
 
     # get task graph for local affines to position field
     position_field = local_affines_to_field(
@@ -153,7 +172,7 @@ def prepare_apply_local_affines(
 
     # align
     return prepare_apply_position_field(
-        fix, mov, fix_spacing, mov_spacing,
+        fix_shape, mov, fix_spacing, mov_spacing,
         position_field, blocksize,
         transpose=transpose,
     )

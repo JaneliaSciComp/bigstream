@@ -15,6 +15,7 @@ import time
 import os
 import psutil
 import aicspylibczi
+from ngff_zarr import to_ngff_image, to_multiscales, to_ngff_zarr
 
 
 def _get_tile_info(czi_file_path):
@@ -401,8 +402,37 @@ def distributed_apply_stitch(
     futures = cluster.client.map(resample_tile, range(len(transforms)), transforms, resources={'concurrency':1})
     all_events = cluster.client.gather(futures)
     return output_zarr
-        
 
-    # TODO separate function for Matt's tools: OME-NGFF-ZARR
-    # TODO: tiles are resampled into a pyramid
-    #       tiles are merged into an OME-NGFF-ZARR array on disk
+
+@cluster
+def generate_ome_ngff_zarr(
+    input_zarr_array,
+    spacing,
+    write_path,
+    scale_factors,
+    chunks,
+    cluster=None,
+    cluster_kwargs={},
+    **kwargs,
+):
+    """
+    """
+
+    ngff_image = to_ngff_image(
+        input_zarr_array,
+        dims=('c', 'z', 'y', 'x'),
+        scale={a:b for a, b in zip('zyx', spacing)},
+        axes_units={a:'micrometer' for a in 'zyx'}
+    )
+    multiscales = to_multiscales(
+        ngff_image,
+        scale_factors,
+        chunks=chunks,
+    )
+    to_ngff_zarr(
+        write_path,
+        multiscales,
+        **kwargs,
+    )
+    return zarr.open(write_path, 'r+')
+

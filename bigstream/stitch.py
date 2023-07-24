@@ -384,6 +384,13 @@ def distributed_apply_stitch(
         print(f'waiting {tile_number}', flush=True)
         while True:
             if np.all( [not e.is_set() for e in neighbor_events] ):
+
+                # some robustness to race conditions
+                seed = int(time.time()) + int(''.join([str(x) for x in tile_grid_indices[tile_number]]))
+                np.random.seed(seed)
+                time.sleep(int(np.random.rand() * 8 + 2))
+                if np.any( [e.is_set() for e in neighbor_events] ): continue
+
                 done_event = Event(f'{tile_grid_indices[tile_number]}')
                 done_event.set()
                 break
@@ -417,18 +424,21 @@ def generate_ome_ngff_zarr(
 ):
     """
     """
-
+    
+    print('calling to_ngff_image', flush=True)
     ngff_image = to_ngff_image(
         input_zarr_array,
-        dims=('c', 'z', 'y', 'x'),
+        dims=('z', 'y', 'x'),
         scale={a:b for a, b in zip('zyx', spacing)},
         axes_units={a:'micrometer' for a in 'zyx'}
     )
+    print('calling to_multiscales', flush=True)
     multiscales = to_multiscales(
         ngff_image,
         scale_factors,
         chunks=chunks,
     )
+    print('calling to_ngff_zarr', flush=True)
     to_ngff_zarr(
         write_path,
         multiscales,

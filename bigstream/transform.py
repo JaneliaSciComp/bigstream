@@ -391,11 +391,11 @@ def invert_displacement_vector_field(
 
     # iterate to invert
     for i in range(iterations):
-        inv -= compose_transforms(root, inv, spacing)
+        inv -= compose_transforms(root, inv, spacing, spacing)
 
     # square-compose inv order times
     for i in range(order):
-        inv = compose_transforms(inv, inv, spacing)
+        inv = compose_transforms(inv, inv, spacing, spacing)
 
     # return result
     return inv
@@ -436,7 +436,7 @@ def _displacement_field_composition_square_root(
 
     # iterate
     for i in range(iterations):
-        residual = (field - compose_transforms(root, root, spacing))
+        residual = (field - compose_transforms(root, root, spacing, spacing))
         root += 0.5 * residual
 
     # return result

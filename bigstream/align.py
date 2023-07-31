@@ -680,12 +680,11 @@ def affine_align(
     static_transform_spacing = []
     for transform in static_transform_list:
         spacing = fix_spacing
-        if transform.shape != (4, 4) and len(transform.shape) != 1:
+        if transform.shape not in [(3, 3), (4, 4)] and len(transform.shape) != 1:
             spacing = ut.relative_spacing(transform, fix, fix_spacing)
         static_transform_spacing.append(spacing)
-    static_transform_origin = [fix_origin,]*len(static_transform_list)
     static_transform_spacing = tuple(static_transform_spacing)
-    static_transform_origin = tuple(static_transform_origin)
+    static_transform_origin = (fix_origin,)*len(static_transform_list)
 
     # skip sample and convert inputs to sitk images
     X = resolve_sampling(
@@ -712,18 +711,23 @@ def affine_align(
             static_transform_origin,
         )
         irm.SetMovingInitialTransform(T)
+
+    # distinguish between 2D and 3D for rigid transforms
+    ndims = fix.GetDimension()
+    rigid_transform_constructor = sitk.Euler2DTransform if ndims == 2 else sitk.Euler3DTransform
+
     # set transform to optimize
     if isinstance(initial_condition, str) and initial_condition == "CENTER":
         a, b = fix, mov
         if fix_mask is not None and mov_mask is not None:
             a, b = fix_mask, mov_mask
-        x = sitk.CenteredTransformInitializer(a, b, sitk.Euler3DTransform())
-        x = sitk.Euler3DTransform(x).GetTranslation()[::-1]
-        initial_condition = np.eye(4)
-        initial_condition[:3, -1] = x
+        x = sitk.CenteredTransformInitializer(a, b, rigid_transform_constructor())
+        x = rigid_transform_constructor(x).GetTranslation()[::-1]
+        initial_condition = np.eye(ndims+1)
+        initial_condition[:ndims, -1] = x
         initial_transform_given = True
     if rigid and not initial_transform_given:
-        transform = sitk.Euler3DTransform()
+        transform = rigid_transform_constructor()
     elif rigid and initial_transform_given:
         transform = ut.matrix_to_euler_transform(initial_condition)
     elif not rigid and not initial_transform_given:

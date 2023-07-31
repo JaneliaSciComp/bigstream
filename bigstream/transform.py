@@ -170,10 +170,11 @@ def apply_transform_to_coordinates(
     for iii, transform in enumerate(transform_list[::-1]):
 
         # if transform is an affine matrix
-        if transform.shape == (4, 4):
+        if len(transform.shape) == 2:
 
             # matrix vector multiply
-            mm, tt = transform[:3, :3], transform[:3, -1]
+            ndims = transform.shape[0] - 1
+            mm, tt = transform[:ndims, :ndims], transform[:ndims, -1]
             coordinates = np.einsum('...ij,...j->...i', mm, coordinates) + tt
 
         # if transform is a deformation vector field
@@ -286,18 +287,18 @@ def compose_transforms(
     """
 
     # two affines
-    if first_transform.shape == (4, 4) and second_transform.shape == (4, 4):
+    if len(first_transform.shape) == 2 and len(second_transform.shape) == 2:
         return np.matmul(first_transform, second_transform)
 
     # one affine, two field
-    elif first_transform.shape == (4, 4):
+    elif len(first_transform.shape) == 2:
         first_transform = ut.matrix_to_displacement_field(
             first_transform, second_transform.shape[:-1], second_spacing,
         )
         first_spacing = second_spacing
 
     # one field, two affine
-    elif second_transform.shape == (4, 4):
+    elif len(second_transform.shape) == 2:
         second_transform = ut.matrix_to_displacement_field(
             second_transform, first_transform.shape[:-1], first_spacing,
         )

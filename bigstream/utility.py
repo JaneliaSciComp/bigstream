@@ -96,9 +96,10 @@ def invert_matrix_axes(matrix):
         The same matrix but with the axis order inverted
     """
 
-    corrected = np.eye(4)
-    corrected[:3, :3] = matrix[:3, :3][::-1, ::-1]
-    corrected[:3, -1] = matrix[:3, -1][::-1]
+    ndims = matrix.shape[0] - 1
+    corrected = np.eye(ndims + 1)
+    corrected[:ndims, :ndims] = matrix[:ndims, :ndims][::-1, ::-1]
+    corrected[:ndims, -1] = matrix[:ndims, -1][::-1]
     return corrected
 
 
@@ -141,9 +142,10 @@ def affine_transform_to_matrix(transform):
         The same transform as a 4x4 matrix
     """
 
-    matrix = np.eye(4)
-    matrix[:3, :3] = np.array(transform.GetMatrix()).reshape((3,3))
-    matrix[:3, -1] = np.array(transform.GetTranslation())
+    ndims = transform.GetDimension()
+    matrix = np.eye(ndims+1)
+    matrix[:ndims, :ndims] = np.array(transform.GetMatrix()).reshape((ndims,ndims))
+    matrix[:ndims, -1] = np.array(transform.GetTranslation())
     return invert_matrix_axes(matrix)
 
 
@@ -162,10 +164,11 @@ def matrix_to_affine_transform(matrix):
         The same affine but as a sitk.AffineTransform object
     """
 
+    ndims = matrix.shape[0] - 1
     matrix_sitk = invert_matrix_axes(matrix)
-    transform = sitk.AffineTransform(3)
-    transform.SetMatrix(matrix_sitk[:3, :3].flatten())
-    transform.SetTranslation(matrix_sitk[:3, -1].squeeze())
+    transform = sitk.AffineTransform(ndims)
+    transform.SetMatrix(matrix_sitk[:ndims, :ndims].flatten())
+    transform.SetTranslation(matrix_sitk[:ndims, -1].squeeze())
     return transform
 
 
@@ -184,10 +187,11 @@ def matrix_to_euler_transform(matrix):
         The same rigid transform but as a sitk object
     """
 
+    ndims = matrix.shape[0] - 1
     matrix_sitk = invert_matrix_axes(matrix)
-    transform = sitk.Euler3DTransform()
-    transform.SetMatrix(matrix_sitk[:3, :3].flatten())
-    transform.SetTranslation(matrix_sitk[:3, -1].squeeze())
+    transform = sitk.Euler2DTransform if ndims == 2 else sitk.Euler3DTransform()
+    transform.SetMatrix(matrix_sitk[:ndims, :ndims].flatten())
+    transform.SetTranslation(matrix_sitk[:ndims, -1].squeeze())
     return transform
 
 
@@ -351,9 +355,11 @@ def bspline_parameters_to_transform(parameters):
         A sitk.BSplineTransform object
     """
 
-    t = sitk.BSplineTransform(3, 3)
-    t.SetFixedParameters(parameters[:18])
-    t.SetParameters(parameters[18:])
+    # number of fixed parameters depends on dimension, stored in parameters[0]
+    nfp = 10 if parameters[0] == 2 else 18
+    t = sitk.BSplineTransform(parameters[0], 3)
+    t.SetFixedParameters(parameters[1:nfp+1])
+    t.SetParameters(parameters[nfp+1:])
     return t
 
 
@@ -453,9 +459,17 @@ def transform_list_to_composite_transform(transform_list, spacing=None, origin=N
         All transforms in the given list compressed into a sitk.CompositTransform 
     """
 
-    transform = sitk.CompositeTransform(3)
+    # determine dimension
+    if len(transform_list[0].shape) == 2:
+        ndims = 2 if transform_list[0].shape == (3, 3) else 3
+    elif len(transform_list[0].shape) > 2:
+        ndims = transform_list[0].ndim - 1
+    else:
+        ndims = transform_list[0][0]
+
+    transform = sitk.CompositeTransform(ndims)
     for iii, t in enumerate(transform_list):
-        if t.shape == (4, 4):
+        if t.shape in [(3, 3), (4, 4)]:
             t = matrix_to_affine_transform(t)
         elif len(t.shape) == 1:
             t = bspline_parameters_to_transform(t)

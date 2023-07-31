@@ -515,7 +515,10 @@ def nested_distributed_piecewise_alignment_pipeline(
         )
         # TODO: THIS DOES NOT WORK WITH LARGER THAN MEMORY TRANSFORMS
         if iii > 0:
-            deform = compose_transforms(static_transform_list.pop(), deform, fix_spacing)
+            deform = compose_transforms(
+                static_transform_list.pop(), deform,
+                fix_spacing, fix_spacing,
+            )
         static_transform_list.append(deform)
 
     # return in the requested format

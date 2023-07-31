@@ -565,7 +565,7 @@ def random_affine_search(
     current_best_score = WORST_POSSIBLE_SCORE
     scores = np.empty(random_iterations + 1, dtype=np.float64)
     for iii, ppp in enumerate(params):
-        scores[iii] = score_affine(ut.physical_parameters_to_affine_matrix(ppp, center))
+        scores[iii] = score_affine(ut.physical_parameters_to_affine_matrix_3d(ppp, center))
         if print_running_improvements and scores[iii] < current_best_score:
                 current_best_score = scores[iii]
                 print(iii, ': ', current_best_score, '\n', ppp)
@@ -574,7 +574,7 @@ def random_affine_search(
     # return top results
     partition_indx = np.argpartition(scores, nreturn)[:nreturn]
     params, scores = params[partition_indx], scores[partition_indx]
-    return [ut.physical_parameters_to_affine_matrix(p, center) for p in params[np.argsort(scores)]]
+    return [ut.physical_parameters_to_affine_matrix_3d(p, center) for p in params[np.argsort(scores)]]
 
 
 def affine_align(

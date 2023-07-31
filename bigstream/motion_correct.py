@@ -187,7 +187,7 @@ def motion_correct(
     # TODO: again this assumes rigid transforms
     transforms = np.empty((total_frames, 4, 4))
     for i in range(params.shape[0]):
-        e = ut.parameters_to_euler_transform(params[i])
+        e = ut.parameters_to_euler_transform_3d(params[i])
         t = ut.affine_transform_to_matrix(e)
         transforms[i] = t
 

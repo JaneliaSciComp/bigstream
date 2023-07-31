@@ -121,9 +121,10 @@ def change_affine_matrix_origin(matrix, origin):
         The same affine transform but encoded with respect to the given origin
     """
 
-    tl, tr = np.eye(4), np.eye(4)
+    ndims = matrix.shape[0] - 1
+    tl, tr = np.eye(ndims+1), np.eye(ndims+1)
     origin = np.array(origin)
-    tl[:3, -1], tr[:3, -1] = -origin, origin
+    tl[:ndims, -1], tr[:ndims, -1] = -origin, origin
     return np.matmul(tl, np.matmul(matrix, tr))
 
 
@@ -218,7 +219,7 @@ def euler_transform_to_parameters(transform):
     )
 
 
-def parameters_to_euler_transform(params):
+def parameters_to_euler_transform_3d(params):
     """
     Convert rigid transform parameters to a sitk.Euler3DTransform object
 
@@ -239,7 +240,7 @@ def parameters_to_euler_transform(params):
     return transform
 
 
-def physical_parameters_to_affine_matrix(params, center):
+def physical_parameters_to_affine_matrix_3d(params, center):
     """
     Convert separate affine transform parameters to an affine matrix
 
@@ -304,11 +305,11 @@ def matrix_to_displacement_field(matrix, shape, spacing=None, centered=False):
     """
 
     if spacing is None: spacing = np.ones(len(shape))
-    nrows, ncols, nstacks = shape
-    grid = np.array(np.mgrid[:nrows, :ncols, :nstacks])
-    grid = grid.transpose(1,2,3,0) * spacing
+    grid = np.array(np.mgrid[tuple(slice(None, x) for x in shape)])
+    grid = np.moveaxis(grid, 0, -1) * spacing
     if centered: grid += 0.5 * spacing
-    mm, tt = matrix[:3, :3], matrix[:3, -1]
+    ndims = matrix.shape[0] - 1
+    mm, tt = matrix[:ndims, :ndims], matrix[:ndims, -1]
     return np.einsum('...ij,...j->...i', mm, grid) + tt - grid
 
 

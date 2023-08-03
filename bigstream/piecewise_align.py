@@ -10,6 +10,7 @@ from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform, compose_transform_list
 from bigstream.transform import apply_transform_to_coordinates
 from bigstream.transform import compose_transforms
+from distributed import Lock, MultiLock
 
 
 @cluster
@@ -168,6 +169,8 @@ def distributed_piecewise_alignment_pipeline(
             tuple(blocksize) + (fix.ndim,),
             np.float32,
         )
+        # chunks will need locks for parallel writing
+        locks = [Lock(f'{x}') for x in np.ndindex(*output_transform.cdata_shape)]
 
     # determine fixed image slices for blocking
     blocksize = np.array(blocksize)
@@ -339,17 +342,26 @@ def distributed_piecewise_alignment_pipeline(
         # apply weights
         transform = transform * weights[..., None]
 
-        # return or write the data
+        # if there's no write path, just return the transform block
         if not write_path:
             return transform
+
+        # otherwise, coordinate with neighboring blocks
         else:
-            # wait until the correct write window for this write group
-            # TODO: if a worker can query the set of running tasks, I may be able to skip
-            #       groups that are completely written
-            write_group = np.sum(np.array(block_index) % 3 * (9, 3, 1))
-            while not (write_group < time.time() / write_group_interval % 27 < write_group + .5):
-                time.sleep(1)
+            # block until locks for all write blocks are acquired
+            lock_strs = []
+            for delta in product((-1, 0, 1,), repeat=3):
+                lock_strs.append(str(tuple(a + b for a, b in zip(block_index, delta))))
+            lock = MultiLock(lock_strs)
+            lock.acquire()
+
+            # write result to disk
+            print(f'WRITING BLOCK {block_index} at {time.ctime(time.time())}', flush=True)
             output_transform[fix_slices] = output_transform[fix_slices] + transform
+            print(f'FINISHED WRITING BLOCK {block_index} at {time.ctime(time.time())}', flush=True)
+
+            # release the lock
+            lock.release()
             return True
     # END CLOSURE
 

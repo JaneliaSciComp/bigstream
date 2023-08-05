@@ -177,17 +177,17 @@ def motion_correct(
 
     # smooth and interpolate
     # TODO: this kind of smoothing will not work with affine transforms
-    params = gaussian_filter1d(params, sigma, axis=0)
+    params = gaussian_filter1d(params, sigma / time_stride, axis=0)
     if time_stride > 1:
         x = np.arange(total_frames) / time_stride
-        coords = np.meshgrid(x, np.mgrid[:6], indexing='ij')
-        params = map_coordinates(params, coords, mode='nearest')
+        coords = np.meshgrid(x, np.mgrid[:params.shape[1]], indexing='ij')
+        params = map_coordinates(params, coords, order=1, mode='nearest')
 
     # convert to matrices
     # TODO: again this assumes rigid transforms
-    transforms = np.empty((total_frames, 4, 4))
+    transforms = np.empty((total_frames, fix.ndim+1, fix.ndim+1))
     for i in range(params.shape[0]):
-        e = ut.parameters_to_euler_transform_3d(params[i])
+        e = ut.parameters_to_euler_transform(params[i])
         t = ut.affine_transform_to_matrix(e)
         transforms[i] = t
 
@@ -422,7 +422,7 @@ def resample_frames(
     # save initial deforms to location accessible to all workers
     new_list = []
     for iii, transform in enumerate(static_transform_list_before):
-        if transform.shape != (4, 4) and len(transform.shape) != 1:
+        if len(transform.shape) > 2:
             path = temporary_directory.name + f'/deform{iii}.npy'
             np.save(path, transform)
             transform = path
@@ -432,7 +432,7 @@ def resample_frames(
     # save subsequent deforms to location accessible to all workers
     new_list = []
     for iii, transform in enumerate(static_transform_list_after):
-        if transform.shape != (4, 4) and len(transform.shape) != 1:
+        if len(transform.shape) > 2:
             path = temporary_directory.name + f'/deform{iii}.npy'
             np.save(path, transform)
             transform = path
@@ -443,14 +443,14 @@ def resample_frames(
     total_frames = mov_zarr.shape[0]
     mov_indices = range(0, total_frames, time_stride)
     compute_frames = len(mov_indices)
-    transforms = list(transforms)
+    transforms = list(transforms)[::time_stride]
 
     # create an output zarr file
     output_zarr = ut.create_zarr(
         write_path,
         (compute_frames,) + mov_zarr.shape[1:],
         (1,) + mov_zarr.shape[1:],
-        np.uint16,
+        mov_zarr.dtype,
     )
 
     # wrap transform function
@@ -463,6 +463,7 @@ def resample_frames(
         # read frame and mask data
         fix = np.load(temporary_directory.name + '/fix.npy')
         mov = mov_zarr[read_index]
+        mask = None
         if os.path.isfile(temporary_directory.name + '/mask.npy'):
             mask = np.load(temporary_directory.name + '/mask.npy')
 
@@ -471,6 +472,7 @@ def resample_frames(
         b = [np.load(x) if isinstance(x, str) else x for x in static_transform_list_after]
         transform_list = [transform,]
         if len(transform.shape) == 1:  # affine + bspline case
+            # deformable_motion_correct not generalize to 2d yet, so this is fine
             transform_list = [transform[:16].reshape((4,4)), transform[16:]]
         transform_list = a + transform_list + b
 

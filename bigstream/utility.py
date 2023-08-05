@@ -190,7 +190,7 @@ def matrix_to_euler_transform(matrix):
 
     ndims = matrix.shape[0] - 1
     matrix_sitk = invert_matrix_axes(matrix)
-    transform = sitk.Euler2DTransform if ndims == 2 else sitk.Euler3DTransform()
+    transform = sitk.Euler2DTransform() if ndims == 2 else sitk.Euler3DTransform()
     transform.SetMatrix(matrix_sitk[:ndims, :ndims].flatten())
     transform.SetTranslation(matrix_sitk[:ndims, -1].squeeze())
     return transform
@@ -212,14 +212,20 @@ def euler_transform_to_parameters(transform):
         The rigid transform parameters: (rotX, rotY, rotZ, transX, transY, transZ)
     """
 
-    return np.array((transform.GetAngleX(),
-                     transform.GetAngleY(),
-                     transform.GetAngleZ()) +
-                     transform.GetTranslation()
-    )
+    if transform.GetDimension() == 2:
+        return np.array((transform.GetAngle(),) +
+                         transform.GetTranslation(),
+        )
+
+    elif transform.GetDimension() == 3:
+        return np.array((transform.GetAngleX(),
+                         transform.GetAngleY(),
+                         transform.GetAngleZ()) +
+                         transform.GetTranslation()
+        )
 
 
-def parameters_to_euler_transform_3d(params):
+def parameters_to_euler_transform(params):
     """
     Convert rigid transform parameters to a sitk.Euler3DTransform object
 
@@ -234,10 +240,17 @@ def parameters_to_euler_transform_3d(params):
         A sitk rigid transform object
     """
 
-    transform = sitk.Euler3DTransform()
-    transform.SetRotation(*params[:3])
-    transform.SetTranslation(params[3:])
-    return transform
+    if len(params) == 3:
+        transform = sitk.Euler2DTransform()
+        transform.SetAngle(params[0])
+        transform.SetTranslation(params[1:])
+        return transform
+
+    elif len(params) == 6:
+        transform = sitk.Euler3DTransform()
+        transform.SetRotation(*params[:3])
+        transform.SetTranslation(params[3:])
+        return transform
 
 
 def physical_parameters_to_affine_matrix_3d(params, center):

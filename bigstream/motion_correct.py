@@ -63,7 +63,7 @@ def motion_correct(
     fix, mov_zarr,
     fix_spacing, mov_spacing,
     time_stride=1,
-    sigma=7,
+    sigma=None,
     fix_mask=None,
     cluster=None,
     cluster_kwargs={},
@@ -95,7 +95,7 @@ def motion_correct(
         then only every 10th frame in the provided dataset is aligned. Intermediate
         frame transforms are interpolated from the computed ones.
 
-    sigma : float
+    sigma : float or None
         Standard deviation of a Gaussian kernel applied to the found transforms along
         the time axis. This stabilizes the alignment at the expense of allowing a bit
         more long term motion. This is in units of frames *after* time stride has been
@@ -177,7 +177,8 @@ def motion_correct(
 
     # smooth and interpolate
     # TODO: this kind of smoothing will not work with affine transforms
-    params = gaussian_filter1d(params, sigma / time_stride, axis=0)
+    if sigma:
+        params = gaussian_filter1d(params, sigma / time_stride, axis=0)
     if time_stride > 1:
         x = np.arange(total_frames) / time_stride
         coords = np.meshgrid(x, np.mgrid[:params.shape[1]], indexing='ij')

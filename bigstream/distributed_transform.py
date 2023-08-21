@@ -355,6 +355,7 @@ def distributed_apply_transform_to_coordinates(
 
 
 def _transform_coords(coord_indexed_values, coords_spacing, transform_list):
+    print('Apply transform coords to: ', coord_indexed_values)
     # read relevant region of transform
     point_coords = coord_indexed_values[:, 0:3]
     a = np.min(point_coords, axis=0)
@@ -384,7 +385,7 @@ def _transform_coords(coord_indexed_values, coords_spacing, transform_list):
     points_values = coord_indexed_values[:, 3:]
 
     if points_values.shape[1] == 0:
-        return warped_coords_indexed_values
+        return warped_point_coords
     else:
         warped_coords_indexed_values = np.empty_like(coord_indexed_values)
         warped_coords_indexed_values[:, 0:3] = warped_point_coords

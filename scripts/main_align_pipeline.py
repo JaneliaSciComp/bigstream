@@ -177,9 +177,8 @@ def _define_args(global_descriptor, local_descriptor):
                              help='Local transform name')
     args_parser.add_argument('--local-transform-subpath',
                              dest='local_transform_subpath',
-                             default='',
                              type=str,
-                             help='Local transform subpath')
+                             help='Local transform subpath (defaults to moving subpath)')
     args_parser.add_argument('--local-transform-blocksize',
                              dest='local_transform_blocksize',
                              type=_inttuple,
@@ -191,9 +190,8 @@ def _define_args(global_descriptor, local_descriptor):
                              help='Local inverse transform name')
     args_parser.add_argument('--local-inv-transform-subpath',
                              dest='local_inv_transform_subpath',
-                             default='',
                              type=str,
-                             help='Local inverse transform subpath')
+                             help='Local inverse transform subpath (defaults to direct transform subpath)')
     args_parser.add_argument('--local-inv-transform-blocksize',
                              dest='local_inv_transform_blocksize',
                              type=_inttuple,
@@ -202,6 +200,10 @@ def _define_args(global_descriptor, local_descriptor):
                              dest='local_aligned_name',
                              type=str,
                              help='Local aligned name')
+    args_parser.add_argument('--local-aligned-subpath'
+                             dest='local_aligned_subpath',
+                             type=str,
+                             help='Local aligned subpath (defaults to moving subpath)')
     args_parser.add_argument('--inv-iterations',
                              dest='inv_iterations',
                              default=10,
@@ -629,6 +631,21 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
         else:
             mov_maskarray = None
 
+        if args.local_transform_subpath:
+            local_transform_subpath = args.local_transform_subpath
+        else:
+            local_transform_subpath = args.moving_local_subpath
+
+        if args.local_inv_transform_subpath:
+            local_inv_transform_subpath = args.local_inv_transform_subpath
+        else:
+            local_inv_transform_subpath = local_transform_subpath
+
+        if args.local_aligned_subpath:
+            local_aligned_subpath = args.local_aligned_subpath
+        else:
+            local_aligned_subpath = args.moving_local_subpath
+
         _align_local_data(
             (fix_local_path, args.fixed_local_subpath, fix_highres_ldata),
             (mov_local_path, args.moving_local_subpath, mov_highres_ldata),
@@ -641,12 +658,13 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
             [global_transform] if global_transform is not None else [],
             output_dir,
             args.local_transform_name,
-            args.local_transform_subpath,
+            local_transform_subpath,
             local_transform_blocksize,
             args.local_inv_transform_name,
-            args.local_inv_transform_subpath,
+            local_inv_transform_subpath,
             local_inv_transform_blocksize,
             args.local_aligned_name,
+            local_aligned_subpath, # aligned subpath is identical to moving subpath
             output_blocksize,
             args.inv_iterations,
             args.inv_order,
@@ -674,6 +692,7 @@ def _align_local_data(fix_input,
                       local_inv_transform_subpath,
                       local_inv_transform_blocksize,
                       local_aligned_name,
+                      local_aligned_subpath,
                       output_blocksize,
                       inv_iterations,
                       inv_order,
@@ -758,7 +777,7 @@ def _align_local_data(fix_input,
         aligned_path = output_dir + '/' + local_aligned_name
         local_aligned = n5_utils.create_dataset(
             aligned_path,
-            mov_dataset,
+            local_aligned_subpath,
             fix_dataarray.shape,
             output_blocksize,
             fix_dataarray.dtype,
@@ -766,7 +785,7 @@ def _align_local_data(fix_input,
             downsamplingFactors=mov_attrs.get('downsamplingFactors'),
         )
         print('Apply', deform_path, 'to',
-              mov_path, mov_dataset, '->', aligned_path, mov_dataset,
+              mov_path, mov_dataset, '->', aligned_path, local_aligned_subpath,
               flush=True)
         distributed_apply_transform(
             fix_dataarray, mov_dataarray,

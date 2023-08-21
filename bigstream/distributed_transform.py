@@ -339,9 +339,9 @@ def distributed_apply_transform_to_coordinates(
         not_too_low = np.all(coordinates[:, 0:3] >= lower_bound, axis=1)
         not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
         pcoords = coordinates[ not_too_low * not_too_high ]
-        print('low:', not_too_low, 'high:', not_too_high,
-              'pccords:', pcoords)
-        if pcoords.size != 0: partitions.append(pcoords)
+        if pcoords.size != 0:
+            print('Add partition of size', pcoords.size)
+            partitions.append(pcoords)
 
     # transform all partitions and return
     futures = cluster.client.map(

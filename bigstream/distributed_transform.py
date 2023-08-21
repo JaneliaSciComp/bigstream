@@ -328,7 +328,8 @@ def distributed_apply_transform_to_coordinates(
     maxblock = np.max(coordinates[:, 0:3], axis=0)
     blocksdims = maxblock - origin
     nblocks = np.ceil(blocksdims / partition_size).astype(int)
-    print('Min:', origin, 'Max:', maxblock, 
+    print('Min:', origin, 'Max:', maxblock,
+          'Partition size:', partition_size,
           'Dims:', blocksdims, 'NBlocks:', nblocks)
     partitions = []
     for (i, j, k) in np.ndindex(*nblocks):

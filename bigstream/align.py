@@ -6,6 +6,7 @@ from bigstream.configure_irm import configure_irm
 from bigstream.transform import apply_transform, compose_transform_list
 from bigstream.metrics import patch_mutual_information
 from bigstream import features
+from scipy.spatial import cKDTree
 import cv2
 
 # TODO: bug! fix_spacing is overwritten after resolve_sampling is called
@@ -74,12 +75,17 @@ def feature_point_ransac_affine_align(
     fix_spacing,
     mov_spacing,
     blob_sizes,
+    alignment_spacing=None,
     num_sigma_max=15,
     cc_radius=12,
     nspots=5000,
     match_threshold=0.7,
+    max_spot_match_distance=None,
     align_threshold=2.0,
-    diagonal_constraint=0.75,
+    diagonal_constraint=0.25,
+    fix_spot_detection_kwargs={},
+    mov_spot_detection_kwargs={},
+    ransac_affine_kwargs={},
     fix_spots=None,
     mov_spots=None,
     fix_mask=None,
@@ -174,6 +180,22 @@ def feature_point_ransac_affine_align(
     # establish default
     if default is None: default = np.eye(fix.ndim + 1)
 
+    # skip sample and determine mask spacings
+    X = resolve_sampling(
+        fix, mov,
+        fix_mask, mov_mask,
+        fix_spacing, mov_spacing,
+        alignment_spacing,
+    )
+    fix = X[0]
+    mov = X[1]
+    fix_mask = X[2]
+    mov_mask = X[3]
+    fix_spacing = X[4]
+    mov_spacing = X[5]
+    fix_mask_spacing = X[6]
+    mov_mask_spacing = X[7]
+
     # apply static transforms
     if static_transform_list:
         mov = apply_transform(
@@ -182,38 +204,61 @@ def feature_point_ransac_affine_align(
             fix_origin=fix_origin,
             mov_origin=mov_origin,
         )
+        if mov_mask is not None:
+            mov_mask = apply_transform(
+                fix.astype(mov_mask.dtype), mov_mask, fix_spacing, mov_spacing,
+                transform_list=static_transform_list,
+                fix_origin=fix_origin, 
+                mov_origin=mov_origin,
+                interpolate_with_nn=True,
+            )
+        mov_spacing = fix_spacing
 
-    # get spots
+    # get fix spots
+    print('computing fixed spots', flush=True)
     if fix_spots is None:
+        fix_kwargs = {
+            'num_sigma':min(blob_sizes[1] - blob_sizes[0], num_sigma_max),
+            'exclude_border':cc_radius,
+            'mask':fix_mask,
+        }
+        fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
         fix_spots = features.blob_detection(
             fix, blob_sizes[0], blob_sizes[1],
-            num_sigma=min(blob_sizes[1]-blob_sizes[0], num_sigma_max),
-            exclude_border=cc_radius,
+            **fix_kwargs,
         )
-    if mov_spots is None:
-        mov_spots = features.blob_detection(
-            mov, blob_sizes[0], blob_sizes[1],
-            num_sigma=min(blob_sizes[1]-blob_sizes[0], num_sigma_max),
-            exclude_border=cc_radius,
-        )
-
-    print('Fix spots:', fix_spots.size,
-          'Moving spots:', mov_spots.size,
-          flush=True)
-
-    if fix_spots.size == 0 or mov_spots.size == 0:
-        print('No spots in fixed or moving image', flush=True)
+    print(f'found {len(fix_spots)} fixed spots')
+    if len(fix_spots) < 100:
+        print('insufficient fixed spots found, returning default', flush=True)
         return default
 
-    # TODO: implement masking, remove spots not in foreground
+    # get mov spots
+    print('computing moving spots', flush=True)
+    if mov_spots is None:
+        mov_kwargs = {
+            'num_sigma':min(blob_sizes[1] - blob_sizes[0], num_sigma_max),
+            'exclude_border':cc_radius,
+            'mask':mov_mask,
+        }
+        mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
+        mov_spots = features.blob_detection(
+            mov, blob_sizes[0], blob_sizes[1],
+            **mov_kwargs,
+        )
+    print(f'found {len(mov_spots)} moving spots')
+    if len(mov_spots) < 100:
+        print('insufficient moving spots found, returning default', flush=True)
+        return default
 
     # sort
+    print('sorting spots', flush=True)
     sort_idx = np.argsort(fix_spots[:, 3])[::-1]
     fix_spots = fix_spots[sort_idx, :3][:nspots]
     sort_idx = np.argsort(mov_spots[:, 3])[::-1]
     mov_spots = mov_spots[sort_idx, :3][:nspots]
 
     # get contexts
+    print('extracting contexts', flush=True)
     fix_spot_contexts = features.get_contexts(fix, fix_spots, cc_radius)
     mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
 
@@ -221,31 +266,36 @@ def feature_point_ransac_affine_align(
     fix_spots = fix_spots * fix_spacing
     mov_spots = mov_spots * mov_spacing
 
-    # get point correspondences
+    # get pairwise correlations
+    print('computing pairwise correlations', flush=True)
     correlations = features.pairwise_correlation(
         fix_spot_contexts, mov_spot_contexts,
     )
+
+    # apply distance filter
+    if max_spot_match_distance is not None:
+        fix_kdtree = cKDTree(fix_spots)
+        valid_pairs = fix_kdtree.query_ball_tree(
+            cKDTree(mov_spots), max_spot_match_distance,
+        )
+        for iii, fancy_index in enumerate(valid_pairs):
+            correlations[iii, fancy_index] += 1
+        match_threshold += 1
+
+    # get matching points
     fix_spots, mov_spots = features.match_points(
         fix_spots, mov_spots,
         correlations, match_threshold,
     )
-
-    # check spot counts
-    if fix_spots.shape[0] < 50:
-        print('Fewer than 50 spots found in fixed image, returning default',
-              fix_spots.shape[0],
-              flush=True)
-        return default
-    if mov_spots.shape[0] < 50:
-        print('Fewer than 50 spots found in moving image, returning default',
-              mov_spots.shape[0],
-              flush=True)
+    print(f'{len(fix_spots)} matched spots')
+    if len(fix_spots) < 50 or len(mov_spots) < 50:
+        print('insufficient point matches found, returning default', flush=True)
         return default
 
     # align
     print('Found enough spots to estimate the affine',
-          'fix:', fix_spots.shape[0], ',',
-          'moving:', mov_spots.shape[0],
+          'fix:', len(fix_spots), ',',
+          'moving:', len(mov_spots),
           flush=True)
     r, Aff, inline = cv2.estimateAffine3D(
         fix_spots, mov_spots,
@@ -255,8 +305,8 @@ def feature_point_ransac_affine_align(
     )
 
     # ensure affine is sensible
-    if np.any( np.diag(Aff) < diagonal_constraint ):
-        print("Degenerate affine produced, returning default")
+    if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
+        print("Degenerate affine produced, returning default", flush=True)
         return default
 
     # augment to 4x4 matrix and return
@@ -518,7 +568,7 @@ def random_affine_search(
     current_best_score = WORST_POSSIBLE_SCORE
     scores = np.empty(random_iterations + 1, dtype=np.float64)
     for iii, ppp in enumerate(params):
-        scores[iii] = score_affine(ut.physical_parameters_to_affine_matrix(ppp, center))
+        scores[iii] = score_affine(ut.physical_parameters_to_affine_matrix_3d(ppp, center))
         if print_running_improvements and scores[iii] < current_best_score:
                 current_best_score = scores[iii]
                 print(iii, ': ', current_best_score, '\n', ppp)
@@ -527,7 +577,7 @@ def random_affine_search(
     # return top results
     partition_indx = np.argpartition(scores, nreturn)[:nreturn]
     params, scores = params[partition_indx], scores[partition_indx]
-    return [ut.physical_parameters_to_affine_matrix(p, center) for p in params[np.argsort(scores)]]
+    return [ut.physical_parameters_to_affine_matrix_3d(p, center) for p in params[np.argsort(scores)]]
 
 
 def affine_align(
@@ -633,12 +683,11 @@ def affine_align(
     static_transform_spacing = []
     for transform in static_transform_list:
         spacing = fix_spacing
-        if transform.shape != (4, 4) and len(transform.shape) != 1:
+        if transform.shape not in [(3, 3), (4, 4)] and len(transform.shape) != 1:
             spacing = ut.relative_spacing(transform, fix, fix_spacing)
         static_transform_spacing.append(spacing)
-    static_transform_origin = [fix_origin,]*len(static_transform_list)
     static_transform_spacing = tuple(static_transform_spacing)
-    static_transform_origin = tuple(static_transform_origin)
+    static_transform_origin = (fix_origin,)*len(static_transform_list)
 
     # skip sample and convert inputs to sitk images
     X = resolve_sampling(
@@ -665,18 +714,23 @@ def affine_align(
             static_transform_origin,
         )
         irm.SetMovingInitialTransform(T)
+
+    # distinguish between 2D and 3D for rigid transforms
+    ndims = fix.GetDimension()
+    rigid_transform_constructor = sitk.Euler2DTransform if ndims == 2 else sitk.Euler3DTransform
+
     # set transform to optimize
     if isinstance(initial_condition, str) and initial_condition == "CENTER":
         a, b = fix, mov
         if fix_mask is not None and mov_mask is not None:
             a, b = fix_mask, mov_mask
-        x = sitk.CenteredTransformInitializer(a, b, sitk.Euler3DTransform())
-        x = sitk.Euler3DTransform(x).GetTranslation()[::-1]
-        initial_condition = np.eye(4)
-        initial_condition[:3, -1] = x
+        x = sitk.CenteredTransformInitializer(a, b, rigid_transform_constructor())
+        x = rigid_transform_constructor(x).GetTranslation()[::-1]
+        initial_condition = np.eye(ndims+1)
+        initial_condition[:ndims, -1] = x
         initial_transform_given = True
     if rigid and not initial_transform_given:
-        transform = sitk.Euler3DTransform()
+        transform = rigid_transform_constructor()
     elif rigid and initial_transform_given:
         transform = ut.matrix_to_euler_transform(initial_condition)
     elif not rigid and not initial_transform_given:
@@ -1016,7 +1070,7 @@ def alignment_pipeline(
     # loop over steps
     initial_transform_count = len(static_transform_list)
     for alignment, arguments in steps:
-        print('Run', alignment, arguments)
+        print('Run', alignment, arguments, flush=True)
         arguments = {**kwargs, **arguments}
         arguments['static_transform_list'] = static_transform_list
         static_transform_list.append(align[alignment](**arguments))

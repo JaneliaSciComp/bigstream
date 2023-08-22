@@ -1,10 +1,11 @@
 import numpy as np
-from scipy.spatial.transform import Rotation
 import SimpleITK as sitk
 import zarr
-from zarr.indexing import BasicIndexer
+
 from numcodecs import Blosc
-from distributed import Lock
+from scipy.spatial.transform import Rotation
+from zarr import blosc
+from zarr.indexing import BasicIndexer
 
 
 def skip_sample(image, spacing, ss_spacing):
@@ -93,9 +94,10 @@ def invert_matrix_axes(matrix):
         The same matrix but with the axis order inverted
     """
 
-    corrected = np.eye(4)
-    corrected[:3, :3] = matrix[:3, :3][::-1, ::-1]
-    corrected[:3, -1] = matrix[:3, -1][::-1]
+    ndims = matrix.shape[0] - 1
+    corrected = np.eye(ndims + 1)
+    corrected[:ndims, :ndims] = matrix[:ndims, :ndims][::-1, ::-1]
+    corrected[:ndims, -1] = matrix[:ndims, -1][::-1]
     return corrected
 
 
@@ -117,9 +119,10 @@ def change_affine_matrix_origin(matrix, origin):
         The same affine transform but encoded with respect to the given origin
     """
 
-    tl, tr = np.eye(4), np.eye(4)
+    ndims = matrix.shape[0] - 1
+    tl, tr = np.eye(ndims+1), np.eye(ndims+1)
     origin = np.array(origin)
-    tl[:3, -1], tr[:3, -1] = -origin, origin
+    tl[:ndims, -1], tr[:ndims, -1] = -origin, origin
     return np.matmul(tl, np.matmul(matrix, tr))
 
 
@@ -138,9 +141,10 @@ def affine_transform_to_matrix(transform):
         The same transform as a 4x4 matrix
     """
 
-    matrix = np.eye(4)
-    matrix[:3, :3] = np.array(transform.GetMatrix()).reshape((3,3))
-    matrix[:3, -1] = np.array(transform.GetTranslation())
+    ndims = transform.GetDimension()
+    matrix = np.eye(ndims+1)
+    matrix[:ndims, :ndims] = np.array(transform.GetMatrix()).reshape((ndims,ndims))
+    matrix[:ndims, -1] = np.array(transform.GetTranslation())
     return invert_matrix_axes(matrix)
 
 
@@ -159,10 +163,11 @@ def matrix_to_affine_transform(matrix):
         The same affine but as a sitk.AffineTransform object
     """
 
+    ndims = matrix.shape[0] - 1
     matrix_sitk = invert_matrix_axes(matrix)
-    transform = sitk.AffineTransform(3)
-    transform.SetMatrix(matrix_sitk[:3, :3].flatten())
-    transform.SetTranslation(matrix_sitk[:3, -1].squeeze())
+    transform = sitk.AffineTransform(ndims)
+    transform.SetMatrix(matrix_sitk[:ndims, :ndims].flatten())
+    transform.SetTranslation(matrix_sitk[:ndims, -1].squeeze())
     return transform
 
 
@@ -181,10 +186,11 @@ def matrix_to_euler_transform(matrix):
         The same rigid transform but as a sitk object
     """
 
+    ndims = matrix.shape[0] - 1
     matrix_sitk = invert_matrix_axes(matrix)
-    transform = sitk.Euler3DTransform()
-    transform.SetMatrix(matrix_sitk[:3, :3].flatten())
-    transform.SetTranslation(matrix_sitk[:3, -1].squeeze())
+    transform = sitk.Euler2DTransform() if ndims == 2 else sitk.Euler3DTransform()
+    transform.SetMatrix(matrix_sitk[:ndims, :ndims].flatten())
+    transform.SetTranslation(matrix_sitk[:ndims, -1].squeeze())
     return transform
 
 
@@ -204,11 +210,17 @@ def euler_transform_to_parameters(transform):
         The rigid transform parameters: (rotX, rotY, rotZ, transX, transY, transZ)
     """
 
-    return np.array((transform.GetAngleX(),
-                     transform.GetAngleY(),
-                     transform.GetAngleZ()) +
-                     transform.GetTranslation()
-    )
+    if transform.GetDimension() == 2:
+        return np.array((transform.GetAngle(),) +
+                         transform.GetTranslation(),
+        )
+
+    elif transform.GetDimension() == 3:
+        return np.array((transform.GetAngleX(),
+                         transform.GetAngleY(),
+                         transform.GetAngleZ()) +
+                         transform.GetTranslation()
+        )
 
 
 def parameters_to_euler_transform(params):
@@ -226,13 +238,20 @@ def parameters_to_euler_transform(params):
         A sitk rigid transform object
     """
 
-    transform = sitk.Euler3DTransform()
-    transform.SetRotation(*params[:3])
-    transform.SetTranslation(params[3:])
-    return transform
+    if len(params) == 3:
+        transform = sitk.Euler2DTransform()
+        transform.SetAngle(params[0])
+        transform.SetTranslation(params[1:])
+        return transform
+
+    elif len(params) == 6:
+        transform = sitk.Euler3DTransform()
+        transform.SetRotation(*params[:3])
+        transform.SetTranslation(params[3:])
+        return transform
 
 
-def physical_parameters_to_affine_matrix(params, center):
+def physical_parameters_to_affine_matrix_3d(params, center):
     """
     Convert separate affine transform parameters to an affine matrix
 
@@ -275,7 +294,7 @@ def physical_parameters_to_affine_matrix(params, center):
     return np.matmul(x, aff)
 
 
-def matrix_to_displacement_field(matrix, shape, spacing=None):
+def matrix_to_displacement_field(matrix, shape, spacing=None, centered=False):
     """
     Convert an affine matrix into a displacement vector field
 
@@ -347,9 +366,11 @@ def bspline_parameters_to_transform(parameters):
         A sitk.BSplineTransform object
     """
 
-    t = sitk.BSplineTransform(3, 3)
-    t.SetFixedParameters(parameters[:18])
-    t.SetParameters(parameters[18:])
+    # number of fixed parameters depends on dimension, stored in parameters[0]
+    nfp = 10 if parameters[0] == 2 else 18
+    t = sitk.BSplineTransform(parameters[0], 3)
+    t.SetFixedParameters(parameters[1:nfp+1])
+    t.SetParameters(parameters[nfp+1:])
     return t
 
 
@@ -390,7 +411,7 @@ def bspline_to_displacement_field(
         shape[::-1], origin[::-1], spacing[::-1],
         direction[::-1, ::-1].ravel(),
     )
-    return sitk.GetArrayFromImage(df).astype(np.float32)[..., ::-1]
+    return sitk.GetArrayViewFromImage(df).astype(np.float32)[..., ::-1]
 
 
 # TODO: function that takes a numpy array and return transform type
@@ -449,9 +470,17 @@ def transform_list_to_composite_transform(transform_list, spacing=None, origin=N
         All transforms in the given list compressed into a sitk.CompositTransform 
     """
 
-    transform = sitk.CompositeTransform(3)
+    # determine dimension
+    if len(transform_list[0].shape) == 2:
+        ndims = 2 if transform_list[0].shape == (3, 3) else 3
+    elif len(transform_list[0].shape) > 2:
+        ndims = transform_list[0].ndim - 1
+    else:
+        ndims = transform_list[0][0]
+
+    transform = sitk.CompositeTransform(ndims)
     for iii, t in enumerate(transform_list):
-        if t.shape == (4, 4):
+        if t.shape in [(3, 3), (4, 4)]:
             t = matrix_to_affine_transform(t)
         elif len(t.shape) == 1:
             t = bspline_parameters_to_transform(t)
@@ -463,7 +492,13 @@ def transform_list_to_composite_transform(transform_list, spacing=None, origin=N
     return transform
 
 
-def create_zarr(path, shape, chunks, dtype, chunk_locked=False, client=None):
+def create_zarr(
+    path,
+    shape,
+    chunks,
+    dtype,
+    multithreaded=False,
+):
     """
     Create a new zarr array on disk
 
@@ -481,43 +516,24 @@ def create_zarr(path, shape, chunks, dtype, chunk_locked=False, client=None):
     dtype : a numpy.dtype object
         The data type of the new zarr array data
 
-    chunk_locked : bool (default: False)
-        DEPRECATED
-
-    client : dask.client (default: None)
-        DEPRECATED
-
     Returns
     -------
     zarr_array : zarr array
         Reference to the newly created zarr array on disk
     """
 
-    compressor = Blosc(
-        cname='zstd', clevel=4, shuffle=Blosc.BITSHUFFLE,
-    )
-    zarr_disk = zarr.open(
+    synchronizer = None
+    if multithreaded:
+        blosc.use_threads = True
+        synchronizer = zarr.ThreadSynchronizer()
+    return zarr.open(
         path, 'w',
         shape=shape,
         chunks=chunks,
         dtype=dtype,
-        compressor=compressor,
+        synchronizer=synchronizer,
     )
 
-    # this code is currently never used within bigstream
-    # keeping it aroung in case a use case comes up
-    if chunk_locked:
-        indexer = BasicIndexer(slice(None), zarr_disk)
-        keys = (zarr_disk._chunk_key(idx.chunk_coords) for idx in indexer)
-        lock = {key: Lock(key, client=client) for key in keys}
-        lock['.zarray'] = Lock('.zarray', client=client)
-        zarr_disk = zarr.open(
-            store=zarr_disk.store, path=zarr_disk.path,
-            synchronizer=lock, mode='r+',
-        )
-
-    return zarr_disk
-    
 
 def numpy_to_zarr(array, chunks, path):
     """

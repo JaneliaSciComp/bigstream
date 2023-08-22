@@ -160,7 +160,7 @@ def _run_apply_transform(args):
             coords_spacing=voxel_spacing,
             cluster=cluster,
         )
-        print('Save warped coords to', args.output_coords)
+        print('Save warped coords to', args.output_coords, flush=True)
         np.savetxt(args.output_coords, warped_coords, delimiter=',')
         return args.output_coords
     else:

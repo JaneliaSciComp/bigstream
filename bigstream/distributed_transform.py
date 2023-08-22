@@ -115,7 +115,8 @@ def distributed_apply_transform(
         blocks_coords.append(block_coords)
 
     print('Transform', len(blocks_coords), 'blocks',
-          'with partition size' ,blocksize_array)
+          'with partition size' ,blocksize_array,
+          flush=True)
     # align all blocks
     futures = cluster.client.map(
         _transform_single_block,
@@ -166,7 +167,8 @@ def _transform_single_block(block_coords,
     print('Block coords:',block_coords , 
           'Block origin:', fix_origin,
           'Block size:', blocksize,
-          'Overlap:', blockoverlaps)
+          'Overlap:', blockoverlaps,
+          flush=True)
     fix_block = full_fix[block_coords]
 
     # read relevant region of transforms
@@ -329,7 +331,7 @@ def distributed_apply_transform_to_coordinates(
     print('Max voxel coords:', maxvoxel,
           'Block size:', blocksize,
           'Voxel spacing:', coords_spacing,
-          'NBlocks:', nblocks)
+          'NBlocks:', nblocks, flush=True)
     blocks_coords = []
     blocks_points = []
     for (i, j, k) in np.ndindex(*nblocks):
@@ -365,7 +367,8 @@ def _transform_coords(block_coords,
                       coords_spacing,
                       transform_list):
     print('Apply block transform: ', block_coords,
-          'to', len(coord_indexed_values), 'points')
+          'to', len(coord_indexed_values), 'points',
+          flush=True)
     # read relevant region of transform
     point_coords = coord_indexed_values[:, 0:3]
     cropped_transforms = []
@@ -378,20 +381,20 @@ def _transform_coords(block_coords,
             cropped_transforms.append(transform)
 
     # apply transforms
-    warped_point_coords = cs_transform.apply_transform_to_coordinates(
-        point_coords,
+    return cs_transform.apply_transform_to_coordinates(
+        coord_indexed_values,
         cropped_transforms,
         coords_spacing,
     )
-    points_values = coord_indexed_values[:, 3:]
+    # points_values = coord_indexed_values[:, 3:]
 
-    if points_values.shape[1] == 0:
-        return warped_point_coords
-    else:
-        warped_coords_indexed_values = np.empty_like(coord_indexed_values)
-        warped_coords_indexed_values[:, 0:3] = warped_point_coords
-        warped_coords_indexed_values[:, 3:] = points_values
-        return warped_coords_indexed_values
+    # if points_values.shape[1] == 0:
+    #     return warped_point_coords
+    # else:
+    #     warped_coords_indexed_values = np.empty_like(coord_indexed_values)
+    #     warped_coords_indexed_values[:, 0:3] = warped_point_coords
+    #     warped_coords_indexed_values[:, 3:] = points_values
+    #     return warped_coords_indexed_values
 
 
 @cluster
@@ -468,7 +471,8 @@ def distributed_invert_displacement_vector_field(
 
     # invert all blocks
     print('Invert', len(blocks_coords), 'blocks',
-          'with partition size', blocksize_array)
+          'with partition size', blocksize_array,
+          flush=True)
     futures = cluster.client.map(
         _invert_block,
         blocks_coords,
@@ -508,7 +512,7 @@ def _invert_block(block_coords,
     """
     Invert block function
     """
-    print('Invert block:', block_coords)
+    print('Invert block:', block_coords, flush=True)
 
     block_vectorfield = full_vectorfield[block_coords]
     inverse_block = cs_transform.invert_displacement_vector_field(
@@ -518,7 +522,8 @@ def _invert_block(block_coords,
     print('Computed inverse field for block', 
           block_coords, block_vectorfield.shape,
           '->',
-          inverse_block.shape)
+          inverse_block.shape,
+          flush=True)
     # crop out overlap
     inverse_block_coords_list = []
     for axis in range(inverse_block.ndim - 1):
@@ -544,6 +549,7 @@ def _invert_block(block_coords,
     print('Completed inverse vector field for block', 
           block_coords, block_vectorfield.shape,
           '->',
-          inverse_block_coords, inverse_block.shape)
+          inverse_block_coords, inverse_block.shape,
+          flush=True)
     # return result
     return inverse_block_coords, inverse_block

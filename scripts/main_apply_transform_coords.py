@@ -75,7 +75,7 @@ def _define_args():
                              help='Local transform chunk size')
     args_parser.add_argument('--partition-size',
                              dest='partition_size',
-                             default=32,
+                             default=128,
                              type=int,
                              help='Partition size for splitting the work')
 

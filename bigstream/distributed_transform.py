@@ -343,8 +343,6 @@ def distributed_apply_transform_to_coordinates(
         not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
         pcoords = coordinates[ not_too_low * not_too_high ]
         if pcoords.size != 0:
-            print('Block: ', block_coords,
-                  'number of point coordinates:', pcoords.size)
             blocks_coords.append(block_coords)
             blocks_points.append(pcoords)
 
@@ -366,7 +364,8 @@ def _transform_coords(block_coords,
                       coord_indexed_values,
                       coords_spacing,
                       transform_list):
-    print('Apply block transform: ', block_coords)
+    print('Apply block transform: ', block_coords,
+          'to', len(coord_indexed_values), 'points')
     # read relevant region of transform
     point_coords = coord_indexed_values[:, 0:3]
     cropped_transforms = []

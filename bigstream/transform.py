@@ -24,6 +24,7 @@ def apply_transform(
     ----------
     fix : ndarray
         the fixed image
+        Optionally, this can be a tuple specifying a shape.
 
     mov : ndarray
         the moving image; `fix.ndim` must equal `mov.ndim`
@@ -86,11 +87,6 @@ def apply_transform(
         ncores = psutil.cpu_count(logical=False)
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(2*ncores)
 
-    # convert images to sitk objects
-    dtype = fix.dtype
-    fix = sitk.Cast(ut.numpy_to_sitk(fix, fix_spacing, fix_origin), sitk.sitkFloat32)
-    mov = sitk.Cast(ut.numpy_to_sitk(mov, mov_spacing, mov_origin), sitk.sitkFloat32)
-
     # construct transform
     fix_spacing = np.array(fix_spacing)
     if transform_spacing is None: transform_spacing = fix_spacing
@@ -101,7 +97,21 @@ def apply_transform(
     # set up resampler object
     resampler = sitk.ResampleImageFilter()
     resampler.SetNumberOfThreads(2*ncores)
-    resampler.SetReferenceImage(fix)
+
+    # set reference data
+    if isinstance(fix, tuple):
+        dtype = mov.dtype
+        resampler.SetSize(fix[::-1])
+        resampler.SetOutputSpacing(fix_spacing[::-1])
+        if fix_origin is not None:
+            resampler.SetOutputOrigin(fix_origin[::-1])
+    else:
+        dtype = fix.dtype
+        fix = sitk.Cast(ut.numpy_to_sitk(fix, fix_spacing, fix_origin), sitk.sitkFloat32)
+        resampler.SetReferenceImage(fix)
+
+    # set moving image and transform
+    mov = sitk.Cast(ut.numpy_to_sitk(mov, mov_spacing, mov_origin), sitk.sitkFloat32)
     resampler.SetTransform(transform)
 
     # check for NN interpolation
@@ -114,7 +124,7 @@ def apply_transform(
 
     # execute, return as numpy array
     resampled = resampler.Execute(mov)
-    return sitk.GetArrayFromImage(resampled).astype(dtype)
+    return sitk.GetArrayViewFromImage(resampled).astype(dtype)
 
 
 def apply_transform_to_coordinates(
@@ -160,10 +170,11 @@ def apply_transform_to_coordinates(
     for iii, transform in enumerate(transform_list[::-1]):
 
         # if transform is an affine matrix
-        if transform.shape == (4, 4):
+        if len(transform.shape) == 2:
 
             # matrix vector multiply
-            mm, tt = transform[:3, :3], transform[:3, -1]
+            ndims = transform.shape[0] - 1
+            mm, tt = transform[:ndims, :ndims], transform[:ndims, -1]
             coordinates = np.einsum('...ij,...j->...i', mm, coordinates) + tt
 
         # if transform is a deformation vector field
@@ -196,7 +207,8 @@ def apply_transform_to_coordinates(
 def compose_displacement_vector_fields(
     first_field,
     second_field,
-    spacing,
+    first_spacing,
+    second_spacing,
 ):
     """
     Compose two displacement vector fields into a single field
@@ -209,25 +221,30 @@ def compose_displacement_vector_fields(
     second_field : nd-array
         The second field
 
-    spacing : 1d-array
-        The voxel spacing for the two fields (fields must have same spacing)
+    first_spacing : 1d-array
+        The voxel spacing for the first field
+
+    second_spacing : 1d-array
+        The voxel spacing for the second field
 
     Returns
     -------
     composite_field : nd-array
         The single field composition of first_field and second_field
+        The second field is the one learned second. In this case, the composition
+        is going to be on the same voxel grid and spacing as the second field.
     """
 
     # container for warped first field
-    first_field_warped = np.empty_like(first_field)
+    first_field_warped = np.empty_like(second_field)
 
     # loop over components
     for iii in range(3):
 
         # warp first field with second
         first_field_warped[..., iii] = apply_transform(
-            first_field[..., iii], first_field[..., iii],
-            spacing, spacing,
+            second_field[..., iii], first_field[..., iii],
+            second_spacing, first_spacing,
             transform_list=[second_field,],
             extrapolate_with_nn=True,
         )
@@ -236,53 +253,64 @@ def compose_displacement_vector_fields(
     return first_field_warped + second_field
 
 
-def compose_transforms(transform_one, transform_two, spacing):
+def compose_transforms(
+    first_transform,
+    second_transform,
+    first_spacing,
+    second_spacing,
+):
     """
     Compose two transforms into a single transform
 
     Parameters
     ----------
-    transform_one : nd-array
+    first_transform : nd-array
         Can be either a 4x4 affine matrix or a displacement vector field
 
-    transform_two : nd-array
+    second_transform : nd-array
         Can be either a 4x4 affine matrix or a displacement vector field
 
-    spacing : 1d-array
-        The voxel spacing for the two transforms (transforms must have same spacing)
-        Ignored for affine matrices.
+    first_spacing : 1d-array
+        The voxel spacing for the first transform
+        Ignored for affine transforms (just put in a dummy value)
+
+    second_spacing : 1d-array
+        The voxel spacing for the second transform
+        Ignored for affine transforms (just put in a dummy value)
 
     Returns
     -------
     composite_transform : nd-array
-        The single transform composition of transform_one and transform_two
+        The single transform composition of first_transform and second_transform
         If both given transforms are affine this is a 4x4 matrix. Otherwise,
         it is a displacement vector field.
     """
 
     # two affines
-    if transform_one.shape == (4, 4) and transform_two.shape == (4, 4):
-        return np.matmul(transform_one, transform_two)
+    if len(first_transform.shape) == 2 and len(second_transform.shape) == 2:
+        return np.matmul(first_transform, second_transform)
 
     # one affine, two field
-    elif transform_one.shape == (4, 4):
-        transform_one = ut.matrix_to_displacement_field(
-            transform_one, transform_two.shape[:-1], spacing,
+    elif len(first_transform.shape) == 2:
+        first_transform = ut.matrix_to_displacement_field(
+            first_transform, second_transform.shape[:-1], second_spacing,
         )
+        first_spacing = second_spacing
 
     # one field, two affine
-    elif transform_two.shape == (4, 4):
-        transform_two = ut.matrix_to_displacement_field(
-            transform_two, transform_one.shape[:-1], spacing,
+    elif len(second_transform.shape) == 2:
+        second_transform = ut.matrix_to_displacement_field(
+            second_transform, first_transform.shape[:-1], first_spacing,
         )
+        second_spacing = first_spacing
 
     # compose fields
     return compose_displacement_vector_fields(
-        transform_one, transform_two, spacing,
+        first_transform, second_transform, first_spacing, second_spacing,
     )
 
 
-def compose_transform_list(transforms, spacing):
+def compose_transform_list(transforms, spacings):
     """
     Compose a list of transforms into a single transform
 
@@ -292,9 +320,9 @@ def compose_transform_list(transforms, spacing):
         Elements of list must be either 4x4 affine matrices or displacement
         vector fields
 
-    spacing : 1d-array
-        The voxel spacing of all transforms in the list (all transforms must
-        have the same spacing). Ignored for affine transforms.
+    spacings : list of 1d-arrays
+        The voxel spacing of all transforms in the list
+        Ignored for affine transforms (just put in a dummy value)
 
     Returns
     -------
@@ -304,9 +332,17 @@ def compose_transform_list(transforms, spacing):
         it is a displacement vector field.
     """
 
+    # ensure spacings is a list
+    if not isinstance(spacings, list):
+        spacings = [spacings,] * len(transforms)
+
     transform = transforms.pop()
+    transform_spacing = spacings.pop()
     while transforms:
-        transform = compose_transforms(transforms.pop(), transform, spacing)
+        transform = compose_transforms(
+            transforms.pop(), transform,
+            spacings.pop(), transform_spacing,
+        )
     return transform
 
 
@@ -356,11 +392,11 @@ def invert_displacement_vector_field(
 
     # iterate to invert
     for i in range(iterations):
-        inv -= compose_transforms(root, inv, spacing)
+        inv -= compose_transforms(root, inv, spacing, spacing)
 
     # square-compose inv order times
     for i in range(order):
-        inv = compose_transforms(inv, inv, spacing)
+        inv = compose_transforms(inv, inv, spacing, spacing)
 
     # return result
     return inv
@@ -401,7 +437,7 @@ def _displacement_field_composition_square_root(
 
     # iterate
     for i in range(iterations):
-        residual = (field - compose_transforms(root, root, spacing))
+        residual = (field - compose_transforms(root, root, spacing, spacing))
         root += 0.5 * residual
 
     # return result

@@ -69,10 +69,13 @@ def _define_args():
                              '--vector-field-transform-subpath',
                              dest='local_transform_subpath',
                              help='Local transformation dataset to be applied')
-
+    args_parser.add_argument('--local-transform-blocksize',
+                             dest='local_transform_blocksize',
+                             type=_inttuple,
+                             help='Local transform chunk size')
     args_parser.add_argument('--partition-size',
                              dest='partition_size',
-                             default=30,
+                             default=32,
                              type=int,
                              help='Partition size for splitting the work')
 
@@ -131,6 +134,13 @@ def _run_apply_transform(args):
     local_deform, _ = n5_utils.open(args.local_transform,
                                     args.local_transform_subpath)
 
+    if (args.local_transform_blocksize is not None and
+        len(args.local_transform_blocksize) > 0):
+        local_deform_blocksize = args.local_transform_blocksize[::-1]
+    else:
+        # default to output blocksize
+        local_deform_blocksize = (args.partition_size,) * (local_deform.ndim-1)
+
     if args.output_coords:
         if args.affine_transformations:
             affine_transforms_list = [np.loadtxt(tfile)
@@ -146,7 +156,7 @@ def _run_apply_transform(args):
         warped_coords = distributed_apply_transform_to_coordinates(
             coords,
             affine_transforms_list + [local_deform], # transform_list
-            partition_size=args.partition_size,
+            local_deform_blocksize,
             coords_spacing=voxel_spacing,
             cluster=cluster,
         )

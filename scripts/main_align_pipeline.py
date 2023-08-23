@@ -272,7 +272,7 @@ def _define_ransac_args(ransac_args, args):
                              dest=args._argdest('align_threshold'),
                              type=float,
                              default=2.0,
-                             help='Ransac match threshold')
+                             help='Ransac align threshold')
     ransac_args.add_argument(args._argflag('ransac-fix-spot-detection-threshold'),
                              dest=args._argdest('fix_spot_detection_threshold'),
                              type=float,

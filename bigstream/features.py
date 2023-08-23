@@ -32,7 +32,7 @@ def blob_detection(
     """
 
     wth = white_tophat(image, max_blob_radius)
-    print('!!!!! DeTECT SPOTS ARGS', **kwargs)
+    print('!!!!! DeTECT SPOTS ARGS', kwargs)
     spots = detect_spots_log(
         wth,
         min_blob_radius,

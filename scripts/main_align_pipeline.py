@@ -273,6 +273,27 @@ def _define_ransac_args(ransac_args, args):
                              type=float,
                              default=2.0,
                              help='Ransac match threshold')
+
+    ransac_args.add_argument(args._argflag('ransac-fix-spot-detection-threshold'),
+                             dest=args._argdest('fix_spot_detection_threshold'),
+                             type=float,
+                             default=0,
+                             help='Fix spot detection threshold')
+    ransac_args.add_argument(args._argflag('ransac-fix-spot-detection-threshold-rel'),
+                             dest=args._argdest('fix_spot_detection_threshold_rel'),
+                             type=float,
+                             default=0.05,
+                             help='Fix spot detection rel threshold')
+    ransac_args.add_argument(args._argflag('ransac-mov-spot-detection-threshold'),
+                             dest=args._argdest('mov_spot_detection_threshold'),
+                             type=float,
+                             default=0,
+                             help='Mov spot detection threshold')
+    ransac_args.add_argument(args._argflag('ransac-mov-spot-detection-threshold-rel'),
+                             dest=args._argdest('mov_spot_detection_threshold_rel'),
+                             type=float,
+                             default=0.01,
+                             help='Mov spot detection rel threshold')
     ransac_args.add_argument(args._argflag('ransac-blob-sizes'),
                              dest=args._argdest('blob_sizes'),
                              metavar='s1,s2,...,sn',
@@ -354,7 +375,10 @@ def _check_attr(args, argdescriptor, argname):
 
 
 def _extract_ransac_args(args, argdescriptor):
-    ransac_args = {}
+    ransac_args = {
+        'fix_spot_detection_kwargs': {},
+        'mov_spot_detection_kwargs': {},
+    }
     if _check_attr(args, argdescriptor, 'num_sigma_max'):
         ransac_args['num_sigma_max'] = getattr(
             args, argdescriptor._argdest('num_sigma_max'))
@@ -373,6 +397,18 @@ def _extract_ransac_args(args, argdescriptor):
     if _check_attr(args, argdescriptor, 'align_threshold'):
         ransac_args['align_threshold'] = getattr(
             args, argdescriptor._argdest('align_threshold'))
+    if _check_attr(args, argdescriptor, 'fix_spot_detection_threshold'):
+        ransac_args['fix_spot_detection_kwargs']['threshold'] = getattr(
+            args, argdescriptor._argdest('fix_spot_detection_threshold'))
+    if _check_attr(args, argdescriptor, 'fix_spot_detection_threshold_rel'):
+        ransac_args['fix_spot_detection_kwargs']['threshold_rel'] = getattr(
+            args, argdescriptor._argdest('fix_spot_detection_threshold_rel'))
+    if _check_attr(args, argdescriptor, 'mov_spot_detection_threshold'):
+        ransac_args['mov_spot_detection_kwargs']['threshold'] = getattr(
+            args, argdescriptor._argdest('mov_spot_detection_threshold'))
+    if _check_attr(args, argdescriptor, 'mov_spot_detection_threshold_rel'):
+        ransac_args['mov_spot_detection_kwargs']['threshold_rel'] = getattr(
+            args, argdescriptor._argdest('mov_spot_detection_threshold_rel'))
     if _check_attr(args, argdescriptor, 'blob_sizes'):
         ransac_args['blob_sizes'] = getattr(
             args, argdescriptor._argdest('blob_sizes'))

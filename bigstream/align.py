@@ -220,7 +220,6 @@ def feature_point_ransac_affine_align(
         fix_kwargs = {
             'num_sigma':min(blob_sizes[1] - blob_sizes[0], num_sigma_max),
             'exclude_border':cc_radius,
-            'mask':fix_mask,
         }
         fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
         fix_spots = features.blob_detection(
@@ -238,7 +237,6 @@ def feature_point_ransac_affine_align(
         mov_kwargs = {
             'num_sigma':min(blob_sizes[1] - blob_sizes[0], num_sigma_max),
             'exclude_border':cc_radius,
-            'mask':mov_mask,
         }
         mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
         mov_spots = features.blob_detection(

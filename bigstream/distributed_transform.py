@@ -370,7 +370,8 @@ def _transform_coords(block_coords,
           'to', len(coord_indexed_values), 'points',
           flush=True)
     # read relevant region of transform
-    point_coords = coord_indexed_values[:, 0:3]
+    points_coords = coord_indexed_values[:, 0:3]
+    points_values = coord_indexed_values[:, 3:]
     cropped_transforms = []
     for _, transform in enumerate(transform_list):
         if transform.shape != (4, 4):
@@ -381,20 +382,16 @@ def _transform_coords(block_coords,
             cropped_transforms.append(transform)
 
     # apply transforms
-    return cs_transform.apply_transform_to_coordinates(
-        coord_indexed_values,
+    warped_coords = cs_transform.apply_transform_to_coordinates(
+        points_coords,
         cropped_transforms,
-        coords_spacing,
+        transform_spacing=coords_spacing,
     )
-    # points_values = coord_indexed_values[:, 3:]
 
-    # if points_values.shape[1] == 0:
-    #     return warped_point_coords
-    # else:
-    #     warped_coords_indexed_values = np.empty_like(coord_indexed_values)
-    #     warped_coords_indexed_values[:, 0:3] = warped_point_coords
-    #     warped_coords_indexed_values[:, 3:] = points_values
-    #     return warped_coords_indexed_values
+    warped_coord_indexed_values = np.empty_like(coord_indexed_values)
+    warped_coord_indexed_values[:, 0:3] = warped_coords
+    warped_coord_indexed_values[:, 3:] = points_values
+    return coord_indexed_values #!!!!
 
 
 @cluster

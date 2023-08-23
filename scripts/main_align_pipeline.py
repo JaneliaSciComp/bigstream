@@ -200,7 +200,7 @@ def _define_args(global_descriptor, local_descriptor):
                              dest='local_aligned_name',
                              type=str,
                              help='Local aligned name')
-    args_parser.add_argument('--local-aligned-subpath'
+    args_parser.add_argument('--local-aligned-subpath',
                              dest='local_aligned_subpath',
                              type=str,
                              help='Local aligned subpath (defaults to moving subpath)')

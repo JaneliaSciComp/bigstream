@@ -224,6 +224,7 @@ def feature_point_ransac_affine_align(
         fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
         fix_spots = features.blob_detection(
             fix, blob_sizes[0], blob_sizes[1],
+            mask=fix_mask,
             **fix_kwargs,
         )
     print(f'found {len(fix_spots)} fixed spots')
@@ -241,6 +242,7 @@ def feature_point_ransac_affine_align(
         mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
         mov_spots = features.blob_detection(
             mov, blob_sizes[0], blob_sizes[1],
+            mask=mov_mask,
             **mov_kwargs,
         )
     print(f'found {len(mov_spots)} moving spots')

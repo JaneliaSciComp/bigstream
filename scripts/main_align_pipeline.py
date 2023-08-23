@@ -275,7 +275,7 @@ def _define_ransac_args(ransac_args, args):
                              help='Ransac align threshold')
     ransac_args.add_argument(args._argflag('ransac-fix-spot-detection-threshold'),
                              dest=args._argdest('fix_spot_detection_threshold'),
-                             type=float,
+                             type=int,
                              default=0,
                              help='Fix spot detection threshold')
     ransac_args.add_argument(args._argflag('ransac-fix-spot-detection-threshold-rel'),

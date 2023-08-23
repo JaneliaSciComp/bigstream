@@ -339,12 +339,12 @@ def distributed_apply_transform_to_coordinates(
         stop = start + blocksize_array
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
 
-        lower_bound = np.array((i, j, k)) * coords_spacing * blocksize_array
-        upper_bound = lower_bound + blocksize_array * coords_spacing
-        not_too_low = np.all(coordinates[:, 0:3] >= lower_bound, axis=1)
-        not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
-        pcoords = coordinates[ not_too_low * not_too_high ]
-        if pcoords.size != 0:
+        lower_bound = np.array((i, j, k)) * blocksize_array
+        upper_bound = lower_bound + blocksize_array
+        not_too_low = np.all(coordinates[:, 0:3]/coords_spacing >= lower_bound, axis=1)
+        not_too_high = np.all(coordinates[:, 0:3]/coords_spacing < upper_bound, axis=1)
+        pcoords = coordinates[not_too_low * not_too_high]
+        if pcoords.size > 0:
             blocks_coords.append(block_coords)
             blocks_points.append(pcoords)
 

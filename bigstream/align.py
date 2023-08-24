@@ -225,6 +225,7 @@ def feature_point_ransac_affine_align(
             'exclude_border':cc_radius,
         }
         fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
+        print('fixed spots detection using', fix_kwargs, flush=True)
         fix_spots = features.blob_detection(
             fix, blob_sizes[0], blob_sizes[1],
             mask=fix_mask,
@@ -243,6 +244,7 @@ def feature_point_ransac_affine_align(
             'exclude_border':cc_radius,
         }
         mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
+        print('moving spots detection using', mov_kwargs, flush=True)
         mov_spots = features.blob_detection(
             mov, blob_sizes[0], blob_sizes[1],
             mask=mov_mask,

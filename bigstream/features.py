@@ -37,7 +37,8 @@ def blob_detection(
 
     processed_image = np.copy(image)
     if winsorize_limits is not None:
-        processed_image = winsorize(processed_image, limits=winsorize_limits)
+        processed_image = winsorize(processed_image, limits=winsorize_limits,
+                                    inplace=True)
     if background_subtract:
         processed_image = white_tophat(processed_image, max_blob_radius)
     spots = detect_spots_log(

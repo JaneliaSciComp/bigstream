@@ -285,8 +285,8 @@ def _define_ransac_args(ransac_args, args):
                              help='Fix spot detection rel threshold')
     ransac_args.add_argument(args._argflag('ransac-fix-spot-winsorize-limits'),
                              dest=args._argdest('fix_spot_winsorize_limits'),
-                             type=_intlist,
-                             default=[2,90],
+                             type=_floattuple,
+                             default=[.2,.9],
                              help='Fix spot winsorize limits to elimitate outliers')
     ransac_args.add_argument(args._argflag('ransac-mov-spot-detection-threshold'),
                              dest=args._argdest('mov_spot_detection_threshold'),
@@ -300,8 +300,8 @@ def _define_ransac_args(ransac_args, args):
                              help='Mov spot detection rel threshold')
     ransac_args.add_argument(args._argflag('ransac-mov-spot-winsorize-limits'),
                              dest=args._argdest('mov_spot_winsorize_limits'),
-                             type=_intlist,
-                             default=[2,90],
+                             type=_floattuple,
+                             default=[.2,.9],
                              help='Mov spot winsorize limits to elimitate outliers')
     ransac_args.add_argument(args._argflag('ransac-blob-sizes'),
                              dest=args._argdest('blob_sizes'),

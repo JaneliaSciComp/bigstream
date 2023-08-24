@@ -81,13 +81,16 @@ def feature_point_ransac_affine_align(
     nspots=5000,
     match_threshold=0.7,
     max_spot_match_distance=None,
+    point_matches_threshold=50,
     align_threshold=2.0,
     diagonal_constraint=0.25,
     fix_spot_detection_kwargs={},
     mov_spot_detection_kwargs={},
     ransac_affine_kwargs={},
     fix_spots=None,
+    fix_spots_count_threshold=100,
     mov_spots=None,
+    mov_spots_count_threshold=100,
     fix_mask=None,
     mov_mask=None,
     fix_origin=None,
@@ -228,7 +231,7 @@ def feature_point_ransac_affine_align(
             **fix_kwargs,
         )
     print(f'found {len(fix_spots)} fixed spots')
-    if len(fix_spots) < 100:
+    if len(fix_spots) < fix_spots_count_threshold:
         print('insufficient fixed spots found, returning default', flush=True)
         return default
 
@@ -246,7 +249,7 @@ def feature_point_ransac_affine_align(
             **mov_kwargs,
         )
     print(f'found {len(mov_spots)} moving spots')
-    if len(mov_spots) < 100:
+    if len(mov_spots) < mov_spots_count_threshold:
         print('insufficient moving spots found, returning default', flush=True)
         return default
 
@@ -287,8 +290,8 @@ def feature_point_ransac_affine_align(
         fix_spots, mov_spots,
         correlations, match_threshold,
     )
-    print(f'{len(fix_spots)} matched spots')
-    if len(fix_spots) < 50 or len(mov_spots) < 50:
+    print(f'{len(fix_spots)} - {len(mov_spots)} matched spots')
+    if len(fix_spots) < point_matches_threshold or len(mov_spots) < point_matches_threshold:
         print('insufficient point matches found, returning default', flush=True)
         return default
 

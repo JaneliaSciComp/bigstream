@@ -299,6 +299,21 @@ def _define_ransac_args(ransac_args, args):
                              type=_intlist,
                              default=[6, 20],
                              help='Ransac blob sizes')
+    ransac_args.add_argument(args._argflag('ransac-fix-spots-count-threshold'),
+                             dest=args._argdest('fix_spots_count_threshold'),
+                             type=int,
+                             default=100,
+                             help='Ransac fix spots count limit')
+    ransac_args.add_argument(args._argflag('ransac-mov-spots-count-threshold'),
+                             dest=args._argdest('mov_spots_count_threshold'),
+                             type=int,
+                             default=100,
+                             help='Ransac mov spots count limit')
+    ransac_args.add_argument(args._argflag('ransac-point-matches-threshold'),
+                             dest=args._argdest('point_matches_threshold'),
+                             type=int,
+                             default=50,
+                             help='Ransac point matches count limit')
 
 
 def _define_affine_args(affine_args, args):
@@ -411,6 +426,15 @@ def _extract_ransac_args(args, argdescriptor):
     if _check_attr(args, argdescriptor, 'blob_sizes'):
         ransac_args['blob_sizes'] = getattr(
             args, argdescriptor._argdest('blob_sizes'))
+    if _check_attr(args, argdescriptor, 'fix_spots_count_threshold'):
+        ransac_args['fix_spots_count_threshold'] = getattr(
+            args, argdescriptor._argdest('fix_spots_count_threshold'))
+    if _check_attr(args, argdescriptor, 'mov_spots_count_threshold'):
+        ransac_args['mov_spots_count_threshold'] = getattr(
+            args, argdescriptor._argdest('mov_spots_count_threshold'))
+    if _check_attr(args, argdescriptor, 'point_matches_threshold'):
+        ransac_args['point_matches_threshold'] = getattr(
+            args, argdescriptor._argdest('point_matches_threshold'))
     return ransac_args
 
 

@@ -283,6 +283,11 @@ def _define_ransac_args(ransac_args, args):
                              type=float,
                              default=0.05,
                              help='Fix spot detection rel threshold')
+    ransac_args.add_argument(args._argflag('ransac-fix-spot-winsorize-limits'),
+                             dest=args._argdest('fix_spot_winsorize_limits'),
+                             type=_intlist,
+                             default=[2,90],
+                             help='Fix spot winsorize limits to elimitate outliers')
     ransac_args.add_argument(args._argflag('ransac-mov-spot-detection-threshold'),
                              dest=args._argdest('mov_spot_detection_threshold'),
                              type=float,
@@ -293,6 +298,11 @@ def _define_ransac_args(ransac_args, args):
                              type=float,
                              default=0.01,
                              help='Mov spot detection rel threshold')
+    ransac_args.add_argument(args._argflag('ransac-mov-spot-winsorize-limits'),
+                             dest=args._argdest('mov_spot_winsorize_limits'),
+                             type=_intlist,
+                             default=[2,90],
+                             help='Mov spot winsorize limits to elimitate outliers')
     ransac_args.add_argument(args._argflag('ransac-blob-sizes'),
                              dest=args._argdest('blob_sizes'),
                              metavar='s1,s2,...,sn',
@@ -417,12 +427,18 @@ def _extract_ransac_args(args, argdescriptor):
     if _check_attr(args, argdescriptor, 'fix_spot_detection_threshold_rel'):
         ransac_args['fix_spot_detection_kwargs']['threshold_rel'] = getattr(
             args, argdescriptor._argdest('fix_spot_detection_threshold_rel'))
+    if _check_attr(args, argdescriptor, 'fix_spot_winsorize_limits'):
+        ransac_args['fix_spot_detection_kwargs']['winsorize_limits'] = getattr(
+            args, argdescriptor._argdest('fix_spot_winsorize_limits'))
     if _check_attr(args, argdescriptor, 'mov_spot_detection_threshold'):
         ransac_args['mov_spot_detection_kwargs']['threshold'] = getattr(
             args, argdescriptor._argdest('mov_spot_detection_threshold'))
     if _check_attr(args, argdescriptor, 'mov_spot_detection_threshold_rel'):
         ransac_args['mov_spot_detection_kwargs']['threshold_rel'] = getattr(
             args, argdescriptor._argdest('mov_spot_detection_threshold_rel'))
+    if _check_attr(args, argdescriptor, 'mov_spot_winsorize_limits'):
+        ransac_args['mov_spot_detection_kwargs']['winsorize_limits'] = getattr(
+            args, argdescriptor._argdest('mov_spot_winsorize_limits'))
     if _check_attr(args, argdescriptor, 'blob_sizes'):
         ransac_args['blob_sizes'] = getattr(
             args, argdescriptor._argdest('blob_sizes'))

@@ -1,4 +1,5 @@
 import numpy as np
+import time
 from fishspot.filter import white_tophat, apply_foreground_mask
 from fishspot.detect import detect_spots_log
 from scipy.stats.mstats import winsorize
@@ -34,11 +35,13 @@ def blob_detection(
         detected blobs. The last column is the image intensity at the
         detected coordinate location.
     """
-
     processed_image = np.copy(image)
+    start_time = time.time()
     if winsorize_limits is not None:
         processed_image = winsorize(processed_image, limits=winsorize_limits,
                                     inplace=True)
+        done_winsorize_time = time.time()
+        print(f'Winsorization completed in {done_winsorize_time-start_time}s')
     if background_subtract:
         processed_image = white_tophat(processed_image, max_blob_radius)
     spots = detect_spots_log(
@@ -47,6 +50,8 @@ def blob_detection(
         max_blob_radius,
         **kwargs,
     ).astype(int)
+    done_spots_time = time.time()
+    print(f'Spot detection completed in {done_spots_time-start_time}s')
     if mask is not None: spots = apply_foreground_mask(spots, mask)
     intensities = image[spots[:, 0], spots[:, 1], spots[:, 2]]
     return np.hstack((spots[:, :3], intensities[..., None]))

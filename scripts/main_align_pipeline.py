@@ -286,7 +286,6 @@ def _define_ransac_args(ransac_args, args):
     ransac_args.add_argument(args._argflag('ransac-fix-spot-winsorize-limits'),
                              dest=args._argdest('fix_spot_winsorize_limits'),
                              type=_floattuple,
-                             default=[.02,.02],
                              help='Fix spot winsorize limits to elimitate outliers')
     ransac_args.add_argument(args._argflag('ransac-mov-spot-detection-threshold'),
                              dest=args._argdest('mov_spot_detection_threshold'),
@@ -301,7 +300,6 @@ def _define_ransac_args(ransac_args, args):
     ransac_args.add_argument(args._argflag('ransac-mov-spot-winsorize-limits'),
                              dest=args._argdest('mov_spot_winsorize_limits'),
                              type=_floattuple,
-                             default=[.02,.02],
                              help='Mov spot winsorize limits to elimitate outliers')
     ransac_args.add_argument(args._argflag('ransac-blob-sizes'),
                              dest=args._argdest('blob_sizes'),
@@ -395,7 +393,7 @@ def _define_deform_args(deform_args, args):
 
 def _check_attr(args, argdescriptor, argname):
     attr_value = getattr(args, argdescriptor._argdest(argname), None)
-    return attr_value is not None
+    return (attr_value is not None and attr_value)
 
 
 def _extract_ransac_args(args, argdescriptor):

@@ -61,6 +61,8 @@ def _align_single_block(block_index,
           '\nBlock neighbors: ', block_neighbors,
           flush=True)
 
+    start_align = time.time()
+
     # get the coordinates, read fixed data
     fix_block = full_fix[block_coords]
 
@@ -203,11 +205,14 @@ def _align_single_block(block_index,
         print('Balancing weights failed for', block_index, block_coords,
               traceback.format_exception(e))
 
+    end_align = time.time()
+
     print('Calculated vector field for block',
           block_index,
           block_coords,
           '->',
-          transform.shape)
+          transform.shape,
+          f'in {end_align-start_align}s')
 
     return block_coords, transform
 

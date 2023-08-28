@@ -166,8 +166,8 @@ def _align_single_block(block_index,
             missing_weights = np.zeros_like(weights)
             for neighbor, flag in block_neighbors.items():
                 if not flag:
-                    neighbor_region = tuple(
-                        slices[-1*b][a] for a, b in enumerate(neighbor))
+                    neighbor_region = tuple(slices[-1*b][a]
+                                            for a, b in enumerate(neighbor))
                     region = tuple(slices[b][a]
                                    for a, b in enumerate(neighbor))
                     missing_weights[region] += weights[neighbor_region]
@@ -204,6 +204,7 @@ def _align_single_block(block_index,
               traceback.format_exception(e))
 
     print('Calculated vector field for block',
+          block_index,
           block_coords,
           '->',
           transform.shape)

@@ -37,7 +37,7 @@ def blob_detection(
     """
     processed_image = np.copy(image)
     start_time = time.time()
-    if winsorize_limits is not None:
+    if winsorize_limits:
         processed_image = winsorize(processed_image, limits=winsorize_limits,
                                     inplace=True)
         done_winsorize_time = time.time()

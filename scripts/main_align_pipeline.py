@@ -391,9 +391,16 @@ def _define_deform_args(deform_args, args):
     _define_affine_args(deform_args, args)
 
 
+# _check_attr - check attribute is present
 def _check_attr(args, argdescriptor, argname):
     attr_value = getattr(args, argdescriptor._argdest(argname), None)
-    return (attr_value is not None and attr_value)
+    return attr_value is not None
+
+
+# _check_attr_value - check attribute is present and value is valid
+def _check_attr_value(args, argdescriptor, argname):
+    attr_value = getattr(args, argdescriptor._argdest(argname), None)
+    return attr_value
 
 
 def _extract_ransac_args(args, argdescriptor):
@@ -425,7 +432,7 @@ def _extract_ransac_args(args, argdescriptor):
     if _check_attr(args, argdescriptor, 'fix_spot_detection_threshold_rel'):
         ransac_args['fix_spot_detection_kwargs']['threshold_rel'] = getattr(
             args, argdescriptor._argdest('fix_spot_detection_threshold_rel'))
-    if _check_attr(args, argdescriptor, 'fix_spot_winsorize_limits'):
+    if _check_attr_value(args, argdescriptor, 'fix_spot_winsorize_limits'):
         ransac_args['fix_spot_detection_kwargs']['winsorize_limits'] = getattr(
             args, argdescriptor._argdest('fix_spot_winsorize_limits'))
     if _check_attr(args, argdescriptor, 'mov_spot_detection_threshold'):
@@ -434,7 +441,7 @@ def _extract_ransac_args(args, argdescriptor):
     if _check_attr(args, argdescriptor, 'mov_spot_detection_threshold_rel'):
         ransac_args['mov_spot_detection_kwargs']['threshold_rel'] = getattr(
             args, argdescriptor._argdest('mov_spot_detection_threshold_rel'))
-    if _check_attr(args, argdescriptor, 'mov_spot_winsorize_limits'):
+    if _check_attr_value(args, argdescriptor, 'mov_spot_winsorize_limits'):
         ransac_args['mov_spot_detection_kwargs']['winsorize_limits'] = getattr(
             args, argdescriptor._argdest('mov_spot_winsorize_limits'))
     if _check_attr(args, argdescriptor, 'blob_sizes'):

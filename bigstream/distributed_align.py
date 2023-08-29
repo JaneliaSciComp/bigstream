@@ -143,9 +143,9 @@ def _align_single_block(block_index,
                 transform, fix_block.shape, spacing=fix_spacing,
             )
 
-        print('Completed single block alignment for', block_index)
+        print(f'{time.ctime(time.time())} Completed single block alignment for', block_index)
     except Exception as e:
-        print('Alignment pipeline failed for block', block_index,
+        print(f'{time.ctime(time.time())} Alignment pipeline failed for block', block_index,
               traceback.format_exception(e))
         return
 
@@ -157,7 +157,7 @@ def _align_single_block(block_index,
                          pad, mode='linear_ramp')
         # rebalance if any neighbors are missing
         if not np.all(list(block_neighbors.values())):
-            print('Rebalance', block_index)
+            print(f'{time.ctime(time.time())} Rebalance', block_index)
 
             # define overlap slices
             slices = {}
@@ -198,16 +198,16 @@ def _align_single_block(block_index,
             weights = weights[crop]
 
         # apply weights
-        print('Apply weights for', block_index, block_coords,
+        print(f'{time.ctime(time.time())} Apply weights for', block_index, block_coords,
               'from', weights.shape, 'to', transform.shape)
         transform = transform * weights[..., None]
     except Exception as e:
-        print('Balancing weights failed for', block_index, block_coords,
+        print(f'{time.ctime(time.time())} Balancing weights failed for', block_index, block_coords,
               traceback.format_exception(e))
 
     end_align = time.time()
 
-    print('Calculated vector field for block',
+    print(f'{time.ctime(time.time())} Calculated vector field for block',
           block_index,
           block_coords,
           '->',

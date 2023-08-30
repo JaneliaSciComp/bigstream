@@ -143,10 +143,11 @@ def _align_single_block(block_index,
                 transform, fix_block.shape, spacing=fix_spacing,
             )
 
-        print(f'{time.ctime(time.time())} Completed single block alignment for', block_index)
+        print(f'{time.ctime(time.time())} Completed single block alignment for', 
+              block_index, flush=True)
     except Exception as e:
-        print(f'{time.ctime(time.time())} Alignment pipeline failed for block', block_index,
-              traceback.format_exception(e))
+        print(f'{time.ctime(time.time())} Alignment pipeline failed for block',
+              block_index, traceback.format_exception(e), flush=True)
         return
 
     try:
@@ -157,7 +158,7 @@ def _align_single_block(block_index,
                          pad, mode='linear_ramp')
         # rebalance if any neighbors are missing
         if not np.all(list(block_neighbors.values())):
-            print(f'{time.ctime(time.time())} Rebalance', block_index)
+            print(f'{time.ctime(time.time())} Rebalance', block_index, flush=True)
 
             # define overlap slices
             slices = {}
@@ -194,16 +195,20 @@ def _align_single_block(block_index,
         if np.any(weights.shape != transform.shape[:-1]):
             crop = tuple(slice(0, s) for s in transform.shape[:-1])
             print('Crop weights for', block_index, block_coords,
-                  'from', weights.shape, 'to', transform.shape)
+                  'from', weights.shape, 'to', transform.shape,
+                  flush=True)
             weights = weights[crop]
 
         # apply weights
-        print(f'{time.ctime(time.time())} Apply weights for', block_index, block_coords,
-              'from', weights.shape, 'to', transform.shape)
+        print(f'{time.ctime(time.time())} Apply weights for',
+              block_index, block_coords,
+              'from', weights.shape, 'to', transform.shape,
+              flush=True)
         transform = transform * weights[..., None]
     except Exception as e:
-        print(f'{time.ctime(time.time())} Balancing weights failed for', block_index, block_coords,
-              traceback.format_exception(e))
+        print(f'{time.ctime(time.time())} Balancing weights failed for',
+              block_index, block_coords,
+              traceback.format_exception(e), flush=True)
 
     end_align = time.time()
 
@@ -212,7 +217,8 @@ def _align_single_block(block_index,
           block_coords,
           '->',
           transform.shape,
-          f'in {end_align-start_align}s')
+          f'in {end_align-start_align}s',
+          flush=True)
 
     return block_coords, transform
 
@@ -374,7 +380,7 @@ def distributed_alignment_pipeline(
     # establish all keyword arguments
     steps = [(a, {**kwargs, **b}) for a, b in steps]
 
-    print('Submit alignment for', len(indices), 'bocks')
+    print('Submit alignment for', len(indices), 'bocks', flush=True)
     align_blocks_args = [
         [
             block_info[0],  # block_index
@@ -390,7 +396,8 @@ def distributed_alignment_pipeline(
         ] for block_info in indices
     ]
 
-    print('Align', len(align_blocks_args), 'blocks')
+    print(f'{time.ctime(time.time())} Align',
+          len(align_blocks_args), 'blocks', flush=True)
     futures = cluster.client.map(
         _align_single_block,
         *list(zip(*align_blocks_args)),  # transpose arguments
@@ -403,19 +410,19 @@ def distributed_alignment_pipeline(
             iii = future_keys.index(future.key)
             transform_block_index = indices[iii]
             if result is None:
-                print('Error calculating displacement vector field for block: ',
+                print(f'{time.ctime(time.time())} Error calculating displacement vector field for block: ',
                     transform_block_index,
                     flush=True)
             else:
-                print('Calculated displacement vector field for block: ',
+                print(f'{time.ctime(time.time())} Calculated displacement vector field for block: ',
                     transform_block_index,
                     flush=True)
                 transform_coords, transform_block = result
-                print('Update displacement vector field for block: ',
-                    transform_block_index,
-                    'at', transform_coords,
-                    flush=True)
                 if output_transform is not None:
                     output_transform[transform_coords] += transform_block
+                    print(f'{time.ctime(time.time())} Update displacement vector field for block: ',
+                        transform_block_index,
+                        'at', transform_coords,
+                        flush=True)
 
     return output_transform

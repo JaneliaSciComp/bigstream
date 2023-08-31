@@ -138,12 +138,7 @@ def _get_moving_block(fix_block,
     return mov_block_phys_coords, block_transform
 
 
-def _compute_block_trasform(block_index,
-                            block_slice_coords,
-                            fix_block, mov_block,
-                            fix_block_mask, mov_block_mask,
-                            new_origin_phys,
-                            static_block_transform_list,
+def _compute_block_trasform(compute_transform_params,
                             fix_spacing=None,
                             mov_spacing=None,
                             block_size=None,
@@ -151,7 +146,12 @@ def _compute_block_trasform(block_index,
                             nblocks=None,
                             align_steps=[]):
     start_time = time.time()
-
+    (block_index,
+     block_slice_coords,
+     fix_block, mov_block,
+     fix_block_mask, mov_block_mask,
+     new_origin_phys,
+     static_block_transform_list) = compute_transform_params
     print(f'{time.ctime(start_time)} Compute block transform',
           block_index,
           flush=True)
@@ -418,7 +418,6 @@ def distributed_alignment_pipeline(
                                 full_mov_mask=mov_mask,
                                 static_transform_list=static_transform_list)
 
-    print('!!!!!! SUBMITTED GET BLOCKS', flush=True)
     print('!!!!!!!! BLOCKS ', blocks, flush=True)
     block_transform_res = cluster.client.map(_compute_block_trasform, 
                                              blocks,

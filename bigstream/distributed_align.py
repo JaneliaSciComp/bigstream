@@ -3,7 +3,6 @@ import bigstream.utility as ut
 import time
 import traceback
 
-from functools import partial
 from itertools import product
 from dask.distributed import as_completed
 from ClusterWrap.decorator import cluster
@@ -11,70 +10,26 @@ from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform_to_coordinates
 
 
-def _get_moving_block(fix_block,
-                      fix_spacing,
-                      full_fix_shape,
-                      fix_block_coords,
-                      fix_block_phys_coords,
-                      original_mov_block_phys_coords,
-                      original_transform):
-    if original_transform.shape == (4, 4):
-        mov_block_phys_coords = apply_transform_to_coordinates(
-            original_mov_block_phys_coords,
-            [original_transform,],
-        )
-        block_transform = ut.change_affine_matrix_origin(
-            original_transform, fix_block_phys_coords[0])
-    else:
-        ratio = np.array(original_transform.shape[:-1]) / full_fix_shape
-        start = np.round(ratio * fix_block_coords[0]).astype(int)
-        stop = np.round(ratio * (fix_block_coords[-1] + 1)).astype(int)
-        transform_slices = tuple(slice(a, b)
-                                 for a, b in zip(start, stop))
-        block_transform = original_transform[transform_slices]
-        spacing = ut.relative_spacing(block_transform, fix_block, fix_spacing)
-        origin = spacing * start
-        mov_block_phys_coords = apply_transform_to_coordinates(
-            original_mov_block_phys_coords, [block_transform,], spacing, origin
-        )
-    return mov_block_phys_coords, block_transform
+def _get_blocks_data(block_index,
+                     block_slice_coords,
+                     full_fix=None,
+                     full_mov=None,
+                     fix_spacing=None,
+                     mov_spacing=None,
+                     full_fix_mask=None,
+                     full_mov_mask=None,
+                     static_transform_list=[]):
 
-
-def _get_nblocks(full_size, block_size):
-    return np.ceil(np.array(full_size) / np.array(block_size)).astype(int)
-
-
-def _align_single_block(block_index,
-                        block_coords,
-                        block_neighbors,
-                        blocksize,
-                        overlaps,
-                        full_fix, full_mov,
-                        fix_spacing, mov_spacing,
-                        fix_mask, mov_mask,
-                        align_steps,
-                        static_transform_list):
-
-    # print some feedback
-    print('Align block: ', block_index,
-          '\nBlock coords: ', block_coords,
-          '\nBlock neighbors: ', block_neighbors,
+    print(f'{time.ctime(time.time())} Get blocks data',
+          block_index, block_slice_coords,
           flush=True)
 
-    start_align = time.time()
+    # read fix block
+    fix_block = full_fix[block_slice_coords]
 
-    # get the coordinates, read fixed data
-    fix_block = full_fix[block_coords]
-
-    # get fixed image block corners in physical units
-    fix_block_coords = []
-    for corner in list(product([0, 1], repeat=3)):
-        a = [x.stop-1 if y else x.start
-             for x, y in zip(block_coords, corner)]
-        fix_block_coords.append(a)
-
-    fix_block_coords = np.array(fix_block_coords)
-    fix_block_phys_coords = fix_block_coords * fix_spacing
+    (fix_block_voxel_coords,
+     fix_block_phys_coords) = _get_block_corner_coords(block_slice_coords,
+                                                       fix_spacing)
 
     # parse initial transforms
     # recenter affines, read deforms, apply transforms to crop coordinates
@@ -86,7 +41,8 @@ def _align_single_block(block_index,
             fix_block,
             fix_spacing,
             full_fix.shape,
-            fix_block_coords,
+            fix_block_voxel_coords[0],
+            fix_block_voxel_coords[-1],
             fix_block_phys_coords,
             mov_block_phys_coords,
             transform)
@@ -104,123 +60,200 @@ def _align_single_block(block_index,
     mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
     mov_block = full_mov[mov_slices]
 
+    # get moving image origin
+    new_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
+
     # read masks
     fix_block_mask, mov_block_mask = None, None
-    if fix_mask is not None:
-        ratio = np.array(fix_mask.shape) / full_fix.shape
-        fix_mask_start = np.round(ratio * fix_block_coords[0]).astype(int)
+    if full_fix_mask is not None:
+        ratio = np.array(full_fix_mask.shape) / full_fix.shape
+        fix_mask_start = np.round(ratio * fix_block_voxel_coords[0]).astype(int)
         fix_mask_stop = np.round(
-            ratio * (fix_block_coords[-1] + 1)).astype(int)
+            ratio * (fix_block_voxel_coords[-1] + 1)).astype(int)
         fix_mask_slices = tuple(slice(a, b)
                                 for a, b in zip(fix_mask_start, fix_mask_stop))
-        fix_block_mask = fix_mask[fix_mask_slices]
+        fix_block_mask = full_fix_mask[fix_mask_slices]
 
-    if mov_mask is not None:
-        ratio = np.array(mov_mask.shape) / full_mov.shape
+    if full_mov_mask is not None:
+        ratio = np.array(full_mov_mask.shape) / full_mov.shape
         mov_mask_start = np.round(ratio * mov_start).astype(int)
         mov_mask_stop = np.round(ratio * mov_stop).astype(int)
         mov_mask_slices = tuple(slice(a, b)
                                 for a, b in zip(mov_mask_start, mov_mask_stop))
-        mov_block_mask = mov_mask[mov_mask_slices]
+        mov_block_mask = full_mov_mask[mov_mask_slices]
 
-    # get moving image origin
-    mov_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
-
-    try:
-        # run alignment pipeline
-        transform = alignment_pipeline(
-            fix_block, mov_block,
-            fix_spacing, mov_spacing,
-            align_steps,
-            fix_mask=fix_block_mask, mov_mask=mov_block_mask,
-            mov_origin=mov_origin,
-            static_transform_list=block_transform_list,
-        )
-
-        # ensure transform is a vector field
-        if transform.shape == (4, 4):
-            transform = ut.matrix_to_displacement_field(
-                transform, fix_block.shape, spacing=fix_spacing,
-            )
-
-        print(f'{time.ctime(time.time())} Completed single block alignment for', 
-              block_index, flush=True)
-    except Exception as e:
-        print(f'{time.ctime(time.time())} Alignment pipeline failed for block',
-              block_index, traceback.format_exception(e), flush=True)
-        return
-
-    try:
-        # create the standard weights array
-        core = tuple(x - 2*y + 2 for x, y in zip(blocksize, overlaps))
-        pad = tuple((2*y - 1, 2*y - 1) for y in overlaps)
-        weights = np.pad(np.ones(core, dtype=np.float64),
-                         pad, mode='linear_ramp')
-        # rebalance if any neighbors are missing
-        if not np.all(list(block_neighbors.values())):
-            print(f'{time.ctime(time.time())} Rebalance', block_index, flush=True)
-
-            # define overlap slices
-            slices = {}
-            slices[-1] = tuple(slice(0, 2*y) for y in overlaps)
-            slices[0] = (slice(None),) * len(overlaps)
-            slices[1] = tuple(slice(-2*y, None) for y in overlaps)
-
-            missing_weights = np.zeros_like(weights)
-            for neighbor, flag in block_neighbors.items():
-                if not flag:
-                    neighbor_region = tuple(slices[-1*b][a]
-                                            for a, b in enumerate(neighbor))
-                    region = tuple(slices[b][a]
-                                   for a, b in enumerate(neighbor))
-                    missing_weights[region] += weights[neighbor_region]
-
-            # rebalance the weights
-            weights_adjustment = 1 - missing_weights
-            weights = np.divide(weights, weights_adjustment,
-                                out=np.zeros_like(weights),
-                                where=weights_adjustment != 0).astype(np.float32)
-
-        # crop weights if block is on edge of domain
-        nblocks = _get_nblocks(full_fix.shape, blocksize)
-        region = [slice(None),]*fix_block.ndim
-        for i in range(fix_block.ndim):
-            if block_index[i] == 0:
-                region[i] = slice(overlaps[i], None)
-            elif block_index[i] == nblocks[i] - 1:
-                region[i] = slice(None, -overlaps[i])
-        weights = weights[tuple(region)]
-
-        # crop any incomplete blocks (on the ends)
-        if np.any(weights.shape != transform.shape[:-1]):
-            crop = tuple(slice(0, s) for s in transform.shape[:-1])
-            print('Crop weights for', block_index, block_coords,
-                  'from', weights.shape, 'to', transform.shape,
-                  flush=True)
-            weights = weights[crop]
-
-        # apply weights
-        print(f'{time.ctime(time.time())} Apply weights for',
-              block_index, block_coords,
-              'from', weights.shape, 'to', transform.shape,
-              flush=True)
-        transform = transform * weights[..., None]
-    except Exception as e:
-        print(f'{time.ctime(time.time())} Balancing weights failed for',
-              block_index, block_coords,
-              traceback.format_exception(e), flush=True)
-
-    end_align = time.time()
-
-    print(f'{time.ctime(time.time())} Calculated vector field for block',
-          block_index,
-          block_coords,
-          '->',
-          transform.shape,
-          f'in {end_align-start_align}s',
+    print(f'{time.ctime(time.time())} Return blocks data',
+          block_index, block_slice_coords,
           flush=True)
 
-    return block_coords, transform
+    return (block_index,
+            block_slice_coords,
+            fix_block,
+            mov_block,
+            fix_block_mask,
+            mov_block_mask,
+            new_origin,
+            block_transform_list)
+
+
+# get image block corners both in voxel and physical units
+def _get_block_corner_coords(block_slice_coords, voxel_spacing):
+    block_coords_list = []
+    for corner in list(product([0, 1], repeat=3)):
+        a = [x.stop-1 if y else x.start
+             for x, y in zip(block_slice_coords, corner)]
+        block_coords_list.append(a)
+    block_corners_voxel_units = np.array(block_coords_list)
+    block_corners_phys_units = block_corners_voxel_units * voxel_spacing
+    return block_corners_voxel_units, block_corners_phys_units
+
+
+def _get_moving_block(fix_block,
+                      fix_spacing,
+                      full_fix_shape,
+                      min_fix_block_voxel_coords,
+                      max_fix_block_voxel_coords,
+                      fix_block_phys_coords,
+                      original_mov_block_phys_coords,
+                      original_transform):
+    if original_transform.shape == (4, 4):
+        mov_block_phys_coords = apply_transform_to_coordinates(
+            original_mov_block_phys_coords,
+            [original_transform,],
+        )
+        block_transform = ut.change_affine_matrix_origin(
+            original_transform, fix_block_phys_coords[0])
+    else:
+        ratio = np.array(original_transform.shape[:-1]) / full_fix_shape
+        start = np.round(ratio * min_fix_block_voxel_coords).astype(int)
+        stop = np.round(ratio * (max_fix_block_voxel_coords + 1)).astype(int)
+        transform_slices = tuple(slice(a, b)
+                                 for a, b in zip(start, stop))
+        block_transform = original_transform[transform_slices]
+        spacing = ut.relative_spacing(block_transform, fix_block, fix_spacing)
+        origin = spacing * start
+        mov_block_phys_coords = apply_transform_to_coordinates(
+            original_mov_block_phys_coords, [block_transform,], spacing, origin
+        )
+    return mov_block_phys_coords, block_transform
+
+
+def _compute_block_trasform(block_index,
+                            block_slice_coords,
+                            fix_block, mov_block,
+                            fix_block_mask, mov_block_mask,
+                            new_origin_phys,
+                            static_block_transform_list,
+                            fix_spacing=None,
+                            mov_spacing=None,
+                            block_size=None,
+                            block_overlaps=None,
+                            nblocks=None,
+                            align_steps=[]):
+    start_time = time.time()
+
+    print(f'{time.ctime(start_time)} Compute block transform',
+          block_index,
+          flush=True)
+
+    # run alignment pipeline
+    transform = alignment_pipeline(
+        fix_block, mov_block,
+        fix_spacing, mov_spacing,
+        align_steps,
+        fix_mask=fix_block_mask, mov_mask=mov_block_mask,
+        mov_origin=new_origin_phys,
+        static_transform_list=static_block_transform_list,
+    )
+    # ensure transform is a vector field
+    if transform.shape == (4, 4):
+        transform = ut.matrix_to_displacement_field(
+            transform, fix_block.shape, spacing=fix_spacing,
+        )
+
+    weights = _get_transform_weights(block_index, 
+                                     block_size,
+                                     block_overlaps,
+                                     nblocks)
+
+    # handle end blocks
+    if np.any(weights.shape != transform.shape[:-1]):
+        crop = tuple(slice(0, s) for s in transform.shape[:-1])
+        print('Crop weights for', block_index,
+              'from', transform.shape, 'to', weights.shape,
+              flush=True)
+        weights = weights[crop]
+
+    # apply weights
+    transform = transform * weights[..., None]
+
+    end_time = time.time()
+
+    print(f'{time.ctime(end_time)} Finished computing block transform',
+          f'in {end_time-start_time}s',
+          block_index,
+          flush=True)
+
+    return block_index, block_slice_coords, transform
+
+
+def _get_transform_weights(block_index,
+                           block_size,
+                           block_overlaps,
+                           nblocks):
+    print(f'{time.ctime(time.time())} Adjust transform',
+          block_index,
+          flush=True)
+
+
+    neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=3)))
+    block_neighbors = {tuple(o): (all(x <= y 
+                                      for x, y in zip(tuple(block_index + o),
+                                                      nblocks)),)
+                       for o in neighbor_offsets}
+
+    # create the standard weights array
+    core = tuple(x - 2*y + 2 for x, y in zip(block_size, block_overlaps))
+    pad = tuple((2*y - 1, 2*y - 1) for y in block_overlaps)
+    weights = np.pad(np.ones(core, dtype=np.float64),
+                        pad, mode='linear_ramp')
+
+    # rebalance if any neighbors are missing
+    if not np.all(list(block_neighbors.values())):
+        print(f'{time.ctime(time.time())} Rebalance transform weights',
+            block_index,
+            flush=True)
+        # define overlap slices
+        slices = {}
+        slices[-1] = tuple(slice(0, 2*y) for y in block_overlaps)
+        slices[0] = (slice(None),) * len(block_overlaps)
+        slices[1] = tuple(slice(-2*y, None) for y in block_overlaps)
+
+        missing_weights = np.zeros_like(weights)
+        for neighbor, flag in block_neighbors.items():
+            if not flag:
+                neighbor_region = tuple(slices[-1*b][a]
+                                        for a, b in enumerate(neighbor))
+                region = tuple(slices[b][a]
+                                for a, b in enumerate(neighbor))
+                missing_weights[region] += weights[neighbor_region]
+
+        # rebalance the weights
+        weights_adjustment = 1 - missing_weights
+        weights = np.divide(weights, weights_adjustment,
+                            out=np.zeros_like(weights),
+                            where=weights_adjustment != 0).astype(np.float32)
+
+    # crop weights if block is on edge of domain
+    block_dim = len(block_index)
+    region = [slice(None),]*block_dim
+    for i in range(block_dim):
+        if block_index[i] == 0:
+            region[i] = slice(block_overlaps[i], None)
+        elif block_index[i] == nblocks[i] - 1:
+            region[i] = slice(None, -block_overlaps[i])
+
+    return weights[tuple(region)]
 
 
 @cluster
@@ -343,13 +376,14 @@ def distributed_alignment_pipeline(
     block_partition_size = np.array(blocksize)
     nblocks = np.ceil(np.array(fix.shape) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
-    indices, slices = [], []
+    
+    fix_blocks_indices, fix_blocks_slices = [], []
     for (i, j, k) in np.ndindex(*nblocks):
         start = block_partition_size * (i, j, k) - overlaps
         stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
         stop = np.minimum(fix.shape, stop)
-        coords = tuple(slice(x, y) for x, y in zip(start, stop))
+        block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
         if fix_mask is not None:
@@ -365,64 +399,46 @@ def distributed_alignment_pipeline(
                 foreground = False
 
         if foreground:
-            indices.append((i, j, k,))
-            slices.append(coords)
-
-    # determine foreground neighbor structure
-    new_indices = []
-    neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=3)))
-    for index, coords in zip(indices, slices):
-        neighbor_flags = {tuple(o): (tuple(index + o) in indices, )
-                          for o in neighbor_offsets}
-        new_indices.append((index, coords, neighbor_flags))
-    indices = new_indices
+            fix_blocks_indices.append((i, j, k,))
+            fix_blocks_slices.append(block_slice)
 
     # establish all keyword arguments
-    steps = [(a, {**kwargs, **b}) for a, b in steps]
+    block_align_steps = [(a, {**kwargs, **b}) for a, b in steps]
 
-    print('Submit alignment for', len(indices), 'bocks', flush=True)
-    align_blocks_args = [
-        [
-            block_info[0],  # block_index
-            block_info[1],  # ndim tuple of block slices
-            block_info[2],  # block neighbors
-            block_partition_size,
-            overlaps,
-            fix, mov,
-            fix_spacing, mov_spacing,
-            fix_mask, mov_mask,
-            steps,
-            static_transform_list,
-        ] for block_info in indices
-    ]
+    print('Submit alignment for', len(fix_blocks_indices), 'bocks', flush=True)
 
-    print(f'{time.ctime(time.time())} Align',
-          len(align_blocks_args), 'blocks', flush=True)
-    futures = cluster.client.map(
-        _align_single_block,
-        *list(zip(*align_blocks_args)),  # transpose arguments
-        pure=False
-    )
-    future_keys = [f.key for f in futures]
+    blocks = cluster.client.map(_get_blocks_data,
+                                fix_blocks_indices,
+                                fix_blocks_slices,
+                                full_fix=fix,
+                                full_mov=mov,
+                                fix_spacing=fix_spacing,
+                                mov_spacing=mov_spacing,
+                                full_fix_mask=fix_mask,
+                                full_mov_mask=mov_mask,
+                                static_transform_list=static_transform_list)
 
-    for batch in as_completed(futures, with_results=True).batches():
-        for future, result in batch:
-            iii = future_keys.index(future.key)
-            transform_block_index = indices[iii]
-            if result is None:
-                print(f'{time.ctime(time.time())} Error calculating displacement vector field for block: ',
+    block_transform_res = cluster.client.map(_compute_block_trasform, 
+                                             *blocks,
+                                             fix_spacing=fix_spacing,
+                                             mov_spacing=mov_spacing,
+                                             block_size=block_partition_size,
+                                             block_overlaps=overlaps,
+                                             nblocks=nblocks,
+                                             align_steps=block_align_steps)
+
+    for batch in as_completed(block_transform_res, with_results=True).batches():
+        for _, result in batch:
+            transform_block_index, block_transform_coords, transform_block = result
+
+            print(f'{time.ctime(time.time())} Calculated displacement vector field for block: ',
+                transform_block_index,
+                flush=True)
+            if output_transform is not None:
+                output_transform[block_transform_coords] += transform_block
+                print(f'{time.ctime(time.time())} Update displacement vector field for block: ',
                     transform_block_index,
+                    'at', block_transform_coords,
                     flush=True)
-            else:
-                print(f'{time.ctime(time.time())} Calculated displacement vector field for block: ',
-                    transform_block_index,
-                    flush=True)
-                transform_coords, transform_block = result
-                if output_transform is not None:
-                    output_transform[transform_coords] += transform_block
-                    print(f'{time.ctime(time.time())} Update displacement vector field for block: ',
-                        transform_block_index,
-                        'at', transform_coords,
-                        flush=True)
 
     return output_transform

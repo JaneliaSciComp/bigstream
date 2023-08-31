@@ -814,7 +814,7 @@ def _align_local_data(fix_input,
         fix_dataarray, mov_dataarray,
         fix_spacing, mov_spacing,
         steps,
-        output_blocksize, # parallelize on the block chunk size
+        local_transform_blocksize, # parallelize on the transform block chunk size
         overlap_factor=blocks_overlap_factor,
         fix_mask=fix_mask,
         mov_mask=mov_mask,

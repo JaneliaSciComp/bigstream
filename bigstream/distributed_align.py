@@ -418,8 +418,10 @@ def distributed_alignment_pipeline(
                                 full_mov_mask=mov_mask,
                                 static_transform_list=static_transform_list)
 
+    print('!!!!!! SUBMITTED GET BLOCKS', flush=True)
+    print('!!!!!!!! BLOCKS ', blocks, flush=True)
     block_transform_res = cluster.client.map(_compute_block_trasform, 
-                                             *blocks,
+                                             blocks,
                                              fix_spacing=fix_spacing,
                                              mov_spacing=mov_spacing,
                                              block_size=block_partition_size,

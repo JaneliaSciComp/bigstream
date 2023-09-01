@@ -476,17 +476,10 @@ def distributed_alignment_pipeline(
                                              nblocks=nblocks,
                                              align_steps=block_align_steps)
 
-    print('Submit write tasks for',
-          len(block_transform_res), 'bocks', flush=True)
-    blocks_write_res = cluster.client.map(_write_block_trasform,
-                                          block_transform_res,
-                                          with_lock=True,
-                                          output_transform=output_transform)
-
     last_exc = None
     for retry in range(retries):
         try:
-            _collect_results(blocks_write_res)
+            _collect_results(block_transform_res, output_transform=output_transform)
             print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
                     flush=True)
             return output_transform
@@ -505,7 +498,8 @@ def distributed_alignment_pipeline(
     raise last_exc
 
 
-def _collect_results(futures_res):
+def _collect_results(futures_res, output_transform=None):
     for batch in as_completed(futures_res, with_results=True).batches():
         for _, result in batch:
-            _complete_block(result)
+            _write_block_trasform(result,
+                                  output_transform=output_transform)

@@ -6,7 +6,7 @@ import traceback
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform_to_coordinates
 from ClusterWrap.decorator import cluster
-from dask.distributed import as_completed
+from dask.distributed import as_completed, MultiLock
 from itertools import product
 
 
@@ -256,6 +256,55 @@ def _get_transform_weights(block_index,
     return weights[tuple(region)]
 
 
+def _write_block_trasform(block_transform_results,
+                          with_lock=False,
+                          output_transform=None):
+    start_time = time.time()
+    (block_index,
+     block_slice_coords,
+     block_transform) = block_transform_results
+    print(f'{time.ctime(start_time)} Write block transform results',
+          block_index,
+          flush=True)
+
+    if output_transform is not None:
+        lock = None
+        if with_lock:
+            lock_strs = []
+            for delta in product((-1, 0, 1,), repeat=3):
+                lock_strs.append(str(tuple(a + b 
+                                           for a, b in zip(block_index, delta))))
+            lock = MultiLock(lock_strs)
+            lock.acquire()
+            print(f'{time.ctime(start_time)} Lock acquired for writing block',
+                  block_index,
+                  flush=True)
+
+        output_transform[block_slice_coords] += block_transform
+        print(f'{time.ctime(end_time)} Updated vector field for block: ',
+                block_index,
+                'at', block_slice_coords,
+                flush=True)
+
+        if lock is not None:
+            lock.release()
+
+    end_time = time.time()
+    print(f'{time.ctime(end_time)} Finished writing vector field for block: ',
+            block_index,
+            flush=True)
+
+    return block_index, block_slice_coords
+
+
+def _complete_block(block_info):
+    block_index, block_slice_coords = block_info
+    print(f'{time.ctime(time.time())} Completed block',
+          block_index,
+          flush=True)
+    return block_index, block_slice_coords
+
+
 @cluster
 def distributed_alignment_pipeline(
     fix,
@@ -270,7 +319,7 @@ def distributed_alignment_pipeline(
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
-    retries=3,
+    retries=2,
     cluster=None,
     cluster_kwargs={},
     **kwargs,
@@ -427,20 +476,25 @@ def distributed_alignment_pipeline(
                                              nblocks=nblocks,
                                              align_steps=block_align_steps)
 
+    res = cluster.client.map(_write_block_trasform,
+                             block_transform_res,
+                             with_lock=True,
+                             output_transform=output_transform)
     last_exc = None
     for retry in range(retries):
         try:
-            _collect_results(block_transform_res, output_transform)
+            _collect_results(res)
             print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
                     flush=True)
             return output_transform
         except Exception as e:
-            print(f'{time.ctime(time.time())} restart cluster due to exception',
-                  traceback.format_exception(e),
-                  flush=True)
-            last_exc = e
             if retry < retries -1:
+                print(f'{time.ctime(time.time())} restart cluster due to exception',
+                    traceback.format_exception(e),
+                    flush=True)
                 cluster.client.restart()
+            else:
+                last_exc = e
 
     print(f'{time.ctime(time.time())} Distributed alignment failed',
             traceback.format_exception(last_exc),
@@ -448,16 +502,7 @@ def distributed_alignment_pipeline(
     raise last_exc
 
 
-def _collect_results(block_transform_res, output_transform):
-    for batch in as_completed(block_transform_res, with_results=True).batches():
+def _collect_results(futures_res):
+    for batch in as_completed(futures_res, with_results=True).batches():
         for _, result in batch:
-            transform_block_index, block_transform_coords, transform_block = result
-            print(f'{time.ctime(time.time())} Calculated displacement vector field for block: ',
-                transform_block_index,
-                flush=True)
-            if output_transform is not None:
-                output_transform[block_transform_coords] += transform_block
-                print(f'{time.ctime(time.time())} Update displacement vector field for block: ',
-                    transform_block_index,
-                    'at', block_transform_coords,
-                    flush=True)
+            _complete_block(result)

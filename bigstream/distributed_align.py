@@ -1,13 +1,12 @@
 import numpy as np
 import bigstream.utility as ut
 import time
-import traceback
 
-from itertools import product
-from dask.distributed import as_completed
-from ClusterWrap.decorator import cluster
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform_to_coordinates
+from ClusterWrap.decorator import cluster
+from dask.distributed import as_completed
+from itertools import product
 
 
 def _prepare_compute_block_transform_params(block_index,
@@ -377,7 +376,7 @@ def distributed_alignment_pipeline(
     nblocks = np.ceil(np.array(fix.shape) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
     
-    fix_blocks_indices, fix_blocks_slices = [], []
+    fix_blocks_infos = []
     for (i, j, k) in np.ndindex(*nblocks):
         start = block_partition_size * (i, j, k) - overlaps
         stop = start + block_partition_size + 2 * overlaps
@@ -399,24 +398,21 @@ def distributed_alignment_pipeline(
                 foreground = False
 
         if foreground:
-            fix_blocks_indices.append((i, j, k,))
-            fix_blocks_slices.append(block_slice)
+            fix_blocks_infos.append(((i, j, k,), block_slice))
 
     # establish all keyword arguments
     block_align_steps = [(a, {**kwargs, **b}) for a, b in steps]
 
-    print('Prepare params for', len(fix_blocks_indices), 'bocks', flush=True)
-    blocks = _prepare_compute_block_transform_params(
-        fix_blocks_indices,
-        fix_blocks_slices,
-        full_fix=fix,
-        full_mov=mov,
-        fix_spacing=fix_spacing,
-        mov_spacing=mov_spacing,
-        full_fix_mask=fix_mask,
-        full_mov_mask=mov_mask,
-        static_transform_list=static_transform_list,
-    )
+    print('Prepare params for', len(fix_blocks_infos), 'bocks', flush=True)
+    blocks = map(lambda block_info: _prepare_compute_block_transform_params(*block_info,
+                                                                            full_fix=fix,
+                                                                            full_mov=mov,
+                                                                            fix_spacing=fix_spacing,
+                                                                            mov_spacing=mov_spacing,
+                                                                            full_fix_mask=fix_mask,
+                                                                            full_mov_mask=mov_mask,
+                                                                            static_transform_list=static_transform_list),
+                 fix_blocks_infos)
 
     print('Submit compute transform for',
           len(blocks), 'bocks', flush=True)

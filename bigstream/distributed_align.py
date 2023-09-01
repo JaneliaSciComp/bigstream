@@ -1,6 +1,7 @@
 import numpy as np
 import bigstream.utility as ut
 import time
+import traceback
 
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform_to_coordinates
@@ -269,6 +270,7 @@ def distributed_alignment_pipeline(
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
+    retries=3,
     cluster=None,
     cluster_kwargs={},
     **kwargs,
@@ -425,10 +427,31 @@ def distributed_alignment_pipeline(
                                              nblocks=nblocks,
                                              align_steps=block_align_steps)
 
+    last_exc = None
+    for retry in range(retries):
+        try:
+            _collect_results(block_transform_res, output_transform)
+            print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
+                    flush=True)
+            return output_transform
+        except Exception as e:
+            print(f'{time.ctime(time.time())} restart cluster due to exception',
+                  traceback.format_exception(e),
+                  flush=True)
+            last_exc = e
+            if retry < retries -1:
+                cluster.client.restart()
+
+    print(f'{time.ctime(time.time())} Distributed alignment failed',
+            traceback.format_exception(last_exc),
+            flush=True)
+    raise last_exc
+
+
+def _collect_results(block_transform_res, output_transform):
     for batch in as_completed(block_transform_res, with_results=True).batches():
         for _, result in batch:
             transform_block_index, block_transform_coords, transform_block = result
-
             print(f'{time.ctime(time.time())} Calculated displacement vector field for block: ',
                 transform_block_index,
                 flush=True)
@@ -438,5 +461,3 @@ def distributed_alignment_pipeline(
                     transform_block_index,
                     'at', block_transform_coords,
                     flush=True)
-
-    return output_transform

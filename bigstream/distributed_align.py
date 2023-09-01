@@ -10,15 +10,15 @@ from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform_to_coordinates
 
 
-def _get_blocks_data(block_index,
-                     block_slice_coords,
-                     full_fix=None,
-                     full_mov=None,
-                     fix_spacing=None,
-                     mov_spacing=None,
-                     full_fix_mask=None,
-                     full_mov_mask=None,
-                     static_transform_list=[]):
+def _prepare_compute_block_transform_params(block_index,
+                                            block_slice_coords,
+                                            full_fix=None,
+                                            full_mov=None,
+                                            fix_spacing=None,
+                                            mov_spacing=None,
+                                            full_fix_mask=None,
+                                            full_mov_mask=None,
+                                            static_transform_list=[]):
 
     print(f'{time.ctime(time.time())} Get blocks data',
           block_index, block_slice_coords,
@@ -405,20 +405,21 @@ def distributed_alignment_pipeline(
     # establish all keyword arguments
     block_align_steps = [(a, {**kwargs, **b}) for a, b in steps]
 
-    print('Submit alignment for', len(fix_blocks_indices), 'bocks', flush=True)
+    print('Prepare params for', len(fix_blocks_indices), 'bocks', flush=True)
+    blocks = _prepare_compute_block_transform_params(
+        fix_blocks_indices,
+        fix_blocks_slices,
+        full_fix=fix,
+        full_mov=mov,
+        fix_spacing=fix_spacing,
+        mov_spacing=mov_spacing,
+        full_fix_mask=fix_mask,
+        full_mov_mask=mov_mask,
+        static_transform_list=static_transform_list,
+    )
 
-    blocks = cluster.client.map(_get_blocks_data,
-                                fix_blocks_indices,
-                                fix_blocks_slices,
-                                full_fix=fix,
-                                full_mov=mov,
-                                fix_spacing=fix_spacing,
-                                mov_spacing=mov_spacing,
-                                full_fix_mask=fix_mask,
-                                full_mov_mask=mov_mask,
-                                static_transform_list=static_transform_list)
-
-    print('!!!!!!!! BLOCKS ', blocks, flush=True)
+    print('Submit compute transform for',
+          len(blocks), 'bocks', flush=True)
     block_transform_res = cluster.client.map(_compute_block_trasform, 
                                              blocks,
                                              fix_spacing=fix_spacing,

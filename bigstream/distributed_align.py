@@ -281,7 +281,7 @@ def _write_block_trasform(block_transform_results,
                   flush=True)
 
         output_transform[block_slice_coords] += block_transform
-        print(f'{time.ctime(end_time)} Updated vector field for block: ',
+        print(f'{time.ctime(time.time())} Updated vector field for block: ',
                 block_index,
                 'at', block_slice_coords,
                 flush=True)

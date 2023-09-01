@@ -404,7 +404,7 @@ def distributed_alignment_pipeline(
     block_align_steps = [(a, {**kwargs, **b}) for a, b in steps]
 
     print('Prepare params for', len(fix_blocks_infos), 'bocks', flush=True)
-    blocks = map(lambda block_info: _prepare_compute_block_transform_params(*block_info,
+    blocks = list(map(lambda block_info: _prepare_compute_block_transform_params(*block_info,
                                                                             full_fix=fix,
                                                                             full_mov=mov,
                                                                             fix_spacing=fix_spacing,
@@ -412,7 +412,7 @@ def distributed_alignment_pipeline(
                                                                             full_fix_mask=fix_mask,
                                                                             full_mov_mask=mov_mask,
                                                                             static_transform_list=static_transform_list),
-                 fix_blocks_infos)
+                      fix_blocks_infos))
 
     print('Submit compute transform for',
           len(blocks), 'bocks', flush=True)

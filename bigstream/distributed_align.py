@@ -205,7 +205,6 @@ def _get_transform_weights(block_index,
           block_index,
           flush=True)
 
-
     neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=3)))
     block_neighbors = {tuple(o): (all(x <= y 
                                       for x, y in zip(tuple(block_index + o),

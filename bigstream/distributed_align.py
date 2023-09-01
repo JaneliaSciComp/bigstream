@@ -9,8 +9,7 @@ from dask.distributed import as_completed
 from itertools import product
 
 
-def _prepare_compute_block_transform_params(block_index,
-                                            block_slice_coords,
+def _prepare_compute_block_transform_params(block_info,
                                             full_fix=None,
                                             full_mov=None,
                                             fix_spacing=None,
@@ -18,6 +17,8 @@ def _prepare_compute_block_transform_params(block_index,
                                             full_fix_mask=None,
                                             full_mov_mask=None,
                                             static_transform_list=[]):
+
+    block_index, block_slice_coords = block_info
 
     print(f'{time.ctime(time.time())} Get blocks data',
           block_index, block_slice_coords,
@@ -405,7 +406,7 @@ def distributed_alignment_pipeline(
 
     print('Prepare params for', len(fix_blocks_infos), 'bocks', flush=True)
     blocks = cluster.client.map(_prepare_compute_block_transform_params,
-                                *list(zip(*fix_blocks_infos)),  # transpose arguments
+                                fix_blocks_infos,
                                 full_fix=fix,
                                 full_mov=mov,
                                 fix_spacing=fix_spacing,

@@ -294,17 +294,15 @@ def _write_block_trasform(block_transform_results,
             block_index,
             flush=True)
 
-    return block_index, block_slice_coords, block_transform
+    return block_index, block_slice_coords
 
 
-def _complete_block(block_transform_results,
-                    with_lock=False,
-                    output_transform=None):
-    (block_index, block_slice_coords, block_transform) = block_transform_results
+def _complete_block(block_info):
+    (block_index, block_slice_coords) = block_info
     print(f'{time.ctime(time.time())} Completed block',
-          block_index, 'block shape:' block_transform.shape,
+          block_index,
           flush=True)
-    return block_index, block_slice_coords, block_transform.shape
+    return block_index, block_slice_coords
 
 
 @cluster
@@ -480,15 +478,15 @@ def distributed_alignment_pipeline(
 
     print('Submit write tasks for',
           len(block_transform_res), 'bocks', flush=True)
-    wrire_res = cluster.client.map(_write_block_trasform,
-                                   block_transform_res,
-                                   with_lock=True,
-                                   output_transform=output_transform)
+    blocks_write_res = cluster.client.map(_write_block_trasform,
+                                          block_transform_res,
+                                          with_lock=True,
+                                          output_transform=output_transform)
 
     last_exc = None
     for retry in range(retries):
         try:
-            _collect_results(res)
+            _collect_results(blocks_write_res)
             print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
                     flush=True)
             return output_transform

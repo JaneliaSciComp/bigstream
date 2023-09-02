@@ -319,6 +319,7 @@ def distributed_alignment_pipeline(
     static_transform_list=[],
     output_transform=None,
     cluster=None,
+    cluster_batch_size=2,
     cluster_kwargs={},
     **kwargs,
 ):
@@ -461,7 +462,8 @@ def distributed_alignment_pipeline(
                                 mov_spacing=mov_spacing,
                                 full_fix_mask=fix_mask,
                                 full_mov_mask=mov_mask,
-                                static_transform_list=static_transform_list)
+                                static_transform_list=static_transform_list,
+                                batch_size=cluster_batch_size)
 
     print('Submit compute transform for',
           len(blocks), 'bocks', flush=True)
@@ -472,7 +474,8 @@ def distributed_alignment_pipeline(
                                              block_size=block_partition_size,
                                              block_overlaps=overlaps,
                                              nblocks=nblocks,
-                                             align_steps=block_align_steps)
+                                             align_steps=block_align_steps,
+                                             batch_size=cluster_batch_size)
 
     _collect_results(block_transform_res, output_transform=output_transform)
     print(f'{time.ctime(time.time())} Distributed alignment completed successfully',

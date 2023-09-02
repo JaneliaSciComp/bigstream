@@ -41,7 +41,9 @@ def blob_detection(
         processed_image = winsorize(processed_image, limits=winsorize_limits,
                                     inplace=True)
         done_winsorize_time = time.time()
-        print(f'Winsorization completed in {done_winsorize_time-start_time}s')
+        print(f'{time.ctime(time.time())}',
+              f'Winsorization completed in {done_winsorize_time-start_time}s',
+              flush=True)
     if background_subtract:
         processed_image = white_tophat(processed_image, max_blob_radius)
     spots = detect_spots_log(
@@ -51,7 +53,9 @@ def blob_detection(
         **kwargs,
     ).astype(int)
     done_spots_time = time.time()
-    print(f'Spot detection completed in {done_spots_time-start_time}s')
+    print(f'{time.ctime(time.time())}',
+          f'Spot detection completed in {done_spots_time-start_time}s',
+          flush=True)
     if mask is not None: spots = apply_foreground_mask(spots, mask)
     intensities = image[spots[:, 0], spots[:, 1], spots[:, 2]]
     return np.hstack((spots[:, :3], intensities[..., None]))
@@ -94,7 +98,10 @@ def _stats(arr):
         stddevs = np.sqrt( sqr_means - np.square(means) )
         return means, stddevs
     except Exception as e:
-        print('Stats exception for array of shape', arr.shape, e)
+        print(f'{time.ctime(time.time())}',
+              'Stats exception for array of shape',
+              arr.shape, e,
+              flush=True)
         raise e
 
 

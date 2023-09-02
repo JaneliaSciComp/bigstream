@@ -116,15 +116,20 @@ def configure_irm(
     """
 
     # identify number of cores available, assume hyperthreading
-    if "LSB_DJOB_NUMPROC" in os.environ:
+    nthreads = 1
+    if 'LSB_DJOB_NUMPROC' in os.environ:
         ncores = int(os.environ["LSB_DJOB_NUMPROC"])
+        nthreads = 2 * ncores - 1
+    elif 'ITK_THREADS' in os.environ:
+        nthreads = int(os.environ["ITK_THREADS"])
     else:
         ncores = psutil.cpu_count(logical=False)
+        nthreads = ncores
 
     # initialize IRM object, be completely sure nthreads is set
-    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(2*ncores)
+    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(nthreads)
     irm = sitk.ImageRegistrationMethod()
-    irm.SetNumberOfThreads(2*ncores)
+    irm.SetNumberOfThreads(nthreads)
 
     # interpolator switch
     interpolator_switch = {

@@ -138,13 +138,13 @@ def _get_moving_block(fix_block,
     return mov_block_phys_coords, block_transform
 
 
-def _compute_block_trasform(compute_transform_params,
-                            fix_spacing=None,
-                            mov_spacing=None,
-                            block_size=None,
-                            block_overlaps=None,
-                            nblocks=None,
-                            align_steps=[]):
+def _compute_block_transform(compute_transform_params,
+                             fix_spacing=None,
+                             mov_spacing=None,
+                             block_size=None,
+                             block_overlaps=None,
+                             nblocks=None,
+                             align_steps=[]):
     start_time = time.time()
     (block_index,
      block_slice_coords,
@@ -255,9 +255,9 @@ def _get_transform_weights(block_index,
     return weights[tuple(region)]
 
 
-def _write_block_trasform(block_transform_results,
-                          with_lock=False,
-                          output_transform=None):
+def _write_block_transform(block_transform_results,
+                           with_lock=False,
+                           output_transform=None):
     start_time = time.time()
     (block_index,
      block_slice_coords,
@@ -465,7 +465,7 @@ def distributed_alignment_pipeline(
 
     print('Submit compute transform for',
           len(blocks), 'bocks', flush=True)
-    block_transform_res = cluster.client.map(_compute_block_trasform, 
+    block_transform_res = cluster.client.map(_compute_block_transform, 
                                              blocks,
                                              fix_spacing=fix_spacing,
                                              mov_spacing=mov_spacing,
@@ -483,5 +483,5 @@ def distributed_alignment_pipeline(
 def _collect_results(futures_res, output_transform=None):
     for batch in as_completed(futures_res, with_results=True).batches():
         for _, result in batch:
-            _write_block_trasform(result,
-                                  output_transform=output_transform)
+            _write_block_transform(result,
+                                   output_transform=output_transform)

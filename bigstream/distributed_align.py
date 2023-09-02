@@ -1,7 +1,6 @@
 import numpy as np
 import bigstream.utility as ut
 import time
-import traceback
 
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform_to_coordinates
@@ -319,7 +318,6 @@ def distributed_alignment_pipeline(
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
-    retries=2,
     cluster=None,
     cluster_kwargs={},
     **kwargs,
@@ -476,26 +474,10 @@ def distributed_alignment_pipeline(
                                              nblocks=nblocks,
                                              align_steps=block_align_steps)
 
-    last_exc = None
-    for retry in range(retries):
-        try:
-            _collect_results(block_transform_res, output_transform=output_transform)
-            print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
-                    flush=True)
-            return output_transform
-        except Exception as e:
-            if retry < retries -1:
-                print(f'{time.ctime(time.time())} restart cluster due to exception',
-                    traceback.format_exception(e),
-                    flush=True)
-                cluster.client.restart()
-            else:
-                last_exc = e
-
-    print(f'{time.ctime(time.time())} Distributed alignment failed',
-            traceback.format_exception(last_exc),
+    _collect_results(block_transform_res, output_transform=output_transform)
+    print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
             flush=True)
-    raise last_exc
+    return output_transform
 
 
 def _collect_results(futures_res, output_transform=None):

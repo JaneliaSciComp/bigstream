@@ -84,8 +84,6 @@ def blob_detection(
 
     spots = blob_detect_method(
         processed_image,
-        min_blob_radius,
-        max_blob_radius,
         **kwargs,
     ).astype(int)
     done_spots_time = time.time()

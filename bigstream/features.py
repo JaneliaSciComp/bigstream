@@ -1,7 +1,7 @@
 import numpy as np
 import time
 from fishspot.filter import white_tophat, apply_foreground_mask
-from fishspot.detect import detect_spots_log
+from skimage.feature import blob_doh as blob_detect
 from scipy.stats.mstats import winsorize
 
 
@@ -9,6 +9,7 @@ def blob_detection(
     image,
     min_blob_radius,
     max_blob_radius,
+    num_sigma=5,
     winsorize_limits=None,
     background_subtract=False,
     mask=None,
@@ -37,6 +38,27 @@ def blob_detection(
     """
     processed_image = np.copy(image)
     start_time = time.time()
+
+    # ensure iterable radii
+    if not isinstance(min_blob_radius, (tuple, list, np.ndarray)):
+        min_blob_radius = (min_blob_radius,)*image.ndim
+    if not isinstance(max_blob_radius, (tuple, list, np.ndarray)):
+        max_blob_radius = (max_blob_radius,)*image.ndim
+
+    # set given arguments
+    kwargs['min_sigma'] = np.array(min_blob_radius) / np.sqrt(image.ndim)
+    kwargs['max_sigma'] = np.array(max_blob_radius) / np.sqrt(image.ndim)
+    kwargs['num_sigma'] = num_sigma
+
+    # set additional defaults
+    if 'threshold' not in kwargs or kwargs['threshold'] is None:
+        kwargs['threshold'] = None
+        kwargs['threshold_rel'] = 0.1
+
+    print(f'{time.ctime(time.time())}',
+          f'Start spot detection ({min_blob_radius}, {max_blob_radius})',
+          kwargs,
+          flush=True)
     if winsorize_limits:
         processed_image = winsorize(processed_image, limits=winsorize_limits,
                                     inplace=True)
@@ -45,8 +67,13 @@ def blob_detection(
               f'Winsorization completed in {done_winsorize_time-start_time}s',
               flush=True)
     if background_subtract:
+        done_tophat_time = time.time()
         processed_image = white_tophat(processed_image, max_blob_radius)
-    spots = detect_spots_log(
+        print(f'{time.ctime(time.time())}',
+              f'White top hat completed in {done_tophat_time-start_time}s',
+              flush=True)
+
+    spots = blob_detect(
         processed_image,
         min_blob_radius,
         max_blob_radius,
@@ -54,7 +81,8 @@ def blob_detection(
     ).astype(int)
     done_spots_time = time.time()
     print(f'{time.ctime(time.time())}',
-          f'Spot detection completed in {done_spots_time-start_time}s',
+          f'Spot detection ({min_blob_radius}, {max_blob_radius})',
+          f'completed in {done_spots_time-start_time}s',
           flush=True)
     if mask is not None: spots = apply_foreground_mask(spots, mask)
     intensities = image[spots[:, 0], spots[:, 1], spots[:, 2]]

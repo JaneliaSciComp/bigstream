@@ -453,7 +453,8 @@ def distributed_alignment_pipeline(
     # establish all keyword arguments
     block_align_steps = [(a, {**kwargs, **b}) for a, b in steps]
 
-    print('Prepare params for', len(fix_blocks_infos), 'bocks', flush=True)
+    print(f'{time.ctime(time.time())} Prepare params for',
+          len(fix_blocks_infos), 'bocks', flush=True)
     blocks = cluster.client.map(_prepare_compute_block_transform_params,
                                 fix_blocks_infos,
                                 full_fix=fix,
@@ -465,7 +466,7 @@ def distributed_alignment_pipeline(
                                 static_transform_list=static_transform_list,
                                 batch_size=cluster_batch_size)
 
-    print('Submit compute transform for',
+    print(f'{time.ctime(time.time())} Submit compute transform for',
           len(blocks), 'bocks', flush=True)
     block_transform_res = cluster.client.map(_compute_block_transform, 
                                              blocks,
@@ -477,7 +478,12 @@ def distributed_alignment_pipeline(
                                              align_steps=block_align_steps,
                                              batch_size=cluster_batch_size)
 
-    _collect_results(block_transform_res, output_transform=output_transform)
+    write_transform_res = cluster.client.map(_write_block_transform, 
+                                             block_transform_res,
+                                             output_transform=output_transform,
+                                             with_lock=True)
+
+    _collect_results(write_transform_res, output_transform=output_transform)
     print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
             flush=True)
     return output_transform
@@ -486,5 +492,4 @@ def distributed_alignment_pipeline(
 def _collect_results(futures_res, output_transform=None):
     for batch in as_completed(futures_res, with_results=True).batches():
         for _, result in batch:
-            _write_block_transform(result,
-                                   output_transform=output_transform)
+            _complete_block(result)

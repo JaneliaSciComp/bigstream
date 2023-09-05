@@ -1,7 +1,7 @@
 import numpy as np
 import time
 from fishspot.filter import white_tophat, apply_foreground_mask
-from skimage.feature import blob_doh as blob_detect
+from skimage.feature import blob_doh, blob_dog, blob_log
 from scipy.stats.mstats import winsorize
 
 
@@ -12,6 +12,7 @@ def blob_detection(
     num_sigma=5,
     winsorize_limits=None,
     background_subtract=False,
+    blob_method='doh',
     mask=None,
     **kwargs,
 ):
@@ -73,7 +74,19 @@ def blob_detection(
               f'White top hat completed in {done_tophat_time-start_time}s',
               flush=True)
 
-    spots = blob_detect(
+    blob_detect_method = None
+    if blob_method == 'dog':
+        # difference of gaussian
+        blob_detect_method = blob_dog
+    elif blob_method == 'doh':
+        # difference of hessian
+        kwargs.pop('exclude_border', None)
+        blob_detect_method = blob_doh
+    else:
+        # laplacian of gaussian
+        blob_detect_method = blob_log
+
+    spots = blob_detect_method(
         processed_image,
         min_blob_radius,
         max_blob_radius,

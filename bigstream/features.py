@@ -1,7 +1,7 @@
 import numpy as np
 import time
 from fishspot.filter import white_tophat, apply_foreground_mask
-from skimage.feature import blob_doh, blob_dog, blob_log
+from skimage.feature import blob_dog, blob_log
 from scipy.stats.mstats import winsorize
 
 
@@ -12,7 +12,7 @@ def blob_detection(
     num_sigma=5,
     winsorize_limits=None,
     background_subtract=False,
-    blob_method='doh',
+    blob_method='dog',
     mask=None,
     **kwargs,
 ):
@@ -46,6 +46,14 @@ def blob_detection(
     if not isinstance(max_blob_radius, (tuple, list, np.ndarray)):
         max_blob_radius = (max_blob_radius,)*image.ndim
 
+    blob_detect_method = None
+    if blob_method == 'dog':
+        # difference of gaussian
+        blob_detect_method = blob_dog
+    else:
+        # laplacian of gaussian
+        blob_detect_method = blob_log
+
     # set given arguments
     kwargs['min_sigma'] = np.array(min_blob_radius) / np.sqrt(image.ndim)
     kwargs['max_sigma'] = np.array(max_blob_radius) / np.sqrt(image.ndim)
@@ -73,18 +81,6 @@ def blob_detection(
         print(f'{time.ctime(time.time())}',
               f'White top hat completed in {done_tophat_time-start_time}s',
               flush=True)
-
-    blob_detect_method = None
-    if blob_method == 'dog':
-        # difference of gaussian
-        blob_detect_method = blob_dog
-    elif blob_method == 'doh':
-        # difference of hessian
-        kwargs.pop('exclude_border', None)
-        blob_detect_method = blob_doh
-    else:
-        # laplacian of gaussian
-        blob_detect_method = blob_log
 
     spots = blob_detect_method(
         processed_image,

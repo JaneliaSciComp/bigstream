@@ -258,6 +258,11 @@ def _define_ransac_args(ransac_args, args):
                              type=int,
                              default=5000,
                              help='Ransac nspots')
+    ransac_args.add_argument(args._argflag('ransac-spot-detection-method'),
+                             dest=args._argdest('spot_detection_method'),
+                             type=str,
+                             default="log",
+                             help='Spot detection method:{log|dog}')
     ransac_args.add_argument(args._argflag('ransac-diagonal-constraint'),
                              dest=args._argdest('diagonal_constraint'),
                              type=float,
@@ -426,6 +431,11 @@ def _extract_ransac_args(args, argdescriptor):
     if _check_attr(args, argdescriptor, 'align_threshold'):
         ransac_args['align_threshold'] = getattr(
             args, argdescriptor._argdest('align_threshold'))
+    if _check_attr(args, argdescriptor, 'spot_detection_method'):
+        ransac_args['fix_spot_detection_kwargs']['blob_method'] = getattr(
+            args, argdescriptor._argdest('spot_detection_method'))
+        ransac_args['mov_spot_detection_kwargs']['blob_method'] = getattr(
+            args, argdescriptor._argdest('spot_detection_method'))
     if _check_attr(args, argdescriptor, 'fix_spot_detection_threshold'):
         ransac_args['fix_spot_detection_kwargs']['threshold'] = getattr(
             args, argdescriptor._argdest('fix_spot_detection_threshold'))

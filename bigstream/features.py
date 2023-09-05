@@ -53,11 +53,11 @@ def blob_detection(
     else:
         # laplacian of gaussian
         blob_detect_method = blob_log
+        kwargs['num_sigma'] = num_sigma
 
     # set given arguments
     kwargs['min_sigma'] = np.array(min_blob_radius) / np.sqrt(image.ndim)
     kwargs['max_sigma'] = np.array(max_blob_radius) / np.sqrt(image.ndim)
-    kwargs['num_sigma'] = num_sigma
 
     # set additional defaults
     if 'threshold' not in kwargs or kwargs['threshold'] is None:

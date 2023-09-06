@@ -1,4 +1,5 @@
 import numpy as np
+import time
 
 import bigstream.transform as cs_transform
 import bigstream.utility as ut
@@ -467,10 +468,11 @@ def distributed_invert_displacement_vector_field(
         blocks_coords.append(coords)
 
     # invert all blocks
-    print('Invert', len(blocks_coords), 'blocks',
+    print(f'{time.ctime(time.time())} Invert', len(blocks_coords), 'blocks',
           'with partition size', blocksize_array,
           flush=True)
-    futures = cluster.client.map(
+
+    invert_res = cluster.client.map(
         _invert_block,
         blocks_coords,
         full_vectorfield=vectorfield_array,
@@ -482,20 +484,19 @@ def distributed_invert_displacement_vector_field(
         sqrt_iterations=sqrt_iterations,
     )
 
-    for batch in as_completed(futures, with_results=True).batches():
+    write_invert_res = cluster.client.map(
+        _write_block,
+        invert_res,
+        output=inv_vectorfield_array
+    )
+
+    for batch in as_completed(write_invert_res, with_results=True).batches():
         for _, result in batch:
-            inverse_block_coords, inverse_block = result
+            block_coords = result
 
-            print('Inversed block:',
-                  inverse_block_coords,
+            print(f'{time.ctime(time.time())} Finished inverting block:',
+                  block_coords,
                   flush=True)
-
-            if inv_vectorfield_array is not None:
-                print('Update inverse block:',
-                      inverse_block_coords,
-                      '(', inverse_block.shape, ')',
-                      flush=True)
-                inv_vectorfield_array[inverse_block_coords] = inverse_block
 
 
 def _invert_block(block_coords,
@@ -550,3 +551,16 @@ def _invert_block(block_coords,
           flush=True)
     # return result
     return inverse_block_coords, inverse_block
+
+
+def _write_block(block, output=None):
+    block_coords, block_data = block
+
+    if output is not None:
+        print(f'{time.ctime(time.time())} Write block:',
+                block_coords,
+                '(', block_data.shape, ')',
+                flush=True)
+        output[block_coords] = block_data
+
+    return block_coords

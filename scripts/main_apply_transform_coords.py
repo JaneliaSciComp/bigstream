@@ -152,7 +152,7 @@ def _run_apply_transform(args):
                                            args.downsampling,
                                            args.input_volume,
                                            args.input_dataset)
-
+        print('Voxel spacing for transform coords:', voxel_spacing)
         warped_coords = distributed_apply_transform_to_coordinates(
             coords,
             affine_transforms_list + [local_deform], # transform_list

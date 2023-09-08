@@ -478,12 +478,7 @@ def distributed_alignment_pipeline(
                                              align_steps=block_align_steps,
                                              batch_size=cluster_batch_size)
 
-    write_transform_res = cluster.client.map(_write_block_transform, 
-                                             block_transform_res,
-                                             output_transform=output_transform,
-                                             with_lock=True)
-
-    _collect_results(write_transform_res, output_transform=output_transform)
+    _collect_results(block_transform_res, output_transform=output_transform)
     print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
             flush=True)
     return output_transform
@@ -492,4 +487,5 @@ def distributed_alignment_pipeline(
 def _collect_results(futures_res, output_transform=None):
     for batch in as_completed(futures_res, with_results=True).batches():
         for _, result in batch:
-            _complete_block(result)
+            _write_block_transform(result,
+                                   output_transform=output_transform)

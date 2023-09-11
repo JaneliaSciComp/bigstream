@@ -345,6 +345,9 @@ def distributed_apply_transform_to_coordinates(
         block_index = (i, j, k)
         lower_bound = min_coord + blocksize_array * np.array(block_index)
         upper_bound = lower_bound + blocksize_array
+        print(f'{time.ctime(time.time())}',
+              f'Get points for {block_index} from {lower_bound} to {upper_bound}',
+                flush=True)
         not_too_low = np.all(coordinates[:, 0:3] >= lower_bound, axis=1)
         not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
         pcoords = coordinates[not_too_low * not_too_high]
@@ -372,7 +375,7 @@ def distributed_apply_transform_to_coordinates(
     else:
         results = []
     
-    print('!!!! RES', len(results), results.shape)
+    print('!!!! RES', len(results))
 
     if len(results) > 1:
         return np.concatenate(results, axis=0)

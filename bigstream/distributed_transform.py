@@ -326,33 +326,36 @@ def distributed_apply_transform_to_coordinates(
     """
 
     # determine partitions of coordinates
-    maxvoxel = np.max(coordinates[:, 0:3]/coords_spacing, axis=0)
     blocksize_array = np.array(blocksize)
-    nblocks = np.ceil(maxvoxel / blocksize_array).astype(int)
-    print('Max voxel coords:', maxvoxel,
+    min_coord = np.max(coordinates[:, 0:3], axis=0)
+    max_coord = np.max(coordinates[:, 0:3], axis=0)
+    vol_size = max_coord - min_coord
+    nblocks = np.ceil(vol_size / blocksize_array).astype(int)
+    print(f'{time.ctime(time.time())}',
+          'Min coords:', min_coord,
+          'Max coords:', min_coord,
           'Block size:', blocksize,
+          'Vol size:', vol_size,
           'Voxel spacing:', coords_spacing,
-          'NBlocks:', nblocks, flush=True)
-    blocks_coords = []
+          'NBlocks:', nblocks,
+          flush=True)
+    blocks_indexes = []
     blocks_points = []
     for (i, j, k) in np.ndindex(*nblocks):
-        start = blocksize_array * (i, j, k)
-        stop = start + blocksize_array
-        block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
-
-        lower_bound = np.array((i, j, k)) * blocksize_array
+        lower_bound = min_coord + blocksize_array * np.array((i, j, k))
         upper_bound = lower_bound + blocksize_array
-        not_too_low = np.all(coordinates[:, 0:3]/coords_spacing >= lower_bound, axis=1)
-        not_too_high = np.all(coordinates[:, 0:3]/coords_spacing < upper_bound, axis=1)
+        not_too_low = np.all(coordinates[:, 0:3] >= lower_bound, axis=1)
+        not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
         pcoords = coordinates[not_too_low * not_too_high]
-        if pcoords.size > 0:
-            blocks_coords.append(block_coords)
+
+        if pcoords.size != 0:
+            blocks_indexes.append((i,j,k))
             blocks_points.append(pcoords)
 
     # transform all partitions and return
     futures = cluster.client.map(
         _transform_coords,
-        blocks_coords,
+        blocks_indexes,
         blocks_points,
         coords_spacing=coords_spacing,
         transform_list=transform_list,
@@ -363,19 +366,25 @@ def distributed_apply_transform_to_coordinates(
     return np.concatenate(results, axis=0)
 
 
-def _transform_coords(block_coords, 
+def _transform_coords(block_index, 
                       coord_indexed_values,
                       coords_spacing,
                       transform_list):
-    print('Apply block transform: ', block_coords,
+    print(f'{time.ctime(time.time())} Apply block transform: ', block_index,
           'to', len(coord_indexed_values), 'points',
           flush=True)
     # read relevant region of transform
     points_coords = coord_indexed_values[:, 0:3]
     points_values = coord_indexed_values[:, 3:]
+    min_block_coord = np.min(points_coords, axis=0)
+    max_block_coord = np.max(points_coords, axis=0)
+
     cropped_transforms = []
     for _, transform in enumerate(transform_list):
         if transform.shape != (4, 4):
+            block_start = np.floor(min_block_coord / coords_spacing).astype(int)
+            block_stop = np.ceil(max_block_coord / coords_spacing).astype(int) + 1
+            block_coords = tuple(slice(x, y) for x, y in zip(block_start, block_stop))
             # for vector displacement fields crop the transformation
             cropped_transforms.append(transform[block_coords])
         else:
@@ -387,6 +396,7 @@ def _transform_coords(block_coords,
         points_coords,
         cropped_transforms,
         transform_spacing=coords_spacing,
+        transform_origin=min_block_coord,
     )
 
     warped_coord_indexed_values = np.empty_like(coord_indexed_values)

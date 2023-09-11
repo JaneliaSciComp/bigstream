@@ -342,28 +342,42 @@ def distributed_apply_transform_to_coordinates(
     blocks_indexes = []
     blocks_points = []
     for (i, j, k) in np.ndindex(*nblocks):
-        lower_bound = min_coord + blocksize_array * np.array((i, j, k))
+        block_index = (i, j, k)
+        lower_bound = min_coord + blocksize_array * np.array(block_index)
         upper_bound = lower_bound + blocksize_array
         not_too_low = np.all(coordinates[:, 0:3] >= lower_bound, axis=1)
         not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
         pcoords = coordinates[not_too_low * not_too_high]
 
-        if pcoords.size != 0:
-            blocks_indexes.append((i,j,k))
+        if pcoords.size > 0:
+            print(f'{time.ctime(time.time())}',
+                  f'Add {len(pcoords)} to block {block_index}',
+                  flush=True)
+            blocks_indexes.append(block_index)
             blocks_points.append(pcoords)
+        else:
+            print(f'{time.ctime(time.time())}',
+                  f'No point added to block {block_index}',
+                  flush=True)
+    if len(blocks_indexes) > 0:
+        # transform all partitions and return
+        futures = cluster.client.map(
+            _transform_coords,
+            blocks_indexes,
+            blocks_points,
+            coords_spacing=coords_spacing,
+            transform_list=transform_list,
+        )
+        results = cluster.client.gather(futures)
+    else:
+        results = []
+    
+    print('!!!! RES', len(results), results.shape)
 
-    # transform all partitions and return
-    futures = cluster.client.map(
-        _transform_coords,
-        blocks_indexes,
-        blocks_points,
-        coords_spacing=coords_spacing,
-        transform_list=transform_list,
-    )
-
-    results = cluster.client.gather(futures)
-
-    return np.concatenate(results, axis=0)
+    if len(results) > 1:
+        return np.concatenate(results, axis=0)
+    else:
+        return results
 
 
 def _transform_coords(block_index, 

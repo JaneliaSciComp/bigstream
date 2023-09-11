@@ -327,10 +327,10 @@ def distributed_apply_transform_to_coordinates(
 
     # determine partitions of coordinates
     blocksize_array = np.array(blocksize)
-    min_coord = np.max(coordinates[:, 0:3], axis=0)
+    min_coord = np.min(coordinates[:, 0:3], axis=0)
     max_coord = np.max(coordinates[:, 0:3], axis=0)
     vol_size = max_coord - min_coord
-    nblocks = np.ceil(vol_size / blocksize_array).astype(int)
+    nblocks = np.ceil(vol_size / blocksize_array + 1).astype(int)
     print(f'{time.ctime(time.time())}',
           'Min coords:', min_coord,
           'Max coords:', min_coord,

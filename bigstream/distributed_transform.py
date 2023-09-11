@@ -374,13 +374,10 @@ def distributed_apply_transform_to_coordinates(
         results = cluster.client.gather(futures)
     else:
         results = []
-    
-    print('!!!! RES', len(results))
-
-    if len(results) > 1:
+    if len(results) > 0:
         return np.concatenate(results, axis=0)
     else:
-        return results
+        return np.empty((0,3))
 
 
 def _transform_coords(block_index, 

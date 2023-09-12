@@ -443,7 +443,7 @@ def _transform_coords(zyx_block_index,
     xyz_warped_coord_indexed_values[:, 0:3] = zyx_warped_coords[:, [2, 1, 0]]
     xyz_warped_coord_indexed_values[:, 3:] = points_values
 
-    min_xyz_warped_coord = np.max(xyz_warped_coord_indexed_values[:, 0:3], axis=0)
+    min_xyz_warped_coord = np.min(xyz_warped_coord_indexed_values[:, 0:3], axis=0)
     max_xyz_warped_coord = np.max(xyz_warped_coord_indexed_values[:, 0:3], axis=0)
 
     print(f'{time.ctime(time.time())} Finished block: ', zyx_block_index,

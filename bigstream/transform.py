@@ -186,7 +186,7 @@ def apply_transform_to_coordinates(
             assert (transform_spacing is not None), error_message
 
             # handle multiple spacings and origins
-            print('Transform coordinates spacing:', spacing)
+            print('Transform coordinates spacing:', transform_spacing)
             spacing = transform_spacing
             origin = transform_origin
             if isinstance(spacing, tuple): spacing = spacing[iii]

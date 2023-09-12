@@ -269,7 +269,7 @@ def _transform_single_block(block_coords,
 def distributed_apply_transform_to_coordinates(
     coordinates,
     transform_list,
-    blocksize,
+    voxel_blocksize,
     coords_spacing=None,
     coords_origin=None,
     cluster=None,
@@ -289,8 +289,8 @@ def distributed_apply_transform_to_coordinates(
         (affine transforms) or d + 1 dimension arrays (deformations).
         Zarr arrays work just fine.
 
-    blocksize : tuple
-        The block partition size used for distributing the work
+    voxel_blocksize : tuple
+        The voxel block partition size used for distributing the work
 
     transform_spacing : 1d array or tuple of 1d arrays (default: None)
         The spacing in physical units (e.g. mm or um) between voxels
@@ -326,25 +326,31 @@ def distributed_apply_transform_to_coordinates(
     """
 
     # determine partitions of coordinates
-    blocksize_array = np.array(blocksize)
+    phys_blocksize = np.array(voxel_blocksize)*coords_spacing
     min_coord = np.min(coordinates[:, 0:3], axis=0)
     max_coord = np.max(coordinates[:, 0:3], axis=0)
     vol_size = max_coord - min_coord
-    nblocks = np.ceil(vol_size / blocksize_array + 1).astype(int)
+    nblocks = np.ceil(vol_size / phys_blocksize + 1).astype(int)
     print(f'{time.ctime(time.time())}',
           'Min coords:', min_coord,
           'Max coords:', min_coord,
-          'Block size:', blocksize,
+          'Block size:', voxel_blocksize,
+          'Phys block size:', phys_blocksize,
           'Vol size:', vol_size,
           'Voxel spacing:', coords_spacing,
           'NBlocks:', nblocks,
           flush=True)
     blocks_indexes = []
+    blocks_slices = []
+    blocks_origins = []
     blocks_points = []
     for (i, j, k) in np.ndindex(*nblocks):
         block_index = (i, j, k)
-        lower_bound = min_coord + blocksize_array * np.array(block_index)
-        upper_bound = lower_bound + blocksize_array
+        block_start = voxel_blocksize * np.array(block_index)
+        block_stop = block_start + voxel_blocksize
+        block_slice_coords = tuple(slice(x, y) for x, y in zip(block_start, block_stop))
+        lower_bound = min_coord + phys_blocksize * np.array(block_index)
+        upper_bound = lower_bound + phys_blocksize
         print(f'{time.ctime(time.time())}',
               f'Get points for {block_index} from {lower_bound} to {upper_bound}',
                 flush=True)
@@ -357,6 +363,8 @@ def distributed_apply_transform_to_coordinates(
                   f'Add {len(pcoords)} to block {block_index}',
                   flush=True)
             blocks_indexes.append(block_index)
+            blocks_slices.append(block_slice_coords)
+            blocks_origins.append(lower_bound)
             blocks_points.append(pcoords)
         else:
             print(f'{time.ctime(time.time())}',
@@ -367,6 +375,8 @@ def distributed_apply_transform_to_coordinates(
         futures = cluster.client.map(
             _transform_coords,
             blocks_indexes,
+            blocks_slices,
+            blocks_origins,
             blocks_points,
             coords_spacing=coords_spacing,
             transform_list=transform_list,
@@ -380,28 +390,27 @@ def distributed_apply_transform_to_coordinates(
         return np.empty((0,3))
 
 
-def _transform_coords(block_index, 
+def _transform_coords(block_index,
+                      block_slice_coords,
+                      block_origin,
                       coord_indexed_values,
-                      origin=None,
                       coords_spacing=None,
                       transform_list=[]):
+    # read relevant region of transform
     print(f'{time.ctime(time.time())} Apply block transform: ', block_index,
+          'block origin', block_origin,
+          'block slice coords', block_slice_coords,
           'to', len(coord_indexed_values), 'points',
           flush=True)
-    # read relevant region of transform
+
     points_coords = coord_indexed_values[:, 0:3]
     points_values = coord_indexed_values[:, 3:]
-    min_block_coord = np.min(points_coords, axis=0)
-    max_block_coord = np.max(points_coords, axis=0)
 
     cropped_transforms = []
     for _, transform in enumerate(transform_list):
         if transform.shape != (4, 4):
-            block_start = np.floor(min_block_coord / coords_spacing).astype(int)
-            block_stop = np.ceil(max_block_coord / coords_spacing).astype(int) + 1
-            block_coords = tuple(slice(x, y) for x, y in zip(block_start, block_stop))
             # for vector displacement fields crop the transformation
-            cropped_transforms.append(transform[block_coords])
+            cropped_transforms.append(transform[block_slice_coords])
         else:
             # no need to do any cropping if it's an affine matrix
             cropped_transforms.append(transform)
@@ -411,6 +420,7 @@ def _transform_coords(block_index,
         points_coords,
         cropped_transforms,
         transform_spacing=coords_spacing,
+        transform_origin=block_origin
     )
 
     warped_coord_indexed_values = np.empty_like(coord_indexed_values)

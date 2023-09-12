@@ -308,14 +308,17 @@ def distributed_apply_transform_to_coordinates(
     origin = np.min(coordinates, axis=0)
     nblocks = np.max(coordinates, axis=0) - origin
     nblocks = np.ceil(nblocks / partition_size).astype(int)
-    partitions = []
+    partitions, indices = [], []
     for (i, j, k) in np.ndindex(*nblocks):
         lower_bound = origin + partition_size * np.array((i, j, k))
         upper_bound = lower_bound + partition_size
         not_too_low = np.all(coordinates >= lower_bound, axis=1)
         not_too_high = np.all(coordinates < upper_bound, axis=1)
-        coords = coordinates[ not_too_low * not_too_high ]
-        if coords.size != 0: partitions.append(coords)
+        part_indices = np.nonzero( not_too_low * not_too_high )[0]
+        if part_indices.size != 0:
+            partitions.append(coordinates[part_indices])
+            indices.append(part_indices)
+    indices = np.concatenate(indices, axis=0)
 
     def transform_partition(coordinates, transform_list):
 
@@ -346,9 +349,10 @@ def distributed_apply_transform_to_coordinates(
         transform_partition, partitions,
         transform_list=transform_list,
     )
-    results = cluster.client.gather(futures)
-
-    return np.concatenate(results, axis=0)
+    permuted = np.concatenate(cluster.client.gather(futures), axis=0)
+    results = np.empty_like(permuted)
+    results[indices] = permuted
+    return results
 
 
 @cluster

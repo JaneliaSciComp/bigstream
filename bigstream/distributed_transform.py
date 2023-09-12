@@ -409,8 +409,19 @@ def _transform_coords(block_index,
     cropped_transforms = []
     for _, transform in enumerate(transform_list):
         if transform.shape != (4, 4):
+            crop_slices = []
+            for axis in range(transform.ndim-1):
+                start = block_slice_coords[axis].start
+                stop = block_slice_coords[axis].stop
+                if transform.shape[axis] > stop:
+                    crop_slices.append(slice(start, transform.shape[axis]))
+                else:
+                    crop_slices.append(slice(start, stop))
+            print(f'{time.ctime(time.time())} Crop block {block_index} transform: ',
+                f'to {crop_slices}',
+                flush=True)
             # for vector displacement fields crop the transformation
-            cropped_transforms.append(transform[block_slice_coords])
+            cropped_transforms.append(transform[tuple(crop_slices)])
         else:
             # no need to do any cropping if it's an affine matrix
             cropped_transforms.append(transform)

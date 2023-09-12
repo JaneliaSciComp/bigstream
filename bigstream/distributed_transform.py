@@ -368,7 +368,6 @@ def distributed_apply_transform_to_coordinates(
             _transform_coords,
             blocks_indexes,
             blocks_points,
-            origin=min_coord,
             coords_spacing=coords_spacing,
             transform_list=transform_list,
         )
@@ -412,7 +411,6 @@ def _transform_coords(block_index,
         points_coords,
         cropped_transforms,
         transform_spacing=coords_spacing,
-        transform_origin=origin,
     )
 
     warped_coord_indexed_values = np.empty_like(coord_indexed_values)

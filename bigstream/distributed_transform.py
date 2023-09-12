@@ -416,14 +416,15 @@ def _transform_coords(block_index,
     warped_coord_indexed_values = np.empty_like(coord_indexed_values)
     warped_coord_indexed_values[:, 0:3] = warped_coords
     warped_coord_indexed_values[:, 3:] = points_values
+
+    max_warped_coord = np.max(warped_coord_indexed_values[:, 0:3], axis=0)
+
     print(f'{time.ctime(time.time())} Finished block: ', block_index,
           f'- warped {warped_coord_indexed_values.shape} coords',
+          f'max warped coord {max_warped_coord}',
           flush=True)
 
-    if points_values.shape[1] == 0:
-        return warped_coords
-    else:
-        return warped_coord_indexed_values
+    return warped_coord_indexed_values
 
 
 @cluster

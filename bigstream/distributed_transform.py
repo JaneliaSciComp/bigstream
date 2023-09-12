@@ -416,11 +416,16 @@ def _transform_coords(zyx_block_index,
             for axis in range(transform.ndim-1):
                 start = zyx_block_slice_coords[axis].start
                 stop = zyx_block_slice_coords[axis].stop
+                print('!!!! AXIS', axis,
+                      'START', start,
+                      'STOP', stop,
+                      transform.shape,
+                      transform.shape[axis])
                 if transform.shape[axis] > stop:
                     crop_slices.append(slice(start, transform.shape[axis]))
                 else:
                     crop_slices.append(slice(start, stop))
-            print(f'{time.ctime(time.time())} Crop block (z,y,x) {zyx_block_index} transform: ',
+            print(f'{time.ctime(time.time())} Crop transform (z,y,x) {zyx_block_index}: ',
                 f'to {crop_slices} from {transform.shape}',
                 flush=True)
             # for vector displacement fields crop the transformation

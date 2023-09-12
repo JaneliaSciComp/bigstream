@@ -395,14 +395,14 @@ def distributed_apply_transform_to_coordinates(
 
 def _transform_coords(block_index,
                       block_slice_coords,
-                      block_origin,
+                      xyz_block_origin,
                       xyz_coord_indexed_values,
                       coords_spacing=None,
                       transform_list=[]):
     # read relevant region of transform
     print(f'{time.ctime(time.time())} Apply block transform: ', block_index,
-          'block origin', block_origin,
-          'block slice coords', block_slice_coords,
+          'block origin (x,y,z)', xyz_block_origin,
+          'block slice coords (dz,dy,dx)', block_slice_coords,
           'to', len(xyz_coord_indexed_values), 'points',
           flush=True)
 
@@ -434,7 +434,7 @@ def _transform_coords(block_index,
         zyx_points_coords,
         cropped_transforms,
         transform_spacing=coords_spacing,
-        transform_origin=block_origin
+        transform_origin=xyz_block_origin[::-1]
     )
 
     warped_coord_indexed_values = np.empty_like(xyz_coord_indexed_values)

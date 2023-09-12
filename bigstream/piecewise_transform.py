@@ -5,7 +5,7 @@ import os, tempfile
 from ClusterWrap.decorator import cluster
 import dask.array as da
 import zarr
-import bigstream.transform as cs_transform
+import bigstream.transform as bs_transform
 
 
 @cluster
@@ -159,7 +159,7 @@ def distributed_apply_transform(
             a = [x.stop-1 if y else x.start for x, y in zip(fix_slices, corner)]
             fix_block_coords.append(a)
         fix_block_coords = np.array(fix_block_coords) * fix_spacing
-        mov_block_coords = cs_transform.apply_transform_to_coordinates(
+        mov_block_coords = bs_transform.apply_transform_to_coordinates(
             fix_block_coords, transform_list, kwargs['transform_spacing'], transform_origin,
         )
         mov_block_coords = np.round(mov_block_coords / mov_spacing).astype(int)
@@ -172,7 +172,7 @@ def distributed_apply_transform(
         mov_origin = mov_spacing * [s.start for s in mov_slices]
 
         # resample
-        aligned = cs_transform.apply_transform(
+        aligned = bs_transform.apply_transform(
             fix, mov, fix_spacing, mov_spacing,
             transform_list=transform_list,
             transform_origin=transform_origin,
@@ -335,7 +335,7 @@ def distributed_apply_transform_to_coordinates(
         transform_list = new_list
 
         # apply transforms
-        return cs_transform.apply_transform_to_coordinates(
+        return bs_transform.apply_transform_to_coordinates(
             coordinates, transform_list,
             transform_spacing,
             transform_origin=a,
@@ -357,8 +357,10 @@ def distributed_invert_displacement_vector_field(
     spacing,
     blocksize,
     write_path,
+    step=0.5,
     iterations=10,
-    order=2,
+    sqrt_order=2,
+    sqrt_step=0.5,
     sqrt_iterations=5,
     cluster=None,
     cluster_kwargs={},
@@ -380,12 +382,18 @@ def distributed_invert_displacement_vector_field(
     write_path : string (default: None)
         Location on disk to write the resampled data as a zarr array
 
+    step : float (default: 0.5)
+        The step size used for each iteration of the stationary point algorithm
+
     iterations : scalar int (default: 10)
         The number of stationary point iterations to find inverse. More
         iterations gives a more accurate inverse but takes more time.
 
-    order : scalar int (default: 2)
+    sqrt_order : scalar int (default: 2)
         The number of roots to take before stationary point iterations.
+
+    sqrt_step : float (default: 0.5)
+        The step size used for each iteration of the composition square root gradient descent
 
     sqrt_iterations : scalar int (default: 5)
         The number of iterations to find the field composition square root.
@@ -413,6 +421,7 @@ def distributed_invert_displacement_vector_field(
     overlap = np.round(blocksize * 0.25).astype(int)
     nblocks = np.ceil(np.array(field_zarr.shape[:-1]) / blocksize).astype(int)
 
+    # TODO: eliminate use of dask array
     # store block coordinates in a dask array
     block_coords = np.empty(nblocks, dtype=tuple)
     for (i, j, k) in np.ndindex(*nblocks):
@@ -429,10 +438,16 @@ def distributed_invert_displacement_vector_field(
 
         slices = slices.item()
         field = field_zarr[slices]
-        inverse = cs_transform.invert_displacement_vector_field(
-            field, spacing, iterations, order, sqrt_iterations,
+        inverse = bs_transform.invert_displacement_vector_field(
+            field,
+            spacing,
+            step=step,
+            iterations=iterations,
+            sqrt_order=sqrt_order,
+            sqrt_step=sqrt_step,
+            sqrt_iterations=sqrt_iterations,
         )
-        
+
         # crop out overlap
         for axis in range(inverse.ndim - 1):
 

@@ -418,7 +418,7 @@ def _transform_coords(block_index,
                 else:
                     crop_slices.append(slice(start, stop))
             print(f'{time.ctime(time.time())} Crop block {block_index} transform: ',
-                f'to {crop_slices}',
+                f'to {crop_slices} from {transform.shape}',
                 flush=True)
             # for vector displacement fields crop the transformation
             cropped_transforms.append(transform[tuple(crop_slices)])

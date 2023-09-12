@@ -406,7 +406,8 @@ def _transform_coords(zyx_block_index,
           'to', len(xyz_coord_indexed_values), 'points',
           flush=True)
 
-    zyx_points_coords = np.flip(xyz_coord_indexed_values[:, 0:3],axis=1)
+    # flip (x, y, z) to (z, y, x)
+    zyx_points_coords = xyz_coord_indexed_values[:, [2, 1, 0]]
     points_values = xyz_coord_indexed_values[:, 3:]
 
     cropped_transforms = []
@@ -430,25 +431,28 @@ def _transform_coords(zyx_block_index,
             cropped_transforms.append(transform)
 
     # apply transforms
-    warped_coords = cs_transform.apply_transform_to_coordinates(
+    zyx_warped_coords = cs_transform.apply_transform_to_coordinates(
         zyx_points_coords,
         cropped_transforms,
         transform_spacing=coords_spacing,
         transform_origin=xyz_block_origin[::-1]
     )
 
-    warped_coord_indexed_values = np.empty_like(xyz_coord_indexed_values)
-    warped_coord_indexed_values[:, 0:3] = np.flip(warped_coords, axis=1)
-    warped_coord_indexed_values[:, 3:] = points_values
+    xyz_warped_coord_indexed_values = np.empty_like(xyz_coord_indexed_values)
+    # flipped the zyx warped coords back to xyz
+    xyz_warped_coord_indexed_values[:, 0:3] = zyx_warped_coords[:, [2, 1, 0]]
+    xyz_warped_coord_indexed_values[:, 3:] = points_values
 
-    max_warped_coord = np.max(warped_coord_indexed_values[:, 0:3], axis=0)
+    min_xyz_warped_coord = np.max(xyz_warped_coord_indexed_values[:, 0:3], axis=0)
+    max_xyz_warped_coord = np.max(xyz_warped_coord_indexed_values[:, 0:3], axis=0)
 
     print(f'{time.ctime(time.time())} Finished block: ', zyx_block_index,
-          f'- warped {warped_coord_indexed_values.shape} coords',
-          f'max warped coord {max_warped_coord}',
+          f'- warped {xyz_warped_coord_indexed_values.shape} coords',
+          f'min warped coord(x,y,z) {min_xyz_warped_coord}',
+          f'max warped coord(x,y,z) {max_xyz_warped_coord}',
           flush=True)
 
-    return warped_coord_indexed_values
+    return xyz_warped_coord_indexed_values
 
 
 @cluster

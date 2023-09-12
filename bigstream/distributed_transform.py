@@ -416,12 +416,7 @@ def _transform_coords(zyx_block_index,
             for axis in range(transform.ndim-1):
                 start = zyx_block_slice_coords[axis].start
                 stop = zyx_block_slice_coords[axis].stop
-                print('!!!! AXIS', axis,
-                      'START', start,
-                      'STOP', stop,
-                      transform.shape,
-                      transform.shape[axis])
-                if transform.shape[axis] > stop:
+                if transform.shape[axis] < stop:
                     crop_slices.append(slice(start, transform.shape[axis]))
                 else:
                     crop_slices.append(slice(start, stop))

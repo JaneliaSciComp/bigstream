@@ -385,8 +385,10 @@ def distributed_apply_transform_to_coordinates(
         transform_list=transform_list,
     )
     transform_results = np.concatenate(cluster.client.gather(futures), axis=0)
+    # maintain the same order for the warped results
     results = np.empty_like(transform_results)
     results[original_points_indexes] = transform_results
+    return results
 
 
 def _transform_coords(block_index,

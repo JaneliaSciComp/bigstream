@@ -116,8 +116,12 @@ def _run_apply_transform(args):
         # Nothing to do
         return
 
-    # Read the input coordinates
-    coords = np.float32(np.loadtxt(args.input_coords, delimiter=','))
+    # Read the input coordinates (as x,y,z)
+    input_coords = np.float32(np.loadtxt(args.input_coords, delimiter=','))
+    # flip them to z,y,x
+    zyx_coords = np.empty_like(input_coords)
+    zyx_coords[:, 0:3] = input_coords[:, [2, 1, 0]]
+    zyx_coords[:, 3:] = input_coords[:, 3:]
 
     if (args.dask_config):
         with open(args.dask_config) as f:
@@ -153,15 +157,19 @@ def _run_apply_transform(args):
                                            args.input_volume,
                                            args.input_dataset)
         print('Voxel spacing for transform coords:', voxel_spacing)
-        warped_coords = distributed_apply_transform_to_coordinates(
-            coords,
+        warped_zyx_coords = distributed_apply_transform_to_coordinates(
+            zyx_coords,
             affine_transforms_list + [local_deform], # transform_list
             processing_blocksize,
             coords_spacing=voxel_spacing,
             cluster=cluster,
         )
+        output_coords = np.empty_like(warped_zyx_coords)
+        # flip z,y,x back to x,y,z before writing them to file
+        output_coords[:, 0:3] = warped_zyx_coords[:, [2, 1, 0]]
+        output_coords[:, 3:] = warped_zyx_coords[:, 3:]
         print('Save warped coords to', args.output_coords, flush=True)
-        np.savetxt(args.output_coords, warped_coords, delimiter=',')
+        np.savetxt(args.output_coords, output_coords, delimiter=',')
         return args.output_coords
     else:
         return None

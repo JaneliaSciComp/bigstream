@@ -856,7 +856,7 @@ def _align_local_data(fix_input,
             local_inv_deform,
             overlap_factor=blocks_overlap_factor,
             iterations=inv_iterations,
-            order=inv_order,
+            sqrt_order=inv_order,
             sqrt_iterations=inv_sqrt_iterations,
             cluster=cluster,
         )

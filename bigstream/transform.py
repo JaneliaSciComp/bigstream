@@ -186,7 +186,6 @@ def apply_transform_to_coordinates(
             assert (transform_spacing is not None), error_message
 
             # handle multiple spacings and origins
-            print('Transform coordinates spacing:', transform_spacing)
             spacing = transform_spacing
             origin = transform_origin
             if isinstance(spacing, tuple): spacing = spacing[iii]
@@ -350,8 +349,10 @@ def compose_transform_list(transforms, spacings):
 def invert_displacement_vector_field(
     field,
     spacing,
+    step=0.5,
     iterations=10,
-    order=2,
+    sqrt_order=2,
+    sqrt_step=0.5,
     sqrt_iterations=5,
 ):
     """
@@ -365,12 +366,18 @@ def invert_displacement_vector_field(
     spacing : 1d-array
         The physical voxel spacing of the displacement field
 
+    step : float (default: 0.5)
+        The step size used for each iteration of the stationary point algorithm
+
     iterations : scalar int (default: 10)
         The number of stationary point iterations to find inverse. More
         iterations gives a more accurate inverse but takes more time.
 
-    order : scalar int (default: 2)
+    sqrt_order : scalar int (default: 2)
         The number of roots to take before stationary point iterations
+
+    sqrt_step : float (default: 0.5)
+        The step size used for each iteration of the composition square root gradient descent
 
     sqrt_iterations : scalar int (default: 5)
         The number of iterations to find the field composition square root
@@ -387,16 +394,17 @@ def invert_displacement_vector_field(
 
     # initialize inverse as negative root
     root = _displacement_field_composition_nth_square_root(
-        field, spacing, order, sqrt_iterations,
+        field, spacing, sqrt_order, sqrt_step, sqrt_iterations,
     )
     inv = - np.copy(root)
 
     # iterate to invert
     for i in range(iterations):
-        inv -= compose_transforms(root, inv, spacing, spacing)
+        residual = compose_transforms(root, inv, spacing, spacing)
+        inv -= step * residual
 
     # square-compose inv order times
-    for i in range(order):
+    for i in range(sqrt_order):
         inv = compose_transforms(inv, inv, spacing, spacing)
 
     # return result
@@ -407,7 +415,8 @@ def _displacement_field_composition_nth_square_root(
     field,
     spacing,
     order,
-    sqrt_iterations=5,
+    step,
+    iterations,
 ):
     """
     """
@@ -418,7 +427,7 @@ def _displacement_field_composition_nth_square_root(
     # iterate taking square roots
     for i in range(order):
         root = _displacement_field_composition_square_root(
-            root, spacing, iterations=sqrt_iterations,
+            root, spacing, step, iterations,
         )
 
     # return result
@@ -428,7 +437,8 @@ def _displacement_field_composition_nth_square_root(
 def _displacement_field_composition_square_root(
     field,
     spacing,
-    iterations=5,
+    step,
+    iterations,
 ):
     """
     """
@@ -439,9 +449,18 @@ def _displacement_field_composition_square_root(
     # iterate
     for i in range(iterations):
         residual = (field - compose_transforms(root, root, spacing, spacing))
-        root += 0.5 * residual
+        gradient = np.einsum('...ij,...j', _jacobian(root, spacing), residual) + residual
+        root += step * gradient
 
     # return result
     return root
 
 
+def _jacobian(field, spacing):
+    """
+    """
+    jacobian = np.empty(field.shape[:-1] + (field.shape[-1],)*2, dtype=field.dtype)
+    for iii in range(field.shape[-1]):
+        grad = np.moveaxis( np.array( np.gradient(field[..., iii], *spacing) ), 0, -1)
+        jacobian[..., iii, :] = np.ascontiguousarray(grad)
+    return jacobian

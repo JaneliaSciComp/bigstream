@@ -1,7 +1,7 @@
 import numpy as np
 import time
 
-import bigstream.transform as cs_transform
+import bigstream.transform as bs_transform
 import bigstream.utility as ut
 
 from itertools import product
@@ -192,7 +192,7 @@ def _transform_single_block(block_coords,
         fix_block_coords.append(a)
     fix_block_coords = np.array(fix_block_coords) * fix_spacing
 
-    mov_block_coords = cs_transform.apply_transform_to_coordinates(
+    mov_block_coords = bs_transform.apply_transform_to_coordinates(
         fix_block_coords,
         applied_transform_list,
         transform_spacing_list,
@@ -219,7 +219,7 @@ def _transform_single_block(block_coords,
           flush=True)
 
     # resample
-    aligned_block = cs_transform.apply_transform(
+    aligned_block = bs_transform.apply_transform(
         fix_block, mov_block,
         fix_spacing, mov_spacing,
         transform_list=applied_transform_list,
@@ -267,7 +267,7 @@ def _transform_single_block(block_coords,
 
 @cluster
 def distributed_apply_transform_to_coordinates(
-    xyz_coordinates,
+    coordinates,
     transform_list,
     voxel_blocksize,
     coords_spacing=None,
@@ -281,8 +281,10 @@ def distributed_apply_transform_to_coordinates(
 
     Parameters
     ----------
-    xyz_coordinates : Nxd array
+    coordinates : Nxd array
         The coordinates to move. N such coordinates in d dimensions.
+        Typically coordinates are expected to be as z, y, x, 
+        unless the displacement vector uses a different coordinate system
 
     transform_list : list
         The transforms to apply, in stack order. Elements must be 2d 4x4 arrays
@@ -327,101 +329,94 @@ def distributed_apply_transform_to_coordinates(
 
     # determine partitions of coordinates
     phys_blocksize = np.array(voxel_blocksize)*coords_spacing[::-1]
-    min_coord = np.min(xyz_coordinates[:, 0:3], axis=0)
-    max_coord = np.max(xyz_coordinates[:, 0:3], axis=0)
+    min_coord = np.min(coordinates[:, 0:3], axis=0)
+    max_coord = np.max(coordinates[:, 0:3], axis=0)
     vol_size = max_coord - min_coord
     nblocks = np.ceil(vol_size / phys_blocksize + 1).astype(int)
     print(f'{time.ctime(time.time())}',
-          'Min coords (x,y,z):', min_coord,
-          'Max coords: (x,y,z)', max_coord,
+          'Min coords:', min_coord,
+          'Max coords:', max_coord,
           'Block size:', voxel_blocksize,
           'Phys block size:', phys_blocksize,
-          'Vol size (dimx,dimy,dimz):', vol_size,
-          'Voxel spacing (z,y,x):', coords_spacing,
-          'NBlocks (nx, ny, nz):', nblocks,
+          'Vol size:', vol_size,
+          'Voxel spacing:', coords_spacing,
+          'NBlocks:', nblocks,
           flush=True)
     blocks_indexes = []
     blocks_slices = []
     blocks_origins = []
-    blocks_points = []
+    blocks_points, blocks_points_indexes = [], []
     for (i, j, k) in np.ndindex(*nblocks):
-        xyz_block_index = (i, j, k)
-        zyx_block_index = (k, j, i)
-        block_start = voxel_blocksize * np.array(xyz_block_index)
+        block_index = (i, j, k)
+        block_start = voxel_blocksize * np.array(block_index)
         block_stop = block_start + voxel_blocksize
-        xyz_block_slice_coords = tuple(slice(x, y) for x, y in zip(block_start, block_stop))
-        zyx_block_slice_coords = xyz_block_slice_coords[::-1]
-        xyz_lower_bound = min_coord + phys_blocksize * np.array(xyz_block_index)
-        xyz_upper_bound = xyz_lower_bound + phys_blocksize
+        block_slice_coords = tuple(slice(x, y) for x, y in zip(block_start, block_stop))
+        lower_bound = min_coord + phys_blocksize * np.array(block_index)
+        upper_bound = lower_bound + phys_blocksize
         print(f'{time.ctime(time.time())}',
-              f'Get points for block (z,y,x) {zyx_block_index}: {zyx_block_slice_coords}',
-              f'from {xyz_lower_bound} to {xyz_upper_bound}',
+              f'Get points for block {block_index}: {block_slice_coords}',
+              f'from {lower_bound} to {upper_bound}',
               flush=True)
-        not_too_low = np.all(xyz_coordinates[:, 0:3] >= xyz_lower_bound, axis=1)
-        not_too_high = np.all(xyz_coordinates[:, 0:3] < xyz_upper_bound, axis=1)
-        xyz_pcoords = xyz_coordinates[not_too_low * not_too_high]
-
-        if xyz_pcoords.size > 0:
+        not_too_low = np.all(coordinates[:, 0:3] >= lower_bound, axis=1)
+        not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
+        point_indexes = np.nonzero(not_too_low * not_too_high)[0]
+        if point_indexes.size > 0:
             print(f'{time.ctime(time.time())}',
-                  f'Add {len(xyz_pcoords)} to block (z,y,x) {zyx_block_index}',
+                  f'Add {point_indexes.size} to block {block_index}',
                   flush=True)
-            blocks_indexes.append(zyx_block_index)
-            blocks_slices.append(zyx_block_slice_coords)
-            blocks_origins.append(xyz_lower_bound)
-            blocks_points.append(xyz_pcoords)
+            blocks_indexes.append(block_index)
+            blocks_slices.append(block_slice_coords)
+            blocks_origins.append(lower_bound)
+            blocks_points.append(coordinates[point_indexes])
+            blocks_points_indexes.append(point_indexes)
         else:
             print(f'{time.ctime(time.time())}',
-                  f'No point added to block (z,y,x) {zyx_block_index}',
+                  f'No point added to block {block_index}',
                   flush=True)
-    if len(blocks_indexes) > 0:
-        # transform all partitions and return
-        futures = cluster.client.map(
-            _transform_coords,
-            blocks_indexes,
-            blocks_slices,
-            blocks_origins,
-            blocks_points,
-            coords_spacing=coords_spacing,
-            transform_list=transform_list,
-        )
-        results = cluster.client.gather(futures)
-    else:
-        results = []
-    if len(results) > 0:
-        return np.concatenate(results, axis=0)
-    else:
-        return np.empty((0,3))
+    original_points_indexes = np.concatenate(blocks_points_indexes, axis=0)
+    # transform all partitions and return
+    futures = cluster.client.map(
+        _transform_coords,
+        blocks_indexes,
+        blocks_slices,
+        blocks_origins,
+        blocks_points,
+        coords_spacing=coords_spacing,
+        transform_list=transform_list,
+    )
+    transform_results = np.concatenate(cluster.client.gather(futures), axis=0)
+    results = np.empty_like(transform_results)
+    results[original_points_indexes] = transform_results
 
 
-def _transform_coords(zyx_block_index,
-                      zyx_block_slice_coords,
-                      xyz_block_origin,
-                      xyz_coord_indexed_values,
+def _transform_coords(block_index,
+                      block_slice_coords,
+                      block_origin,
+                      coord_indexed_values,
                       coords_spacing=None,
                       transform_list=[]):
     # read relevant region of transform
-    print(f'{time.ctime(time.time())} Apply block transform (z,y,x): ', zyx_block_index,
-          'block origin (x,y,z)', xyz_block_origin,
-          'block slice coords (dz,dy,dx)', zyx_block_slice_coords,
-          'to', len(xyz_coord_indexed_values), 'points',
+    print(f'{time.ctime(time.time())} Apply block {block_index} transform ',
+          'block origin', block_origin,
+          'block slice coords', block_slice_coords,
+          'to', len(coord_indexed_values), 'points',
           flush=True)
 
-    # flip (x, y, z) to (z, y, x)
-    zyx_points_coords = xyz_coord_indexed_values[:, [2, 1, 0]]
-    points_values = xyz_coord_indexed_values[:, 3:]
+    points_coords = coord_indexed_values[:, 0:3]
+    points_values = coord_indexed_values[:, 3:]
 
     cropped_transforms = []
     for _, transform in enumerate(transform_list):
         if transform.shape != (4, 4):
             crop_slices = []
             for axis in range(transform.ndim-1):
-                start = zyx_block_slice_coords[axis].start
-                stop = zyx_block_slice_coords[axis].stop
+                start = block_slice_coords[axis].start
+                stop = block_slice_coords[axis].stop
                 if transform.shape[axis] < stop:
                     crop_slices.append(slice(start, transform.shape[axis]))
                 else:
                     crop_slices.append(slice(start, stop))
-            print(f'{time.ctime(time.time())} Crop transform (z,y,x) {zyx_block_index}: ',
+            print(f'{time.ctime(time.time())} Crop transform {block_index}: ',
                 f'to {crop_slices} from {transform.shape}',
                 flush=True)
             # for vector displacement fields crop the transformation
@@ -431,28 +426,28 @@ def _transform_coords(zyx_block_index,
             cropped_transforms.append(transform)
 
     # apply transforms
-    zyx_warped_coords = cs_transform.apply_transform_to_coordinates(
-        zyx_points_coords,
+    warped_coords = bs_transform.apply_transform_to_coordinates(
+        points_coords,
         cropped_transforms,
         transform_spacing=coords_spacing,
-        transform_origin=xyz_block_origin[::-1]
+        transform_origin=block_origin[::-1]
     )
 
-    xyz_warped_coord_indexed_values = np.empty_like(xyz_coord_indexed_values)
+    warped_coord_indexed_values = np.empty_like(coord_indexed_values)
     # flipped the zyx warped coords back to xyz
-    xyz_warped_coord_indexed_values[:, 0:3] = zyx_warped_coords[:, [2, 1, 0]]
-    xyz_warped_coord_indexed_values[:, 3:] = points_values
+    warped_coord_indexed_values[:, 0:3] = warped_coords[:, 0:3]
+    warped_coord_indexed_values[:, 3:] = points_values
 
-    min_xyz_warped_coord = np.min(xyz_warped_coord_indexed_values[:, 0:3], axis=0)
-    max_xyz_warped_coord = np.max(xyz_warped_coord_indexed_values[:, 0:3], axis=0)
+    min_warped_coord = np.min(warped_coord_indexed_values[:, 0:3], axis=0)
+    max_warped_coord = np.max(warped_coord_indexed_values[:, 0:3], axis=0)
 
-    print(f'{time.ctime(time.time())} Finished block: ', zyx_block_index,
-          f'- warped {xyz_warped_coord_indexed_values.shape} coords',
-          f'min warped coord(x,y,z) {min_xyz_warped_coord}',
-          f'max warped coord(x,y,z) {max_xyz_warped_coord}',
+    print(f'{time.ctime(time.time())} Finished block: ', block_index,
+          f'- warped {warped_coord_indexed_values.shape} coords',
+          f'min warped coord {min_warped_coord}',
+          f'max warped coord {max_warped_coord}',
           flush=True)
 
-    return xyz_warped_coord_indexed_values
+    return warped_coord_indexed_values
 
 
 @cluster
@@ -462,8 +457,10 @@ def distributed_invert_displacement_vector_field(
     blocksize,
     inv_vectorfield_array,
     overlap_factor=0.25,
+    step=0.5,
     iterations=10,
-    order=2,
+    sqrt_order=2,
+    sqrt_step=0.5,
     sqrt_iterations=5,
     cluster=None,
     cluster_kwargs={},
@@ -487,12 +484,18 @@ def distributed_invert_displacement_vector_field(
 
     overlap_factor : overlap factor (default: 0.25)
 
+    step : float (default: 0.5)
+        The step size used for each iteration of the stationary point algorithm
+
     iterations : scalar int (default: 10)
         The number of stationary point iterations to find inverse. More
         iterations gives a more accurate inverse but takes more time.
 
-    order : scalar int (default: 2)
+    sqrt_order : scalar int (default: 2)
         The number of roots to take before stationary point iterations.
+
+    sqrt_step : float (default: 0.5)
+        The step size used for each iteration of the composition square root gradient descent
 
     sqrt_iterations : scalar int (default: 5)
         The number of iterations to find the field composition square root.
@@ -540,7 +543,8 @@ def distributed_invert_displacement_vector_field(
         blocksize=blocksize_array,
         blockoverlaps=overlap,
         iterations=iterations,
-        order=order,
+        sqrt_order=sqrt_order,
+        sqrt_step=sqrt_step,
         sqrt_iterations=sqrt_iterations,
     )
 
@@ -564,8 +568,10 @@ def _invert_block(block_coords,
                   spacing=None,
                   blocksize=None,
                   blockoverlaps=None,
+                  step=0.5,
                   iterations=10,
-                  order=2,
+                  sqrt_order=2,
+                  sqrt_step=0.5,
                   sqrt_iterations=5):
     """
     Invert block function
@@ -573,8 +579,14 @@ def _invert_block(block_coords,
     print('Invert block:', block_coords, flush=True)
 
     block_vectorfield = full_vectorfield[block_coords]
-    inverse_block = cs_transform.invert_displacement_vector_field(
-        block_vectorfield, spacing, iterations, order, sqrt_iterations,
+    inverse_block = bs_transform.invert_displacement_vector_field(
+        block_vectorfield,
+        spacing,
+        step=step,
+        iterations=iterations,
+        sqrt_order=sqrt_order,
+        sqrt_step=sqrt_step,
+        sqrt_iterations=sqrt_iterations,
     )
 
     print('Computed inverse field for block', 

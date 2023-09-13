@@ -551,10 +551,17 @@ def _run_global_alignment(args, steps, global_output_dir):
     elif steps:
         print('Run global registration with:', args, steps, flush=True)
         # Read the global inputs
+        print(f'Open fix vol {args.fixed_global} {args.fixed_global_subpath}',
+              'for global registration',
+              flush=True)
         fix_arraydata, fix_attrs = n5_utils.open(
             args.fixed_global, args.fixed_global_subpath)
+        print(f'Open moving vol {args.moving_global} {args.moving_global_subpath}',
+              'for global registration',
+              flush=True)
         mov_arraydata, mov_attrs = n5_utils.open(
             args.moving_global, args.moving_global_subpath)
+        # get voxel spacing for fix and moving volume
         fix_voxel_spacing = n5_utils.get_voxel_spacing(fix_attrs)
         mov_voxel_spacing = n5_utils.get_voxel_spacing(mov_attrs)
 
@@ -664,8 +671,14 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
         fix_local_path = args.fixed_local if args.fixed_local else args.fixed_global
         mov_local_path = args.moving_local if args.moving_local else args.moving_global
 
+        print(f'Open fix vol {fix_local_path} {args.fixed_local_subpath}',
+              'for local registration',
+              flush=True)
         fix_highres_ldata, fix_local_attrs = n5_utils.open(
             fix_local_path, args.fixed_local_subpath)
+        print(f'Open moving vol {mov_local_path} {args.moving_local_subpath}',
+              'for local registration',
+              flush=True)
         mov_highres_ldata, mov_local_attrs = n5_utils.open(
             mov_local_path, args.moving_local_subpath)
 

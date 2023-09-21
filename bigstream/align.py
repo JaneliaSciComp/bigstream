@@ -872,7 +872,7 @@ def deformable_align(
     static_transform_spacing = []
     for transform in static_transform_list:
         spacing = fix_spacing
-        if transform.shape != (4, 4) and len(transform.shape) != 1:
+        if len(transform.shape) not in [1, 2]:
             spacing = ut.relative_spacing(transform, fix, fix_spacing)
         static_transform_spacing.append(spacing)
     static_transform_origin = [fix_origin,]*len(static_transform_list)
@@ -923,7 +923,7 @@ def deformable_align(
         field = ut.bspline_to_displacement_field(
             transform, initial_fix_shape,
             spacing=initial_fix_spacing, origin=fix_origin,
-            direction=np.eye(3),
+            direction=np.eye(fix.GetDimension()),
         )
         default = (params, field)
 
@@ -944,7 +944,7 @@ def deformable_align(
         field = ut.bspline_to_displacement_field(
             transform, initial_fix_shape,
             spacing=initial_fix_spacing, origin=fix_origin,
-            direction=np.eye(3),
+            direction=np.eye(fix.GetDimension()),
         )
         print("Registration succeeded", flush=True)
         return params, field

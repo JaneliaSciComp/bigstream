@@ -14,6 +14,7 @@ import zarr
 from glob import glob
 import json
 import tempfile
+from skimage.exposure import match_histograms
 
 
 @cluster
@@ -56,6 +57,53 @@ def distributed_image_mean(
     fix_array = da.from_zarr(fix_array)
     mean = fix_array.mean(axis=axis, dtype=np.float32).compute()
     return np.round(mean).astype(fix_array.dtype)
+
+
+@cluster
+def distributed_piecewise_image_mean(
+    images_list,
+    blocksize,
+    write_path,
+    cluster=None,
+    cluster_kwargs={},
+):
+    """
+    """
+
+    # create and output zarr array
+    output = ut.create_zarr(
+        write_path,
+        images_list[0].shape,
+        images_list[0].chunks,
+        images_list[0].dtype,
+    )
+
+    # define compute block coordinates
+    blocksize = np.array(blocksize)
+    nblocks = np.ceil( np.array(images_list[0].shape) / blocksize ).astype(int)
+    crops = []
+    for (i, j, k) in np.ndindex(*nblocks):
+        start = blocksize * (i, j, k)
+        stop = start + blocksize
+        stop = np.minimum(images_list[0].shape, stop)
+        crops.append( tuple(slice(x, y) for x, y in zip(start, stop)) )
+
+    # define what to do on each block
+    def average_block(crop):
+        n_images = float(len(images_list))
+        reference = images_list[0][crop]
+        mean = reference / n_images
+        for image in images_list[1:]:
+            image = match_histograms(image[crop], reference)
+            mean += image / n_images
+        # TODO: rounding assumes an integer data type
+        output[crop] = np.round(mean).astype(images_list[0].dtype)
+        return True
+
+    # run it
+    futures = cluster.client.map(average_block, crops)
+    all_written = np.all( cluster.client.gather(futures) )
+    return output
 
 
 @cluster

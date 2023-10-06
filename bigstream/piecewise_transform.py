@@ -16,7 +16,6 @@ def distributed_apply_transform(
     blocksize,
     write_path=None,
     overlap=0.5,
-    inverse_transforms=False,
     dataset_path=None,
     temporary_directory=None,
     cluster=None,
@@ -56,9 +55,6 @@ def distributed_apply_transform(
 
     overlap : float in range [0, 1] (default: 0.5)
         Block overlap size as a percentage of block size
-
-    inverse_transforms : bool (default: False)
-        Set to true if the list of transforms are all inverted
 
     dataset_path : string (default: None)
         A subpath in the zarr array to write the resampled data to
@@ -141,7 +137,6 @@ def distributed_apply_transform(
         # read relevant region of transforms
         new_list = []
         transform_origin = [fix_origin,] * len(transform_list)
-        shape = fix_zarr.shape if not inverse_transforms else mov_zarr.shape
         for iii, transform in enumerate(transform_list):
             if transform.shape != (4, 4):
                 start = np.floor(fix_origin / kwargs['transform_spacing'][iii]).astype(int)

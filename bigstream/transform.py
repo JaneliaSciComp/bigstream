@@ -13,7 +13,7 @@ def apply_transform(
     transform_origin=None,
     fix_origin=None,
     mov_origin=None,
-    interpolate_with_nn=False,
+    interpolator='1',
     extrapolate_with_nn=False,
 ):
     """
@@ -64,9 +64,9 @@ def apply_transform(
         The origin in physical units (e.g. mm or um) of the moving image. If None
         the origin is assumed to be (0, 0, 0, ...)
 
-    interpolate_with_nn : Bool (default: False)
-        If true interpolations are done with Nearest Neighbors. Use if warping
-        segmentation/multi-label data.
+    interpolator : string (default: '1')
+        Which interpolation to use.
+        See bigstream.configure_irm.configure_irm documentation for options
 
     extrapolate_with_nn : Bool (default: False)
         If true extrapolations are done with Nearest Neighbors. Use if warping
@@ -113,10 +113,21 @@ def apply_transform(
     # set moving image and transform
     mov = sitk.Cast(ut.numpy_to_sitk(mov, mov_spacing, mov_origin), sitk.sitkFloat32)
     resampler.SetTransform(transform)
-        
-    # check for NN interpolation
-    if interpolate_with_nn:
-        resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+
+    # set interpolator
+    interpolator_switch = {
+        '0':sitk.sitkNearestNeighbor,
+        '1':sitk.sitkLinear,
+        'CBS':sitk.sitkBSpline,
+        'G':sitk.sitkGaussian,
+        'LG':sitk.sitkLabelGaussian,
+        'HWS':sitk.sitkHammingWindowedSinc,
+        'CWS':sitk.sitkCosineWindowedSinc,
+        'WWS':sitk.sitkWelchWindowedSinc,
+        'LWS':sitk.sitkLanczosWindowedSinc,
+        'BWS':sitk.sitkBlackmanWindowedSinc,
+    }
+    resampler.SetInterpolator(interpolator_switch[interpolator])
 
     # check for NN extrapolation
     if extrapolate_with_nn:

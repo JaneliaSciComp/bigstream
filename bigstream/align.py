@@ -210,7 +210,7 @@ def feature_point_ransac_affine_align(
                 transform_list=static_transform_list,
                 fix_origin=fix_origin, 
                 mov_origin=mov_origin,
-                interpolate_with_nn=True,
+                interpolator='0',
             )
         mov_spacing = fix_spacing
 
@@ -518,7 +518,7 @@ def random_affine_search(
                     mov_origin=mov_origin,
                     transform_spacing=static_transform_spacing,
                     transform_origin=static_transform_origin,
-                    interpolate_with_nn=True,
+                    interpolator='0',
                 )
             # evaluate metric
             # TODO: this function needs to be updated for different

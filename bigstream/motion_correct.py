@@ -388,6 +388,7 @@ def resample_frames(
     write_path,
     mask=None,
     time_stride=1,
+    interpolator='1',
     compression_level=4,
     static_transform_list_before=[],
     static_transform_list_after=[],
@@ -427,6 +428,10 @@ def resample_frames(
 
     time_stride : int (default: 1)
         The stride along time axis at which to resmaple the images
+
+    interpolator : string (default: '1')
+        The interpolator to use for resampling. See bigstream.configure_irm.configure_irm
+        documentation for options
 
     compression_level : int between 1 and 9; (default: 4)
         How much to compress the resampled data. Lower numbers will write to disk
@@ -529,6 +534,7 @@ def resample_frames(
         aligned = apply_transform(
             fix, mov, fix_spacing, mov_spacing,
             transform_list=transform_list,
+            interpolator=interpolator,
         )
 
         # mask and write result

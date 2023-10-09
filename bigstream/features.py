@@ -24,6 +24,11 @@ def blob_detection(
         The smallest size blob you want to find in voxel units
     max_blob_radius : scalar float
         The largest size blob you want to find in voxel units
+    winsorize_limits : tuple of two floats (default: None)
+        If not None, winsorize the input with (min, max) percentile cutoffs
+    background_subtract : bool (default: False)
+        If True, use white_tophat background subtraction with max_blob_radius
+        as the filter radius
     **kwargs : any additional kwargs
         Passed to fishspot.detect_spots_log
 
@@ -47,8 +52,8 @@ def blob_detection(
         **kwargs,
     ).astype(int)
     if mask is not None: spots = apply_foreground_mask(spots, mask)
-    intensities = image[spots[:, 0], spots[:, 1], spots[:, 2]]
-    return np.hstack((spots[:, :3], intensities[..., None]))
+    intensities = image[ tuple(spots[:, iii] for iii in range(image.ndim)) ]
+    return np.hstack((spots[:, :image.ndim], intensities[..., None]))
 
 
 def get_contexts(image, coords, radius):

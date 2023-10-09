@@ -9,11 +9,11 @@ from bigstream import features
 from scipy.spatial import cKDTree
 import cv2
 
-# TODO: bug! fix_spacing is overwritten after resolve_sampling is called
+# TODO: bug! fix_spacing is overwritten after apply_alignment_spacing is called
 #       but downstream functions rely on it having the original value
 
 
-def resolve_sampling(
+def apply_alignment_spacing(
     fix,
     mov,
     fix_mask,
@@ -23,7 +23,45 @@ def resolve_sampling(
     alignment_spacing,
 ):
     """
-    Get mask spacings and skip sample all inputs to alignment_spacing
+    Skip sample all images to as close to alignment_spacing as possible
+    Determine new voxel spacings
+
+    Parameters
+    ----------
+    fix : nd-array
+        The fixed image
+
+    mov : nd-array
+        The moving image
+
+    fix_mask : nd-array
+        The fixed image mask (can be None)
+        Can have a different shape than fix, but assumed to have the same
+        domain or field of view
+
+    mov_mask : nd-array
+        The moving image mask (can be None)
+        Can have a different shape than mov, but assumed to have the same
+        domain or field of view
+
+    fix_spacing : 1d-array
+        The fixed image voxel spacing
+
+    mov_spacing : 1d-array
+        The moving image voxel spacing
+
+    Returns
+    -------
+    Returns 8 values in a tuple
+
+    1. skip sampled fixed image
+    2. skip sampled moving image
+    3. skip sampled fix_mask (or None)
+    4. skip sampled mov_mask (or None)
+    5. spacing of skip sampled fixed image
+    6. spacing of skip sampled moving image
+    7. spacing of skip sampled fixed mask (or None)
+    8. spacing of skip sampled moving mask (or None)
     """
 
     # get mask spacings
@@ -39,9 +77,13 @@ def resolve_sampling(
         fix, fix_spacing = ut.skip_sample(fix, fix_spacing, alignment_spacing)
         mov, mov_spacing = ut.skip_sample(mov, mov_spacing, alignment_spacing)
         if fix_mask is not None:
-            fix_mask, fix_mask_spacing = ut.skip_sample(fix_mask, fix_mask_spacing, alignment_spacing)
+            fix_mask, fix_mask_spacing = ut.skip_sample(
+                fix_mask, fix_mask_spacing, alignment_spacing,
+            )
         if mov_mask is not None:
-            mov_mask, mov_mask_spacing = ut.skip_sample(mov_mask, mov_mask_spacing, alignment_spacing)
+            mov_mask, mov_mask_spacing = ut.skip_sample(
+                mov_mask, mov_mask_spacing, alignment_spacing,
+            )
 
     return (fix, mov, fix_mask, mov_mask,
             fix_spacing, mov_spacing, fix_mask_spacing, mov_mask_spacing,)
@@ -60,13 +102,58 @@ def images_to_sitk(
     mov_origin,
 ):
     """
-    Convenience function for converting all inputs to sitk images
+    Convert all image inputs to SimpleITK image objects
+
+    Parameters
+    ----------
+    fix : nd-array
+        The fixed image
+
+    mov : nd-array
+        The moving image
+
+    fix_mask : nd-array
+        The fixed image mask (can be None)
+
+    mov_mask : nd-array
+        The moving image mask (can be None)
+
+    fix_spacing : 1d-array
+        The voxel spacing of the fixed image
+
+    mov_spacing : 1d-array
+        The voxel spacing of the moving image
+
+    fix_mask_spacing : 1d-array
+        The voxel spacing of the fixed image mask (can be None)
+        fix and fix_mask are assumed to have the same domain,
+        but this assumption can be slightly broken after skip_sampling
+
+    mov_mask_spacing : 1d-array
+        The voxel spacing of the moving image mask (can be None)
+        mov and mov_mask are assumed to have the same domain,
+        but this assumption can be slightly broken after skip_sampling
+
+    Returns
+    -------
+    Returns 4 values in a tuple
+
+    1. fix image as sitk.Image object
+    2. mov image as sitk.Image object
+    3. fix_mask as sitk.Image object (or None)
+    4. mov_mask as sitk.Image object (or None)
     """
 
-    fix = sitk.Cast(ut.numpy_to_sitk(fix, fix_spacing, origin=fix_origin), sitk.sitkFloat32)
-    mov = sitk.Cast(ut.numpy_to_sitk(mov, mov_spacing, origin=mov_origin), sitk.sitkFloat32)
-    if fix_mask is not None: fix_mask = ut.numpy_to_sitk(fix_mask, fix_mask_spacing, origin=fix_origin)
-    if mov_mask is not None: mov_mask = ut.numpy_to_sitk(mov_mask, mov_mask_spacing, origin=mov_origin)
+    fix = sitk.Cast(ut.numpy_to_sitk(
+        fix, fix_spacing, origin=fix_origin), sitk.sitkFloat32)
+    mov = sitk.Cast(ut.numpy_to_sitk(
+        mov, mov_spacing, origin=mov_origin), sitk.sitkFloat32)
+    if fix_mask is not None:
+        fix_mask = ut.numpy_to_sitk(
+            fix_mask, fix_mask_spacing, origin=fix_origin)
+    if mov_mask is not None:
+        mov_mask = ut.numpy_to_sitk(
+            mov_mask, mov_mask_spacing, origin=mov_origin)
     return fix, mov, fix_mask, mov_mask
 
 
@@ -85,7 +172,6 @@ def feature_point_ransac_affine_align(
     diagonal_constraint=0.25,
     fix_spot_detection_kwargs={},
     mov_spot_detection_kwargs={},
-    ransac_affine_kwargs={},
     fix_spots=None,
     mov_spots=None,
     fix_mask=None,
@@ -97,9 +183,14 @@ def feature_point_ransac_affine_align(
     **kwargs,
 ):
     """
-    Compute an affine alignment from feature points and ransac. A blob detector finds feature points
-    and a correspondence between those points is estimated. A ransac filter determines the affine
-    transform that brings the largest number of corresponding points to the same locations.
+    Compute an affine alignment from feature points and ransac.
+    A blob detector finds feature points in fix and mov. Correspondence
+    between the fix and mov point sets is estimated using neighborhood
+    correlation. A ransac filter determines the affine transform that brings
+    the largest number of corresponding points to the same locations.
+
+    At least 100 spots must be found in the fixed image and 100 spots
+    in the moving image, otherwise default is returned.
 
     Parameters
     ----------
@@ -131,15 +222,31 @@ def feature_point_ransac_affine_align(
 
     nspots : scalar int (default: 5000)
         The maximum number of feature point spots to use in each image
+        If more spots are found the brightest ones are used.
 
     match_threshold : scalar float in range [0, 1] (default: 0.7)
         The minimum correlation two feature point neighborhoods must have to
         consider them corresponding points
 
-    align_threshold :
+    max_spot_match_distance : scalar float (default: None)
+        The maximum distance a fix and mov spot can be before alignment
+        to still be considered matching spots; in microns. This helps
+        prevent false positive correspondences.
 
-    diagonal_constraint : scalar float (default: 0.75)
+    align_threshold : scalar float (default: 2.0)
+        The maximum distance two points can be to be considered aligned
+        by the affine transform; in microns.
+
+    diagonal_constraint : scalar float (default: 0.25)
         Diagonal entries of the affine matrix cannot be lower than this number
+        If this condition is violated the default transform is returned.
+        This helps prevent bad alignments.
+
+    fix_spot_detection_kwargs : dict (default {})
+        Arguments passed to bigstream.features.blob_detection for fixed image
+
+    mov_spot_detection_kwargs : dict (default {})
+        Arguments passed to bigstream.features.blob_detection for moving image
 
     fix_spots : nd-array Nx3 (default: None)
         Skip the spot detection for the fixed image and provide your own spot coordinate
@@ -153,10 +260,10 @@ def feature_point_ransac_affine_align(
     mov_mask : binary nd-array (default: None)
         Spots from moving image can only be found in the foreground of this mask
 
-    fix_origin : 1d array (default: (0, 0, 0))
+    fix_origin : 1d array (default: all zeros)
         The origin of the fixed image in physical units
 
-    mov_origin : 1d array (default: (0, 0, 0))
+    mov_origin : 1d array (default: all zeros)
         The origin of the moving image in physical units
 
     static_transform_list : list of numpy arrays (default: [])
@@ -165,7 +272,7 @@ def feature_point_ransac_affine_align(
         can be different. I.e. the origin and span are the same (in phyiscal
         units) but the number of voxels can be different.
 
-    default : 2d array 4x4 (default: None)
+    default : 2d array 4x4 (default: identity)
         A default transform to return if the method fails to find a valid one
 
     **kwargs : any additional keyword arguments
@@ -181,7 +288,7 @@ def feature_point_ransac_affine_align(
     if default is None: default = np.eye(fix.ndim + 1)
 
     # skip sample and determine mask spacings
-    X = resolve_sampling(
+    X = apply_alignment_spacing(
         fix, mov,
         fix_mask, mov_mask,
         fix_spacing, mov_spacing,
@@ -206,7 +313,8 @@ def feature_point_ransac_affine_align(
         )
         if mov_mask is not None:
             mov_mask = apply_transform(
-                fix.astype(mov_mask.dtype), mov_mask, fix_spacing, mov_spacing,
+                fix.astype(mov_mask.dtype), mov_mask,
+                fix_spacing, mov_spacing,
                 transform_list=static_transform_list,
                 fix_origin=fix_origin, 
                 mov_origin=mov_origin,
@@ -215,10 +323,11 @@ def feature_point_ransac_affine_align(
         mov_spacing = fix_spacing
 
     # get fix spots
+    num_sigma = int(min(blob_sizes[1] - blob_sizes[0], num_sigma_max))
     print('computing fixed spots', flush=True)
     if fix_spots is None:
         fix_kwargs = {
-            'num_sigma':min(blob_sizes[1] - blob_sizes[0], num_sigma_max),
+            'num_sigma':num_sigma,
             'exclude_border':cc_radius,
             'mask':fix_mask,
         }
@@ -236,7 +345,7 @@ def feature_point_ransac_affine_align(
     print('computing moving spots', flush=True)
     if mov_spots is None:
         mov_kwargs = {
-            'num_sigma':min(blob_sizes[1] - blob_sizes[0], num_sigma_max),
+            'num_sigma':num_sigma,
             'exclude_border':cc_radius,
             'mask':mov_mask,
         }
@@ -272,20 +381,11 @@ def feature_point_ransac_affine_align(
         fix_spot_contexts, mov_spot_contexts,
     )
 
-    # apply distance filter
-    if max_spot_match_distance is not None:
-        fix_kdtree = cKDTree(fix_spots)
-        valid_pairs = fix_kdtree.query_ball_tree(
-            cKDTree(mov_spots), max_spot_match_distance,
-        )
-        for iii, fancy_index in enumerate(valid_pairs):
-            correlations[iii, fancy_index] += 1
-        match_threshold += 1
-
     # get matching points
     fix_spots, mov_spots = features.match_points(
         fix_spots, mov_spots,
         correlations, match_threshold,
+        max_distance=max_spot_match_distance,
     )
     print(f'{len(fix_spots)} matched spots')
     if len(fix_spots) < 50 or len(mov_spots) < 50:
@@ -466,7 +566,7 @@ def random_affine_search(
     center = np.array(fix.shape) / 2 * fix_spacing  # center of rotation
 
     # skip sample and determine mask spacings
-    X = resolve_sampling(
+    X = apply_alignment_spacing(
         fix, mov,
         fix_mask, mov_mask,
         fix_spacing, mov_spacing,
@@ -687,7 +787,7 @@ def affine_align(
     static_transform_origin = (fix_origin,)*len(static_transform_list)
 
     # skip sample and convert inputs to sitk images
-    X = resolve_sampling(
+    X = apply_alignment_spacing(
         fix, mov,
         fix_mask, mov_mask,
         fix_spacing, mov_spacing,
@@ -880,7 +980,7 @@ def deformable_align(
     static_transform_origin = tuple(static_transform_origin)
 
     # skip sample and convert inputs to sitk images
-    X = resolve_sampling(
+    X = apply_alignment_spacing(
         fix, mov,
         fix_mask, mov_mask,
         fix_spacing, mov_spacing,

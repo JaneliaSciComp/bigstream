@@ -183,6 +183,8 @@ def feature_point_ransac_affine_align(
     **kwargs,
 ):
     """
+    Currently this function only works on 3D images.
+
     Compute an affine alignment from feature points and ransac.
     A blob detector finds feature points in fix and mov. Correspondence
     between the fix and mov point sets is estimated using neighborhood
@@ -190,7 +192,15 @@ def feature_point_ransac_affine_align(
     the largest number of corresponding points to the same locations.
 
     At least 100 spots must be found in the fixed image and 100 spots
-    in the moving image, otherwise default is returned.
+    in the moving image, otherwise default is returned. At least 50
+    correspondence pairs must be found, otherwise default is returned.
+    These constraints are required for reasonable performance from the
+    ransac affine alignment algorithm.
+
+    If insufficient points are found modify fix_spot_detection_kwargs
+    and/or mov_spot_detection_kwargs. See bigstream.features.
+
+    If insufficient point matches are found, modify match_threshold.
 
     Parameters
     ----------
@@ -238,7 +248,8 @@ def feature_point_ransac_affine_align(
         by the affine transform; in microns.
 
     diagonal_constraint : scalar float (default: 0.25)
-        Diagonal entries of the affine matrix cannot be lower than this number
+        Diagonal entries of the affine matrix cannot be lower than
+        1 - diagonal_contraint or higher than 1 + diagonal_contraint. 
         If this condition is violated the default transform is returned.
         This helps prevent bad alignments.
 
@@ -387,12 +398,13 @@ def feature_point_ransac_affine_align(
         correlations, match_threshold,
         max_distance=max_spot_match_distance,
     )
-    print(f'{len(fix_spots)} matched spots')
+    print(f'found {len(fix_spots)} matched spot pairs')
     if len(fix_spots) < 50 or len(mov_spots) < 50:
-        print('insufficient point matches found, returning default', flush=True)
+        print('insufficient spot matches found, returning default', flush=True)
         return default
 
     # align
+    # TODO: this is a hard 3D constraint, check opencv for a 2D version
     print('aligning', flush=True)
     r, Aff, inline = cv2.estimateAffine3D(
         fix_spots, mov_spots,
@@ -406,9 +418,9 @@ def feature_point_ransac_affine_align(
         print("Degenerate affine produced, returning default", flush=True)
         return default
 
-    # augment to 4x4 matrix and return
-    affine = np.eye(4)
-    affine[:3, :] = Aff
+    # augment matrix and return
+    affine = np.eye(fix.ndim + 1)
+    affine[:fix.ndim, :] = Aff
     return affine
 
 

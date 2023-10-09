@@ -298,22 +298,6 @@ def feature_point_ransac_affine_align(
     # establish default
     if default is None: default = np.eye(fix.ndim + 1)
 
-    # skip sample and determine mask spacings
-    X = apply_alignment_spacing(
-        fix, mov,
-        fix_mask, mov_mask,
-        fix_spacing, mov_spacing,
-        alignment_spacing,
-    )
-    fix = X[0]
-    mov = X[1]
-    fix_mask = X[2]
-    mov_mask = X[3]
-    fix_spacing = X[4]
-    mov_spacing = X[5]
-    fix_mask_spacing = X[6]
-    mov_mask_spacing = X[7]
-
     # apply static transforms
     if static_transform_list:
         mov = apply_transform(
@@ -332,6 +316,22 @@ def feature_point_ransac_affine_align(
                 interpolator='0',
             )
         mov_spacing = fix_spacing
+
+    # skip sample and determine mask spacings
+    X = apply_alignment_spacing(
+        fix, mov,
+        fix_mask, mov_mask,
+        fix_spacing, mov_spacing,
+        alignment_spacing,
+    )
+    fix = X[0]
+    mov = X[1]
+    fix_mask = X[2]
+    mov_mask = X[3]
+    fix_spacing = X[4]
+    mov_spacing = X[5]
+    fix_mask_spacing = X[6]
+    mov_mask_spacing = X[7]
 
     # get fix spots
     num_sigma = int(min(blob_sizes[1] - blob_sizes[0], num_sigma_max))
@@ -382,15 +382,15 @@ def feature_point_ransac_affine_align(
     fix_spot_contexts = features.get_contexts(fix, fix_spots, cc_radius)
     mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
 
-    # convert to physical units
-    fix_spots = fix_spots * fix_spacing
-    mov_spots = mov_spots * mov_spacing
-
     # get pairwise correlations
     print('computing pairwise correlations', flush=True)
     correlations = features.pairwise_correlation(
         fix_spot_contexts, mov_spot_contexts,
     )
+
+    # convert to physical units
+    fix_spots = fix_spots * fix_spacing
+    mov_spots = mov_spots * mov_spacing
 
     # get matching points
     fix_spots, mov_spots = features.match_points(

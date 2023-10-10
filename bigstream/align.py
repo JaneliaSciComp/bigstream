@@ -9,12 +9,6 @@ from bigstream import features
 from scipy.spatial import cKDTree
 import cv2
 
-# TODO: bug! fix_spacing is overwritten after apply_alignment_spacing is called
-#       but downstream functions rely on it having the original value
-#    feature_point_ransac_affine_align is checked and ok for this bug
-#    random_affine_search is checked and ok for this bug
-#    affine_align is checked and ok for this bug
-
 
 def apply_alignment_spacing(
     fix,
@@ -1042,6 +1036,7 @@ def deformable_align(
     # set up registration object
     irm = configure_irm(**kwargs)
 
+    # TODO reverse order of control_point_levels for consistency
     # initial control point grid
     z = control_point_spacing * control_point_levels[-1]
     initial_cp_grid = [max(1, int(x*y/z)) for x, y in zip(fix.GetSize(), fix.GetSpacing())]
@@ -1051,6 +1046,7 @@ def deformable_align(
     irm.SetInitialTransformAsBSpline(
         transform, inPlace=True, scaleFactors=control_point_levels,
     )
+
     # set initial static transforms
     if static_transform_list:
         T = ut.transform_list_to_composite_transform(

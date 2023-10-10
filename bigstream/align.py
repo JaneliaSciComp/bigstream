@@ -950,7 +950,7 @@ def deformable_align(
     control_point_levels : list of type int
         The optimization scales for control point spacing. E.g. if
         `control_point_spacing` is 100.0 and `control_point_levels`
-        is [1, 2, 4] then method will optimize at 400.0 units control
+        is [4, 2, 1] then method will optimize at 400.0 units control
         points spacing, then optimize again at 200.0 units, then again
         at the requested 100.0 units control point spacing.
     
@@ -1036,15 +1036,14 @@ def deformable_align(
     # set up registration object
     irm = configure_irm(**kwargs)
 
-    # TODO reverse order of control_point_levels for consistency
     # initial control point grid
-    z = control_point_spacing * control_point_levels[-1]
+    z = control_point_spacing * control_point_levels[0]
     initial_cp_grid = [max(1, int(x*y/z)) for x, y in zip(fix.GetSize(), fix.GetSpacing())]
     transform = sitk.BSplineTransformInitializer(
         image1=fix, transformDomainMeshSize=initial_cp_grid, order=3,
     )
     irm.SetInitialTransformAsBSpline(
-        transform, inPlace=True, scaleFactors=control_point_levels,
+        transform, inPlace=True, scaleFactors=control_point_levels[::-1],
     )
 
     # set initial static transforms

@@ -99,7 +99,7 @@ def configure_irm(
         Percentage of voxels used during metric sampling
 
     exhaustive_step_sizes : tuple of float (default: None)
-        Required of optimizer is 'EXHAUSTIVE'
+        Required if optimizer is 'EXHAUSTIVE'
         Grid search step sizes for each parameter in the transform
 
     callback : callable object, e.g. function (default: None)

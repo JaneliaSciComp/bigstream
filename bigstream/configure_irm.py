@@ -1,5 +1,6 @@
 import os, psutil
 import SimpleITK as sitk
+import bigstream.utility as ut
 
 
 def configure_irm(
@@ -115,11 +116,8 @@ def configure_irm(
         images and a transform type to be ready for optimization.
     """
 
-    # identify number of cores available, assume hyperthreading
-    if "LSB_DJOB_NUMPROC" in os.environ:
-        ncores = int(os.environ["LSB_DJOB_NUMPROC"])
-    else:
-        ncores = psutil.cpu_count(logical=False)
+    # identify number of physical cores available
+    ncores = ut.get_number_of_cores()
 
     # initialize IRM object, be completely sure nthreads is set
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(2*ncores)

@@ -38,7 +38,7 @@ def apply_transform(
         of the moving image. Length must equal `mov.ndim`.
 
     transform_list : list
-        The list of transforms to apply. These may be 2d arrays of shape 4x4
+        The list of transforms to apply. These may be 2d arrays of shape 3x3 or 4x4
         (affine transforms), or ndarrays of `fix.ndim` + 1 dimension (deformations).
         Zarr arrays work just fine.
 
@@ -54,7 +54,7 @@ def apply_transform(
     transform_origin : None (default), 1d array, or tuple of 1d arrays
         The origin in physical units (e.g. mm or um) of the given transforms.
         If None, all origins are assumed to be (0, 0, 0, ...); otherwise, follows
-        the same logic as transform_spacing.
+        the same format as transform_spacing.
 
     fix_origin : None (defaut) or 1darray
         The origin in physical units (e.g. mm or um) of the fixed image. If None
@@ -81,10 +81,7 @@ def apply_transform(
     """
 
     # set global number of threads
-    if "LSB_DJOB_NUMPROC" in os.environ:
-        ncores = int(os.environ["LSB_DJOB_NUMPROC"])
-    else:
-        ncores = psutil.cpu_count(logical=False)
+    ncores = ut.get_number_of_cores()
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(2*ncores)
 
     # construct transform

@@ -129,10 +129,7 @@ def distributed_stitch(
     def align_neighbors(neighbors):
 
         # get number of cores
-        if "LSB_DJOB_NUMPROC" in os.environ:
-            ncores = int(os.environ["LSB_DJOB_NUMPROC"])
-        else:
-            ncores = psutil.cpu_count(logical=False)
+        ncores = ut.get_number_of_cores()
 
         # read the first region
         other_reader = aicspylibczi.CziFile(czi_file_path)
@@ -309,10 +306,7 @@ def distributed_apply_stitch(
         print(f'starting {tile_number}', flush=True)
 
         # get number of cores
-        if "LSB_DJOB_NUMPROC" in os.environ:
-            ncores = int(os.environ["LSB_DJOB_NUMPROC"])
-        else:
-            ncores = psutil.cpu_count(logical=False)
+        ncores = ut.get_number_of_cores()
 
         # read tile data
         other_reader = aicspylibczi.CziFile(czi_file_path)

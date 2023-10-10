@@ -589,6 +589,20 @@ def numpy_to_zarr(array, chunks, path):
         return array
 
 
+def get_number_of_cores():
+    """
+    Get number of physical cores available to the python process.
+    Currently only considers LSF environment variable. If not an LSF
+    cluster job the uses psutil.cpu_count
+    """
+
+    if "LSB_DJOB_NUMPROC" in os.environ:
+        ncores = int(os.environ["LSB_DJOB_NUMPROC"])
+    else:
+        ncores = psutil.cpu_count(logical=False)
+    return ncores
+
+
 @cluster
 def distributed_directory_of_hdf5_to_zarr(
     directory,

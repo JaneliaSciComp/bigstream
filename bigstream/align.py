@@ -11,6 +11,9 @@ import cv2
 
 # TODO: bug! fix_spacing is overwritten after apply_alignment_spacing is called
 #       but downstream functions rely on it having the original value
+#    feature_point_ransac_affine_align is checked and ok for this bug
+#    random_affine_search is checked and ok for this bug
+#    affine_align is checked and ok for this bug
 
 
 def apply_alignment_spacing(
@@ -155,6 +158,48 @@ def images_to_sitk(
         mov_mask = ut.numpy_to_sitk(
             mov_mask, mov_mask_spacing, origin=mov_origin)
     return fix, mov, fix_mask, mov_mask
+
+
+def format_static_transform_data(
+    transforms,
+    fix,
+    fix_spacing,
+    fix_origin,
+):
+    """
+    Set transform_spacings and transform_origins explicitly
+
+    Parameters
+    ----------
+    transforms : list of nd-arrays
+        The list of static transforms
+
+    fix : nd-array
+        The fixed image
+
+    fix_spacing : 1d-array
+        The voxel spacing of the fixed image
+
+    fix_origin : 1d-array
+        The origin of the fixed image (can be None)
+
+    Returns
+    -------
+    Returns 2 values in a tuple
+
+    1. The tuple of transform spacings
+    2. The tuple of transform origins
+    """
+
+    spacings = []
+    for transform in transforms:
+        spacing = fix_spacing
+        if len(transform.shape) not in [1, 2]:
+            spacing = ut.relative_spacing(transform, fix, fix_spacing)
+        spacings.append(spacing)
+    spacings = tuple(spacings)
+    origins = (fix_origin,)*len(transforms)
+    return (spacings, origins)
 
 
 def feature_point_ransac_affine_align(
@@ -446,11 +491,9 @@ def random_affine_search(
     **kwargs,
 ):
     """
-    Apply random affine matrices within given bounds to moving image. The best
-    scoring affines can be further refined with gradient descent based affine
-    alignment. The single best result is returned. This function is intended
-    to find good initialization for a full affine alignment obtained by calling
-    `affine_align`
+    Apply random affine matrices within given bounds to moving image.
+    This function is intended to find good initialization for a full affine
+    alignment obtained by calling `affine_align`
 
     Parameters
     ----------
@@ -552,6 +595,7 @@ def random_affine_search(
             param += (null_value,)
         return param
 
+    # TODO: consider moving to native 2D
     # generalize 2d inputs to 3d
     if fix.ndim == 2:
         fix = fix.reshape(fix.shape + (1,))
@@ -577,6 +621,13 @@ def random_affine_search(
     if max_shear: params[1:, 9:] = F(max_shear)
     center = np.array(fix.shape) / 2 * fix_spacing  # center of rotation
 
+    # format static transform data explicitly
+    a, b = format_static_transform_data(
+        static_transform_list, fix, fix_spacing, fix_origin,
+    )
+    static_transform_spacing = a
+    static_transform_origin = b
+
     # skip sample and determine mask spacings
     X = apply_alignment_spacing(
         fix, mov,
@@ -592,17 +643,6 @@ def random_affine_search(
     mov_spacing = X[5]
     fix_mask_spacing = X[6]
     mov_mask_spacing = X[7]
-
-    # specify static transform data explicitly
-    static_transform_spacing = []
-    for transform in static_transform_list:
-        spacing = fix_spacing
-        if transform.shape != (4, 4) and len(transform.shape) != 1:
-            spacing = ut.relative_spacing(transform, fix, fix_spacing)
-        static_transform_spacing.append(spacing)
-    static_transform_origin = [fix_origin,]*len(static_transform_list)
-    static_transform_spacing = tuple(static_transform_spacing)
-    static_transform_origin = tuple(static_transform_origin)
 
     # a useful value later, storing prevents redundant function calls
     WORST_POSSIBLE_SCORE = np.finfo(np.float64).max
@@ -788,15 +828,12 @@ def affine_align(
     if initial_transform_given and np.all(default == np.eye(fix.ndim + 1)):
         default = initial_condition
 
-    # specify static transform data explicitly
-    static_transform_spacing = []
-    for transform in static_transform_list:
-        spacing = fix_spacing
-        if transform.shape not in [(3, 3), (4, 4)] and len(transform.shape) != 1:
-            spacing = ut.relative_spacing(transform, fix, fix_spacing)
-        static_transform_spacing.append(spacing)
-    static_transform_spacing = tuple(static_transform_spacing)
-    static_transform_origin = (fix_origin,)*len(static_transform_list)
+    # format static transform data explicitly
+    a, b = format_static_transform_data(
+        static_transform_list, fix, fix_spacing, fix_origin,
+    )
+    static_transform_spacing = a
+    static_transform_origin = b
 
     # skip sample and convert inputs to sitk images
     X = apply_alignment_spacing(
@@ -980,16 +1017,12 @@ def deformable_align(
     initial_fix_shape = fix.shape
     initial_fix_spacing = fix_spacing
 
-    # specify static transform data explicitly
-    static_transform_spacing = []
-    for transform in static_transform_list:
-        spacing = fix_spacing
-        if len(transform.shape) not in [1, 2]:
-            spacing = ut.relative_spacing(transform, fix, fix_spacing)
-        static_transform_spacing.append(spacing)
-    static_transform_origin = [fix_origin,]*len(static_transform_list)
-    static_transform_spacing = tuple(static_transform_spacing)
-    static_transform_origin = tuple(static_transform_origin)
+    # format static transform data explicitly
+    a, b = format_static_transform_data(
+        static_transform_list, fix, fix_spacing, fix_origin,
+    )
+    static_transform_spacing = a
+    static_transform_origin = b
 
     # skip sample and convert inputs to sitk images
     X = apply_alignment_spacing(
@@ -1008,6 +1041,7 @@ def deformable_align(
 
     # set up registration object
     irm = configure_irm(**kwargs)
+
     # initial control point grid
     z = control_point_spacing * control_point_levels[-1]
     initial_cp_grid = [max(1, int(x*y/z)) for x, y in zip(fix.GetSize(), fix.GetSpacing())]

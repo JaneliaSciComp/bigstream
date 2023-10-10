@@ -3,6 +3,21 @@ import SimpleITK as sitk
 import bigstream.utility as ut
 
 
+# interpolator switch
+interpolator_switch = {
+    '0':sitk.sitkNearestNeighbor,
+    '1':sitk.sitkLinear,
+    'CBS':sitk.sitkBSpline,
+    'G':sitk.sitkGaussian,
+    'LG':sitk.sitkLabelGaussian,
+    'HWS':sitk.sitkHammingWindowedSinc,
+    'CWS':sitk.sitkCosineWindowedSinc,
+    'WWS':sitk.sitkWelchWindowedSinc,
+    'LWS':sitk.sitkLanczosWindowedSinc,
+    'BWS':sitk.sitkBlackmanWindowedSinc,
+}
+
+
 def configure_irm(
     metric='MMI',
     optimizer='RSGD',
@@ -124,19 +139,7 @@ def configure_irm(
     irm = sitk.ImageRegistrationMethod()
     irm.SetNumberOfThreads(2*ncores)
 
-    # interpolator switch
-    interpolator_switch = {
-        '0':sitk.sitkNearestNeighbor,
-        '1':sitk.sitkLinear,
-        'CBS':sitk.sitkBSpline,
-        'G':sitk.sitkGaussian,
-        'LG':sitk.sitkLabelGaussian,
-        'HWS':sitk.sitkHammingWindowedSinc,
-        'CWS':sitk.sitkCosineWindowedSinc,
-        'WWS':sitk.sitkWelchWindowedSinc,
-        'LWS':sitk.sitkLanczosWindowedSinc,
-        'BWS':sitk.sitkBlackmanWindowedSinc,
-    }
+    # set interpolator
     irm.SetInterpolator(interpolator_switch[interpolator])
 
     # metric switch

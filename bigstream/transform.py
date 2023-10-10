@@ -1,6 +1,7 @@
 import numpy as np
 import SimpleITK as sitk
 import bigstream.utility as ut
+from bigstream.configure_irm import interpolator_switch
 import os, psutil
 from scipy.ndimage import map_coordinates
 
@@ -112,18 +113,6 @@ def apply_transform(
     resampler.SetTransform(transform)
 
     # set interpolator
-    interpolator_switch = {
-        '0':sitk.sitkNearestNeighbor,
-        '1':sitk.sitkLinear,
-        'CBS':sitk.sitkBSpline,
-        'G':sitk.sitkGaussian,
-        'LG':sitk.sitkLabelGaussian,
-        'HWS':sitk.sitkHammingWindowedSinc,
-        'CWS':sitk.sitkCosineWindowedSinc,
-        'WWS':sitk.sitkWelchWindowedSinc,
-        'LWS':sitk.sitkLanczosWindowedSinc,
-        'BWS':sitk.sitkBlackmanWindowedSinc,
-    }
     resampler.SetInterpolator(interpolator_switch[interpolator])
 
     # check for NN extrapolation

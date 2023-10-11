@@ -5,6 +5,7 @@ import zarr
 from zarr.indexing import BasicIndexer
 from distributed import Lock
 import glob
+import os
 import h5py
 from ClusterWrap.decorator import cluster
 from zarr import blosc
@@ -587,6 +588,20 @@ def numpy_to_zarr(array, chunks, path):
         return zarr_disk
     else:
         return array
+
+
+def get_number_of_cores():
+    """
+    Get number of physical cores available to the python process.
+    Currently only considers LSF environment variable. If not an LSF
+    cluster job the uses psutil.cpu_count
+    """
+
+    if "LSB_DJOB_NUMPROC" in os.environ:
+        ncores = int(os.environ["LSB_DJOB_NUMPROC"])
+    else:
+        ncores = psutil.cpu_count(logical=False)
+    return ncores
 
 
 @cluster

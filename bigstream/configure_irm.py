@@ -1,5 +1,21 @@
 import os, psutil
 import SimpleITK as sitk
+import bigstream.utility as ut
+
+
+# interpolator switch
+interpolator_switch = {
+    '0':sitk.sitkNearestNeighbor,
+    '1':sitk.sitkLinear,
+    'CBS':sitk.sitkBSpline,
+    'G':sitk.sitkGaussian,
+    'LG':sitk.sitkLabelGaussian,
+    'HWS':sitk.sitkHammingWindowedSinc,
+    'CWS':sitk.sitkCosineWindowedSinc,
+    'WWS':sitk.sitkWelchWindowedSinc,
+    'LWS':sitk.sitkLanczosWindowedSinc,
+    'BWS':sitk.sitkBlackmanWindowedSinc,
+}
 
 
 def configure_irm(
@@ -99,7 +115,7 @@ def configure_irm(
         Percentage of voxels used during metric sampling
 
     exhaustive_step_sizes : tuple of float (default: None)
-        Required of optimizer is 'EXHAUSTIVE'
+        Required if optimizer is 'EXHAUSTIVE'
         Grid search step sizes for each parameter in the transform
 
     callback : callable object, e.g. function (default: None)
@@ -115,30 +131,15 @@ def configure_irm(
         images and a transform type to be ready for optimization.
     """
 
-    # identify number of cores available, assume hyperthreading
-    if "LSB_DJOB_NUMPROC" in os.environ:
-        ncores = int(os.environ["LSB_DJOB_NUMPROC"])
-    else:
-        ncores = psutil.cpu_count(logical=False)
+    # identify number of physical cores available
+    ncores = ut.get_number_of_cores()
 
     # initialize IRM object, be completely sure nthreads is set
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(2*ncores)
     irm = sitk.ImageRegistrationMethod()
     irm.SetNumberOfThreads(2*ncores)
 
-    # interpolator switch
-    interpolator_switch = {
-        '0':sitk.sitkNearestNeighbor,
-        '1':sitk.sitkLinear,
-        'CBS':sitk.sitkBSpline,
-        'G':sitk.sitkGaussian,
-        'LG':sitk.sitkLabelGaussian,
-        'HWS':sitk.sitkHammingWindowedSinc,
-        'CWS':sitk.sitkCosineWindowedSinc,
-        'WWS':sitk.sitkWelchWindowedSinc,
-        'LWS':sitk.sitkLanczosWindowedSinc,
-        'BWS':sitk.sitkBlackmanWindowedSinc,
-    }
+    # set interpolator
     irm.SetInterpolator(interpolator_switch[interpolator])
 
     # metric switch

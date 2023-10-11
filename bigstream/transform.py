@@ -1,6 +1,7 @@
 import numpy as np
 import SimpleITK as sitk
 import bigstream.utility as ut
+from bigstream.configure_irm import interpolator_switch
 import os, psutil
 from scipy.ndimage import map_coordinates
 
@@ -13,7 +14,7 @@ def apply_transform(
     transform_origin=None,
     fix_origin=None,
     mov_origin=None,
-    interpolate_with_nn=False,
+    interpolator='1',
     extrapolate_with_nn=False,
 ):
     """
@@ -38,7 +39,7 @@ def apply_transform(
         of the moving image. Length must equal `mov.ndim`.
 
     transform_list : list
-        The list of transforms to apply. These may be 2d arrays of shape 4x4
+        The list of transforms to apply. These may be 2d arrays of shape 3x3 or 4x4
         (affine transforms), or ndarrays of `fix.ndim` + 1 dimension (deformations).
         Zarr arrays work just fine.
 
@@ -54,7 +55,7 @@ def apply_transform(
     transform_origin : None (default), 1d array, or tuple of 1d arrays
         The origin in physical units (e.g. mm or um) of the given transforms.
         If None, all origins are assumed to be (0, 0, 0, ...); otherwise, follows
-        the same logic as transform_spacing.
+        the same format as transform_spacing.
 
     fix_origin : None (defaut) or 1darray
         The origin in physical units (e.g. mm or um) of the fixed image. If None
@@ -64,9 +65,9 @@ def apply_transform(
         The origin in physical units (e.g. mm or um) of the moving image. If None
         the origin is assumed to be (0, 0, 0, ...)
 
-    interpolate_with_nn : Bool (default: False)
-        If true interpolations are done with Nearest Neighbors. Use if warping
-        segmentation/multi-label data.
+    interpolator : string (default: '1')
+        Which interpolation to use.
+        See bigstream.configure_irm.configure_irm documentation for options
 
     extrapolate_with_nn : Bool (default: False)
         If true extrapolations are done with Nearest Neighbors. Use if warping
@@ -81,10 +82,7 @@ def apply_transform(
     """
 
     # set global number of threads
-    if "LSB_DJOB_NUMPROC" in os.environ:
-        ncores = int(os.environ["LSB_DJOB_NUMPROC"])
-    else:
-        ncores = psutil.cpu_count(logical=False)
+    ncores = ut.get_number_of_cores()
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(2*ncores)
 
     # construct transform
@@ -113,10 +111,9 @@ def apply_transform(
     # set moving image and transform
     mov = sitk.Cast(ut.numpy_to_sitk(mov, mov_spacing, mov_origin), sitk.sitkFloat32)
     resampler.SetTransform(transform)
-        
-    # check for NN interpolation
-    if interpolate_with_nn:
-        resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+
+    # set interpolator
+    resampler.SetInterpolator(interpolator_switch[interpolator])
 
     # check for NN extrapolation
     if extrapolate_with_nn:
@@ -142,19 +139,19 @@ def apply_transform_to_coordinates(
         The coordinates to move. N such coordinates in d dimensions.
 
     transform_list : list
-        The transforms to apply, in stack order. Elements must be 2d 4x4 arrays
-        (affine transforms) or d + 1 dimension ndarrays (deformations).
+        The transforms to apply, in stack order. Elements must be 3x3 or 4x4
+        arrays (affine transforms) or d + 1 dimension ndarrays (deformations).
 
-    transform_spacing : None (default), 1d array, or tuple of 1d arrays
+    transform_spacing : None (default), 1d array, or tuple (not list) of 1d arrays
         The spacing in physical units (e.g. mm or um) between voxels
-        of any deformations in transform_list. If any transform_list
+        of any deformations in transform_list. If transform_list
         contains any deformations then transform_spacing cannot be
         None. If a single 1d array then all deforms have that spacing.
         If a tuple, then its length must be the same as transform_list,
         thus each deformation can be given its own spacing. Spacings
         given for affine transforms are ignored.
 
-    transform_origin : None (default), 1d array, or tuple of 1d arrays
+    transform_origin : None (default), 1d array, or tuple (not list) of 1d arrays
         The origin in physical units (e.g. mm or um) of the given transforms.
         If None, all origins are assumed to be (0, 0, 0, ...); otherwise, follows
         the same logic as transform_spacing. Origins given for affine transforms
@@ -194,10 +191,11 @@ def apply_transform_to_coordinates(
             # get coordinates in transform voxel units, reformat for map_coordinates
             if origin is not None: coordinates -= origin
             coordinates = ( coordinates / spacing ).transpose()
-    
+
             # interpolate position field at coordinates, reformat, return
-            interp = lambda x: map_coordinates(x, coordinates, order=1, mode='nearest')
-            dX = np.array([interp(transform[..., i]) for i in range(3)]).transpose()
+            ndims = transform.shape[-1]
+            interp = lambda x: map_coordinates(x, coordinates, mode='nearest')
+            dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()
             coordinates = coordinates.transpose() * spacing + dX
             if origin is not None: coordinates += origin
 
@@ -231,7 +229,7 @@ def compose_displacement_vector_fields(
     -------
     composite_field : nd-array
         The single field composition of first_field and second_field
-        The second field is the one learned second. In this case, the composition
+        The second field is the one learned second. Thus, the composition
         is going to be on the same voxel grid and spacing as the second field.
     """
 
@@ -239,7 +237,7 @@ def compose_displacement_vector_fields(
     first_field_warped = np.empty_like(second_field)
 
     # loop over components
-    for iii in range(3):
+    for iii in range(len(first_spacing)):
 
         # warp first field with second
         first_field_warped[..., iii] = apply_transform(
@@ -265,10 +263,10 @@ def compose_transforms(
     Parameters
     ----------
     first_transform : nd-array
-        Can be either a 4x4 affine matrix or a displacement vector field
+        Can be either a 3x3 or 4x4 affine matrix or a displacement vector field
 
     second_transform : nd-array
-        Can be either a 4x4 affine matrix or a displacement vector field
+        Can be either a 3x3 or 4x4 affine matrix or a displacement vector field
 
     first_spacing : 1d-array
         The voxel spacing for the first transform
@@ -317,7 +315,7 @@ def compose_transform_list(transforms, spacings):
     Parameters
     ----------
     transforms : list
-        Elements of list must be either 4x4 affine matrices or displacement
+        Elements of list must be either 3x3 or 4x4 affine matrices or displacement
         vector fields
 
     spacings : list of 1d-arrays
@@ -328,7 +326,7 @@ def compose_transform_list(transforms, spacings):
     -------
     composite_transform : nd-array
         The single transform composition of all elements in transforms.
-        If all transforms are affine, this is a 4x4 matrix. Otherwise,
+        If all transforms are affine, this is a 3x3 or 4x4 matrix. Otherwise,
         it is a displacement vector field.
     """
 

@@ -1,8 +1,10 @@
 import numpy as np
+import os, tempfile
 import SimpleITK as sitk
 from bigstream.configure_irm import configure_irm
 import bigstream.utility as ut
 from itertools import product
+from ClusterWrap.decorator import cluster
 
 
 def patch_mutual_information(
@@ -211,4 +213,95 @@ def _get_crop(binary_string, radius):
         if bit == "0": crop.append( slice(None, -2*r - 1, None) )
         else: crop.append( slice(2*r + 1, None, None) )
     return tuple(crop)
+
+
+@cluster
+def roi_correlations(
+    fix,
+    mov,
+    rois,
+    radius=None,
+    cluster=None,
+    cluster_kwargs={},
+    temporary_directory=None,
+):
+    """
+    Compute the correlation between fixed and moving in all the
+    given ROIs. Distributed.
+
+    Parameters
+    ----------
+    fix : ndarray
+        The fixed image data
+
+    mov : ndarray
+        The moving image data
+
+    rois : list of tuples of slices
+        The ROIs. A single ROI should be a tuple of slices, one
+        per axis of fix/mov.
+
+    radius : int or tuple of int (default: None)
+        How much to extend the ROI along each axis.
+
+    cluster : ClusterWrap.cluster object (default: None)
+        Only set if you have constructed your own static cluster. The default behavior
+        is to construct a cluster for the duration of this function, then close it
+        when the function is finished.
+
+    cluster_kwargs : dict (default: {})
+        Arguments passed to ClusterWrap.cluster
+        If working with an LSF cluster, this will be
+        ClusterWrap.janelia_lsf_cluster. If on a workstation
+        this will be ClusterWrap.local_cluster.
+        This is how distribution parameters are specified.
+
+    temporary_directory : string (default: None)
+        Temporary files are created during alignment. The temporary files will be
+        in their own folder within the `temporary_directory`. The default is the
+        current directory. Temporary files are removed if the function completes
+        successfully.
+
+    Returns
+    -------
+    correlations : 1d numpy array of floats
+        The correlation between fix and mov in all rois
+    """
+
+    # ensure zarr images
+    temporary_directory = tempfile.TemporaryDirectory(
+        prefix='.', dir=temporary_directory or os.getcwd(),
+    )
+    zarr_blocks = [128,]* fix.ndim
+    fix_zarr_path = temporary_directory.name + '/fix.zarr'
+    mov_zarr_path = temporary_directory.name + '/mov.zarr'
+    fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
+    mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
+
+    # ensure radius is a tuple
+    if radius is not None and not isinstance(radius, tuple):
+        radius = (radius,) * fix.ndim
+
+    # record shape
+    full_shape = fix.shape
+
+    def roi_correlation(roi):
+
+        # adjust for radius
+        if radius is not None:
+            new_roi = []
+            for s, r, sh in zip(roi, radius, full_shape):
+                new_roi.append(slice(max(s.start - r, 0), min(s.stop + r, sh)))
+            roi = tuple(new_roi)
+
+        # crop and flatten the data
+        fix_crop = fix_zarr[roi].flatten()
+        mov_crop = mov_zarr[roi].flatten()
+
+        # return correlation
+        return np.corrcoef(fix_crop, mov_crop)[0, 1]
+
+    # run everything in parallel
+    futures = cluster.client.map(roi_correlation, rois)
+    return np.array(cluster.client.gather(futures))
 

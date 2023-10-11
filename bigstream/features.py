@@ -2,6 +2,7 @@ import numpy as np
 from fishspot.filter import white_tophat, apply_foreground_mask
 from fishspot.detect import detect_spots_log
 from scipy.stats.mstats import winsorize
+from scipy.spatial import cKDTree
 
 
 def blob_detection(
@@ -24,6 +25,11 @@ def blob_detection(
         The smallest size blob you want to find in voxel units
     max_blob_radius : scalar float
         The largest size blob you want to find in voxel units
+    winsorize_limits : tuple of two floats (default: None)
+        If not None, winsorize the input with (min, max) percentile cutoffs
+    background_subtract : bool (default: False)
+        If True, use white_tophat background subtraction with max_blob_radius
+        as the filter radius
     **kwargs : any additional kwargs
         Passed to fishspot.detect_spots_log
 
@@ -47,8 +53,8 @@ def blob_detection(
         **kwargs,
     ).astype(int)
     if mask is not None: spots = apply_foreground_mask(spots, mask)
-    intensities = image[spots[:, 0], spots[:, 1], spots[:, 2]]
-    return np.hstack((spots[:, :3], intensities[..., None]))
+    intensities = image[ tuple(spots[:, iii] for iii in range(image.ndim)) ]
+    return np.hstack((spots[:, :image.ndim], intensities[..., None]))
 
 
 def get_contexts(image, coords, radius):
@@ -72,7 +78,7 @@ def get_contexts(image, coords, radius):
 
     contexts = []
     for coord in coords:
-        crop = tuple(slice(x-radius, x+radius+1) for x in coord)
+        crop = tuple(slice(int(x-radius), int(x+radius+1)) for x in coord)
         contexts.append(image[crop])
     return contexts    
 
@@ -127,7 +133,7 @@ def pairwise_correlation(A, B):
     return corr
 
 
-def match_points(a_pos, b_pos, scores, threshold):
+def match_points(a_pos, b_pos, scores, threshold, max_distance=None):
     """
     Given two point sets and pairwise scores, determine which points correspond.
 
@@ -141,12 +147,25 @@ def match_points(a_pos, b_pos, scores, threshold):
         Correspondence scores for all points in a_pos to all points in b_pos
     threshold : scalar float
         Minimum correspondence score for a valid match
+    max_distance : float (default: None)
+        The maximum distance two spots can be and still be matched
 
     Returns
     -------
     matched_a_points, matched_b_points : two 2d-arrays both Px3
         The points from a_pos and b_pos that correspond
     """
+
+    # only points within max_distance should be considered
+    max_score = np.max(scores) + 1
+    if max_distance is not None:
+        a_kdtree = cKDTree(a_pos)
+        valid_paris = a_kdtree.query_ball_tree(
+            cKDTree(b_pos), max_distance,
+        )
+        for iii, fancy_index in enumerate(valid_pairs):
+            scores[iii, fancy_index] += max_score
+        threshold += max_score
 
     # get highest scores above threshold
     best_indcs = np.argmax(scores, axis=1)

@@ -78,7 +78,7 @@ def get_contexts(image, coords, radius):
 
     contexts = []
     for coord in coords:
-        crop = tuple(slice(x-radius, x+radius+1) for x in coord)
+        crop = tuple(slice(int(x-radius), int(x+radius+1)) for x in coord)
         contexts.append(image[crop])
     return contexts    
 

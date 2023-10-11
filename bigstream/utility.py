@@ -5,6 +5,7 @@ import zarr
 from zarr.indexing import BasicIndexer
 from distributed import Lock
 import glob
+import os
 import h5py
 from ClusterWrap.decorator import cluster
 from zarr import blosc

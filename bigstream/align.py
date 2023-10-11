@@ -61,6 +61,10 @@ def apply_alignment_spacing(
     8. spacing of skip sampled moving mask (or None)
     """
 
+    # ensure spacings are floating point
+    fix_spacing = fix_spacing.astype(np.float64)
+    mov_spacing = mov_spacing.astype(np.float64)
+
     # get mask spacings
     fix_mask_spacing = None
     if fix_mask is not None:

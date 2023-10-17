@@ -13,7 +13,6 @@ import json
 from distributed import Event
 import time
 import os
-import psutil
 import aicspylibczi
 from ngff_zarr import to_ngff_image, to_multiscales, to_ngff_zarr
 

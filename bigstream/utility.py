@@ -9,6 +9,7 @@ import os
 import h5py
 from ClusterWrap.decorator import cluster
 from zarr import blosc
+import psutil
 
 
 def skip_sample(image, spacing, ss_spacing):

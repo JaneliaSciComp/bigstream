@@ -6,7 +6,6 @@ from bigstream.configure_irm import configure_irm
 from bigstream.transform import apply_transform, compose_transform_list
 from bigstream.metrics import patch_mutual_information
 from bigstream import features
-from scipy.spatial import cKDTree
 import cv2
 
 

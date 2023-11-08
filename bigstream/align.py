@@ -6,7 +6,6 @@ from bigstream.configure_irm import configure_irm
 from bigstream.transform import apply_transform, compose_transform_list
 from bigstream.metrics import patch_mutual_information
 from bigstream import features
-from scipy.spatial import cKDTree
 import cv2
 
 
@@ -1210,14 +1209,13 @@ def alignment_pipeline(
              'deform':lambda **c: deformable_align(*a, **{**b, **c})[1],}
 
     # loop over steps
-    initial_transform_count = len(static_transform_list)
+    new_transforms = []
     for alignment, arguments in steps:
         arguments = {**kwargs, **arguments}
-        arguments['static_transform_list'] = static_transform_list
-        static_transform_list.append(align[alignment](**arguments))
+        arguments['static_transform_list'] = static_transform_list + new_transforms
+        new_transforms.append(align[alignment](**arguments))
 
     # return in the requested format
-    new_transforms = static_transform_list[initial_transform_count:]
     if return_format == 'independent':
         return new_transforms
     elif return_format == 'compressed':

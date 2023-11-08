@@ -84,14 +84,17 @@ def easifish_registration_pipeline(
         Any arguments you would like to pass to the global instance of
         bigstream.align.feature_point_ransac_affine_align. See the
         docstring for that function for valid parameters.
-        default : {'blob_sizes':[6, 20]}
+        default : {'alignment_spacing':np.min(fix_lowres_spacing)*4,
+                   'blob_sizes':[int(round(np.min(fix_lowres_spacing)*4)),
+                                 int(round(np.min(fix_lowres_spacing)*16))]}
 
     global_affine_kwargs : dict
         Any arguments you would like to pass to the global instance of
         bigstream.align.affine_align. See the docstring for that function
         for valid parameters.
-        default : {'shrink_factors':(2,),
-                   'smooth_sigmas':(2.5,),
+        default : {'alignment_spacing':np.min(fix_lowres_spacing)*4,
+                   'shrink_factors':(2,),
+                   'smooth_sigmas':(np.min(fix_lowres_spacing)*8,),
                    'optimizer_args':{
                        'learningRate':0.25,
                        'minStep':0.,
@@ -102,14 +105,15 @@ def easifish_registration_pipeline(
         Any arguments you would like to pass to the local instances of
         bigstream.align.feature_point_ransac_affine_align. See the
         docstring for that function for valid parameters.
-        default : {'blob_sizes':[6, 20]}
+        default : {'blob_sizes':same physical size as global_ransac values,
+                                but scaled to highres voxel grid}
 
     local_deform_kwargs : dict
         Any arguments you would like to pass to the local instances of
         bigstream.align.deformable_align. See the docstring for that function
         for valid parameters.
-        default : {'smooth_sigmas':(0.25,),
-                   'control_point_spacing':50.0,
+        default : {'smooth_sigmas':(np.min(fix_highres_spacing)*2,),
+                   'control_point_spacing':np.min(fix_highres_spacing)*128,
                    'control_point_levels':(1,),
                    'optimizer_args':{
                        'learningRate':0.25,
@@ -150,9 +154,14 @@ def easifish_registration_pipeline(
     mov_lowres = mov_lowres[...]
 
     # configure global affine alignment at lowres
-    a = {'blob_sizes':[6, 20]}
-    b = {'shrink_factors':(2,),
-         'smooth_sigmas':(2.5,),
+    alignment_spacing = np.min(fix_lowres_spacing)*4
+    blob_min = int(round(np.min(fix_lowres_spacing)*4))
+    blob_max = int(round(np.min(fix_lowres_spacing)*16))
+    a = {'alignment_spacing':alignment_spacing,
+         'blob_sizes':[blob_min, blob_max]}
+    b = {'alignment_spacing':alignment_spacing,
+         'shrink_factors':(2,),
+         'smooth_sigmas':(2*alignment_spacing,),
          'optimizer_args':{
              'learningRate':0.25,
              'minStep':0.,
@@ -181,9 +190,12 @@ def easifish_registration_pipeline(
     np.save(f'{write_directory}/affine.npy', aligned)
 
     # configure local deformable alignment at highres
-    a = {'blob_sizes':[6, 20]}
-    b = {'smooth_sigmas':(0.25,),
-         'control_point_spacing':50.0,
+    ratio = np.min(fix_spacing_lowres) / np.min(fix_spacing_highres)
+    blob_min = int(round(blob_min * ratio))
+    blob_max = int(round(blob_min * ratio))
+    a = {'blob_sizes':[blob_min, blob_max]}
+    b = {'smooth_sigmas':(2*np.min(fix_spacing_highres),),
+         'control_point_spacing':np.min(fix_spacing_highres)*128,
          'control_point_levels':(1,),
          'optimizer_args':{
              'learningRate':0.25,

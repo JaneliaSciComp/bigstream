@@ -2,7 +2,7 @@ import numpy as np
 import SimpleITK as sitk
 import bigstream.utility as ut
 from bigstream.configure_irm import interpolator_switch
-import os, psutil
+import os
 from scipy.ndimage import map_coordinates
 
 

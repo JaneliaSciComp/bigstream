@@ -119,6 +119,7 @@ def foreground_segmentation(
     smooth_sigmas=(8.,4.,2.),
     lambda2=20.,
     background=None,
+    return_largest_cc_only=True,
     mask=None,
     mask_smoothing=1,
 ):
@@ -150,6 +151,12 @@ def foreground_segmentation(
     background : scalar float (default: None)
         An estimate of the average background intensity value. If None, it will
         automatically be estimated from the image using level_set.estimate_background
+
+    return_largest_cc_only : bool (default: True)
+        If true, final mask is eroded, then connected components are found,
+        only the largest cc is dilated and retained. If false, the entire
+        final level set is returned, even if the topology changed (e.g. multiple
+        discontinuous regions were found)
 
     mask : binary nd-array (default: None)
         Optional initialization for the level set. Must be the same shape as image.
@@ -183,9 +190,10 @@ def foreground_segmentation(
         )
 
     # basic topological correction
-    mask = binary_erosion(mask, iterations=2)
-    mask = largest_connected_component(mask)
-    mask = binary_dilation(mask, iterations=2)
+    if return_largest_cc_only:
+        mask = binary_erosion(mask, iterations=2)
+        mask = largest_connected_component(mask)
+        mask = binary_dilation(mask, iterations=2)
     mask = binary_fill_holes(mask).astype(np.uint8)
 
     # ensure output is on correct grid

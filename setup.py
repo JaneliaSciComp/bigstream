@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="bigstream",
-    version="1.2.1",
+    version="1.2.4",
     author="Greg M. Fleishman",
     author_email="greg.nli10me@gmail.com",
     description="Tools for distributed alignment of massive images",
@@ -25,6 +25,7 @@ setuptools.setup(
         'numcodecs>=0.9.1',
         'fishspot>=0.2.3',
         'SimpleITK>=2.2.0',
-        'tifffile>=2022.10.10'
+        'tifffile>=2022.10.10',
+        'morphsnakes>=2.0.0'
     ]
 )

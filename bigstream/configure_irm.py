@@ -1,4 +1,4 @@
-import os, psutil
+import os
 import SimpleITK as sitk
 import bigstream.utility as ut
 

@@ -75,8 +75,8 @@ def get_contexts(image, coords, radius):
     neighborhoods : list of nd-arrays
         List of the extracted neighborhoods
     """
-    if isinstance(radius, int):
-        radius = (radius, radius, radius)  # Convert integer radius to a 3-dimensional tuple
+    if isinstance(radius, (int, np.integer)):
+        radius = (radius,) * image.ndim  # Convert scalar radius to ndim radius
  
     contexts = []
     for coord in coords:

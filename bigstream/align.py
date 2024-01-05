@@ -377,7 +377,7 @@ def feature_point_ransac_affine_align(
 
     # get fix spots
     num_sigma = int(min(blob_sizes[1] - blob_sizes[0], num_sigma_max))
-    assert num_sigma > 0, 'num_sigma must be greater than 0, make surce blob_sizes[1] > blob_sizes[0]'
+    assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
     print('computing fixed spots', flush=True)
     if fix_spots is None:
         fix_kwargs = {

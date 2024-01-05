@@ -2,10 +2,13 @@ import numpy as np
 import os
 from ClusterWrap.decorator import cluster
 import dask.array as da
+from dask.distributed import as_completed
 import bigstream.utility as ut
 from bigstream.align import affine_align
 from bigstream.align import deformable_align
+from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform
+from bigstream.transform import compose_transforms
 from scipy.ndimage import median_filter
 from scipy.ndimage import gaussian_filter1d
 from scipy.ndimage import map_coordinates
@@ -244,6 +247,185 @@ def motion_correct(
     return transforms
 
 
+@cluster
+def delta_motion_correct(
+    timeseries,
+    spacing,
+    steps,
+    mask=None,
+    cluster=None,
+    cluster_kwargs={},
+    temporary_directory=None,
+    write_path=None,
+    **kwargs,
+):
+    """
+    Motion correct a time series by aligning each frame to the one before it.
+    Frames at times T are fixed frames; frames at times T+1 are moving frames.
+    `bigstream.align.alignment_pipeline` is called for each pair of frames.
+    Control the alignment done for each pair of frames through `steps`.
+
+    Parameters
+    ----------
+    timeseries : zarr.Array
+        The timeseries image frames. This should be a 4D zarr Array object that is
+        only lazy loaded, e.g. not in memory. The time axis should be the first
+        axis.
+
+    spacing : 1d array
+        The voxel spacing of the frames in micrometers
+
+    steps : list of tuples in this form [(str, dict), (str, dict), ...]
+        For each tuple, the str specifies which alignment to run. The options are:
+        'ransac' : run `feature_point_ransac_affine_align`
+        'random' : run `random_affine_search`
+        'rigid' : run `affine_align` with `rigid=True`
+        'affine' : run `affine_align`
+        'deform' : run `deformable_align`
+        For each tuple, the dict specifies the arguments to that alignment function.
+        Arguments specified here override any global arguments give through kwargs
+        for their specific step only.
+
+    mask : nd-array (default: None)
+        This array should have the same dimensions and shape as a single frame of
+        the timeseries. The mask will be used as the fixed and moving image mask
+        for all frame pair alignments. A good way to make this is to use
+        bigstream.level_set.foreground_segmentation on the max projection of all
+        frames over time.
+
+    cluster : ClusterWrap.cluster object (default: None)
+        Only set if you have constructed your own static cluster. The default behavior
+        is to construct a cluster for the duration of this function, then close it
+        when the function is finished.
+
+    cluster_kwargs : dict (default: {})
+        Arguments passed to ClusterWrap.cluster
+        If working with an LSF cluster, this will be
+        ClusterWrap.janelia_lsf_cluster. If on a workstation
+        this will be ClusterWrap.local_cluster.
+        This is how distribution parameters are specified.
+
+    temporary_directory : string (default: None)
+        Temporary files may be created during alignment. The temporary files will be
+        in their own folder within the `temporary_directory`. The default is the
+        current directory. Temporary files are removed if the function completes
+        successfully.
+
+    write_path : string (default: None)
+        If not None, the final array of transforms will be written to disk as a zarr
+        array at this path. If None then this array is returned in memroy. Only use
+        this if transforms are deformation and if the resultant set of transforms
+        is too large to fit in memory. 
+
+    kwargs : any additional arguments
+        Passed to alignment_pipeline. Control the nature of alignments through these arguments
+
+    Returns
+    -------
+    transforms : nd-array
+        All transforms aligning the dataset to the reference. N == number of provided images
+    """
+
+    # convenient names
+    nframes = timeseries.shape[0]
+    frame_shape = timeseries.shape[1:]
+
+    # ensure input is a zarr array
+    temporary_directory = tempfile.TemporaryDirectory(
+        prefix='.', dir=temporary_directory or os.getcwd(),
+    )
+    zarr_blocks = (1,) + frame_shape
+    timeseries_zarr_path = temporary_directory.name + '/timeseries.zarr'
+    timeseries_zarr = ut.numpy_to_zarr(timeseries, zarr_blocks, timeseries_zarr_path)
+
+    # ensure mask is readable by all workers
+    if mask is not None:
+        np.save(temporary_directory.name + '/mask.npy', mask)
+
+    # zarr file for output
+    if write_path:
+        output_transform = ut.create_zarr(
+            write_path,
+            (nframes-1,) + frame_shape + (3,),
+            zarr_blocks + (3,),
+            np.float32,
+        )
+
+    # establish all keyword arguments
+    steps = [(a, {**kwargs, **b}) for a, b in steps]
+
+    # closure for alignment pipeline
+    def align_frame_pair(index):
+
+        # load frames and (optionally) mask
+        fix = timeseries_zarr[index]
+        mov = timeseries_zarr[index+1]
+        mask = None
+        if os.path.isfile(temporary_directory.name + '/mask.npy'):
+            mask = np.load(temporary_directory.name + '/mask.npy')
+
+        # align and return or write result
+        transform = alignment_pipeline(
+            fix, mov, spacing, spacing, steps,
+            fix_mask=mask,
+            mov_mask=mask,
+        )
+        if not write_path:
+            return transform
+        else:
+            output_transform[index] = transform
+            return True
+
+    # submit all pairs
+    futures = cluster.client.map(align_frame_pair, range(nframes-1))
+    if not write_path:
+        transform = np.empty((nframes-1,) + frame_shape + (3,), dtype=np.float32)
+        future_keys = [f.key for f in futures]
+        for batch in as_completed(futures, with_results=True).batches():
+            for future, result in batch:
+                iii = future_keys.index(future.key)
+                transform[iii] = result
+        return transform
+    else:
+        all_written = np.all(cluster.client.gather(future))
+        return output_transform
+
+
+def compose_delta_transforms(
+    transforms,
+    spacing=None,
+):
+    """
+    Compose all transforms returned by delta_motion_correct into a single
+    displacement flow
+
+    Parameters
+    ----------
+    transforms : nd array
+        The output of delta_motion_correct. Sould be a time series of transforms
+        with time as the first axis.
+
+    spacing : nd array (default: None)
+        The voxel spacing of the transforms. Only set this if transforms are vector
+        fields.
+
+    Returns
+    -------
+    transforms : nd array
+        An nd array the same shape as the input transforms, but with each transform
+        based in the first time point coordinate system.
+    """
+
+    new_transforms = np.empty_like(transforms)
+    new_transforms[0] = np.copy(transforms[0])
+    for iii, transform in enumerate(transforms[1:]):
+        new_transforms[iii+1] = compose_transforms(
+            transform, new_transforms[iii], spacing, spacing,
+        )
+    return new_transforms
+        
+
+
 # TODO: VERY OLD - UPDATE TO TAKE ZARR INPUTS AND BE
 #    CONSISTENT WITH motion_correct FUNCTION
 def deformable_motion_correct(
@@ -473,6 +655,11 @@ def resample_frames(
             mask = zoom(mask, np.array(mov_sh) / mask_sh, order=0)
         np.save(temporary_directory.name + '/mask.npy', mask)
 
+    # save transforms as zarr array
+    zarr_blocks = (1,) + transforms.shape[1:]
+    transforms_zarr_path = temporary_directory.name + '/transforms.zarr'
+    transforms_zarr = ut.numpy_to_zarr(transforms, zarr_blocks, transforms_zarr_path)
+
     # save initial deforms to location accessible to all workers
     new_list = []
     for iii, transform in enumerate(static_transform_list_before):
@@ -493,11 +680,10 @@ def resample_frames(
         new_list.append(transform)
     static_transform_list_after = new_list
 
-    # determine which frames will be resampled, ensure transforms are list
+    # determine which frames will be resampled
     total_frames = mov_zarr.shape[0]
     mov_indices = range(0, total_frames, time_stride)
     compute_frames = len(mov_indices)
-    transforms = list(transforms)[::time_stride]
 
     # create an output zarr file
     output_zarr = ut.create_zarr(
@@ -509,7 +695,7 @@ def resample_frames(
 
     # wrap transform function
     def wrapped_apply_transform(
-        read_index, write_index, transform,
+        read_index, write_index,
         static_transform_list_before,
         static_transform_list_after,
     ):
@@ -517,6 +703,7 @@ def resample_frames(
         # read frame and mask data
         fix = np.load(temporary_directory.name + '/fix.npy')
         mov = mov_zarr[read_index]
+        transform = transforms_zarr[read_index]
         mask = None
         if os.path.isfile(temporary_directory.name + '/mask.npy'):
             mask = np.load(temporary_directory.name + '/mask.npy')
@@ -545,11 +732,12 @@ def resample_frames(
     # distribute and wait for completion
     futures = cluster.client.map(
         wrapped_apply_transform,
-        mov_indices, range(compute_frames), transforms,
+        mov_indices, range(compute_frames),
         static_transform_list_before=static_transform_list_before,
         static_transform_list_after=static_transform_list_after,
     )
     all_written = np.all( cluster.client.gather(futures) )
     if not all_written: print("SOMETHING FAILED, CHECK LOGS")
     return output_zarr
+
 

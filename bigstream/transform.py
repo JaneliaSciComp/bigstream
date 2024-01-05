@@ -447,21 +447,35 @@ def _displacement_field_composition_square_root(
     # iterate
     for i in range(iterations):
         residual = (field - compose_transforms(root, root, spacing, spacing))
-        gradient = np.einsum('...ij,...j', _jacobian(root, spacing), residual) + residual
+        gradient = np.einsum('...ij,...j', displacement_field_jacobian(root, spacing), residual) + residual
         root += step * gradient
 
     # return result
     return root
 
 
-def _jacobian(field, spacing):
+def displacement_field_jacobian(field, spacing):
     """
     """
 
+    # convert to position field
+    grid = tuple(slice(None, x) for x in field.shape[:-1])
+    position_field = np.mgrid[grid].astype(field.dtype)
+    position_field = np.moveaxis(position_field, 0, -1) * spacing + field
+
+    # get jacobian matrices
     jacobian = np.empty(field.shape[:-1] + (field.shape[-1],)*2, dtype=field.dtype)
     for iii in range(field.shape[-1]):
-        grad = np.moveaxis( np.array( np.gradient(field[..., iii], *spacing) ), 0, -1)
+        grad = np.moveaxis( np.array( np.gradient(position_field[..., iii], *spacing) ), 0, -1)
         jacobian[..., iii, :] = np.ascontiguousarray(grad)
     return jacobian
+
+
+def displacement_field_jacobian_determinant(field, spacing):
+    """
+    """
+
+    jacobian = displacement_field_jacobian(field, spacing)
+    return np.linalg.det(jacobian)
 
 

@@ -75,10 +75,12 @@ def get_contexts(image, coords, radius):
     neighborhoods : list of nd-arrays
         List of the extracted neighborhoods
     """
-
+    if isinstance(radius, (int, np.integer)):
+        radius = (radius,) * image.ndim  # Convert scalar radius to ndim radius
+ 
     contexts = []
     for coord in coords:
-        crop = tuple(slice(int(x-radius), int(x+radius+1)) for x in coord)
+        crop = tuple(slice(int(x - r), int(x + r + 1)) for x, r in zip(coord, radius))
         contexts.append(image[crop])
     return contexts    
 

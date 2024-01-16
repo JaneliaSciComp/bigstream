@@ -26,6 +26,7 @@ def distributed_piecewise_alignment_pipeline(
     mov_mask=None,
     foreground_percentage=0.5,
     static_transform_list=[],
+    rebalance_for_missing_neighbors=True,
     cluster=None,
     cluster_kwargs={},
     temporary_directory=None,
@@ -96,6 +97,13 @@ def distributed_piecewise_alignment_pipeline(
         Assumed to have the same domain as the fixed image, though sampling
         can be different. I.e. the origin and span are the same (in physical
         units) but the number of voxels can be different.
+
+    rebalance_for_missing_neighbors : bool (default: True)
+        If True, when a block has a missing neighbor, it's linear blending weights
+        are rebalanced to account for the missing neighbor. The ensures transforms
+        aren't artificially dampened by missing neighbors, which have zero valued
+        displacement. However, if it is desired that the edges of masked regions
+        should more smoothly dampen into backgroun, then set this to false.
 
     cluster : ClusterWrap.cluster object (default: None)
         Only set if you have constructed your own static cluster. The default behavior
@@ -318,7 +326,7 @@ def distributed_piecewise_alignment_pipeline(
         weights = np.pad(np.ones(core, dtype=np.float64), pad, mode='linear_ramp')
 
         # rebalance if any neighbors are missing
-        if not np.all(list(neighbor_flags.values())):
+        if rebalance_for_missing_neighbors and not np.all(list(neighbor_flags.values())):
 
             # define overlap slices
             slices = {}

@@ -136,11 +136,12 @@ def distributed_piecewise_alignment_pipeline(
         the displacement vector.
     """
 
+    ################  Input, output, and parameter formatting ############
     # temporary file paths and create zarr images
     temporary_directory = tempfile.TemporaryDirectory(
         prefix='.', dir=temporary_directory or os.getcwd(),
     )
-    zarr_blocks = [128,] * fix.ndim
+    zarr_blocks = (128,) * fix.ndim
     fix_zarr_path = temporary_directory.name + '/fix.zarr'
     mov_zarr_path = temporary_directory.name + '/mov.zarr'
     fix_mask_zarr_path = temporary_directory.name + '/fix_mask.zarr'
@@ -148,16 +149,19 @@ def distributed_piecewise_alignment_pipeline(
     fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
     mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
     fix_mask_zarr = None
-    if fix_mask is not None: fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
+    if fix_mask is not None:
+        fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
     mov_mask_zarr = None
-    if mov_mask is not None: mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
+    if mov_mask is not None:
+        mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
 
     # zarr files for initial deformations
     new_list = []
+    zarr_blocks = (128,) * fix.ndim + (fix.ndim,)
     for iii, transform in enumerate(static_transform_list):
-        if transform.shape != (4, 4) and len(transform.shape) != 1:
+        if len(transform.shape) <= fix.ndim:  # fields are always fix.ndim + 1
             path = temporary_directory.name + f'/deform{iii}.zarr'
-            transform = ut.numpy_to_zarr(transform, tuple(zarr_blocks) + (transform.shape[-1],), path)
+            transform = ut.numpy_to_zarr(transform, zarr_blocks, path)
         new_list.append(transform)
     static_transform_list = new_list
 
@@ -172,9 +176,15 @@ def distributed_piecewise_alignment_pipeline(
         # chunks will need locks for parallel writing
         locks = [Lock(f'{x}') for x in np.ndindex(*output_transform.cdata_shape)]
 
+    # merge keyword arguments with step specific keyword arguments
+    steps = [(a, {**kwargs, **b}) for a, b in steps]
+    ######################################################################
+
+
+    #################### Determine block structure #######################
     # determine fixed image slices for blocking
     blocksize = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix.shape) / blocksize).astype(int)
+    nblocks = np.ceil(fix.shape / blocksize).astype(int)
     overlaps = np.round(blocksize * overlap).astype(int)
     indices, slices = [], []
     for (i, j, k) in np.ndindex(*nblocks):
@@ -200,44 +210,40 @@ def distributed_piecewise_alignment_pipeline(
             slices.append(coords)
 
     # determine foreground neighbor structure
-    new_indices = []
-    neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=3)))
-    for index, coords in zip(indices, slices):
-        neighbor_flags = {tuple(o): tuple(index + o) in indices for o in neighbor_offsets}
-        new_indices.append((index, coords, neighbor_flags))
-    indices = new_indices
+    neighbor_flags = []
+    neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=fix.ndim)))
+    for index in zip(indices):
+        flags = {tuple(o): tuple(index + o) in indices for o in neighbor_offsets}
+        neighbor_flags.append(flags)
 
-    # establish all keyword arguments
-    steps = [(a, {**kwargs, **b}) for a, b in steps]
+    # bundle the three parallel lists together
+    block_data = zip(indices, slices, neighbor_flags)
+    ######################################################################
 
 
-    # closure for alignment pipeline
-    def align_single_block(
-        indices,
-        static_transform_list,
-    ):
+    #################### The function to run on each block ###############
+    def align_single_block(indices, static_transform_list):
 
-        # print some feedback
-        print("Block index: ", indices[0], "\nSlices: ", indices[1], flush=True)
-
-        # get the coordinates, read fixed data
+        # parse input, log index and slices
         block_index, fix_slices, neighbor_flags = indices
-        fix = fix_zarr[fix_slices]
+        print("Block index: ", block_index, "\nSlices: ", fix_slices, flush=True)
 
+
+        ########## Map fix block corners onto mov coordinates ############
+        ############## Reads static transforms in the meantime ###########
         # get fixed image block corners in physical units
         fix_block_coords = []
-        for corner in list(product([0, 1], repeat=3)):
+        for corner in list(product([0, 1], repeat=len(fix_slices))):
             a = [x.stop-1 if y else x.start for x, y in zip(fix_slices, corner)]
             fix_block_coords.append(a)
         fix_block_coords = np.array(fix_block_coords)
         fix_block_coords_phys = fix_block_coords * fix_spacing
 
-        # parse initial transforms
-        # recenter affines, read deforms, apply transforms to crop coordinates
+        # read static transforms: recenter affines, apply to crop coordinates
         new_list = []
         mov_block_coords_phys = np.copy(fix_block_coords_phys)
         for transform in static_transform_list[::-1]:
-            if transform.shape == (4, 4):
+            if len(transform.shape) == 2:
                 mov_block_coords_phys = apply_transform_to_coordinates(
                     mov_block_coords_phys, [transform,],
                 )
@@ -256,17 +262,22 @@ def distributed_piecewise_alignment_pipeline(
             new_list.append(transform)
         static_transform_list = new_list[::-1]
 
-        # get moving image crop, read moving data 
+        # Now we can determine the moving image crop
         mov_block_coords = np.round(mov_block_coords_phys / mov_spacing).astype(int)
         mov_start = np.min(mov_block_coords, axis=0)
         mov_stop = np.max(mov_block_coords, axis=0)
         mov_start = np.maximum(0, mov_start)
         mov_stop = np.minimum(np.array(mov_zarr.shape)-1, mov_stop)
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
-        mov = mov_zarr[mov_slices]
 
-        # XXX if input masks are zarr arrays this doesn't work, nothing at paths
-        # read masks
+        # get moving crop origin relative to fixed crop
+        mov_origin = mov_start * mov_spacing - fix_block_coords_phys[0]
+        ##################################################################
+
+
+        ################ Read fix and moving data ########################
+        fix = fix_zarr[fix_slices]
+        mov = mov_zarr[mov_slices]
         fix_mask, mov_mask = None, None
         if fix_mask_zarr is not None:
             ratio = np.array(fix_mask_zarr.shape) / fix_zarr.shape
@@ -280,10 +291,10 @@ def distributed_piecewise_alignment_pipeline(
             stop = np.round( ratio * mov_stop ).astype(int)
             mov_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
             mov_mask = mov_mask_zarr[mov_mask_slices]
+        ##################################################################
 
-        # get moving image origin
-        mov_origin = mov_start * mov_spacing - fix_block_coords_phys[0]
 
+        ############################ Align ###############################
         # run alignment pipeline
         transform = alignment_pipeline(
             fix, mov, fix_spacing, mov_spacing, steps,
@@ -293,11 +304,14 @@ def distributed_piecewise_alignment_pipeline(
         )
 
         # ensure transform is a vector field
-        if transform.shape == (4, 4):
+        if len(transform.shape) == 2:
             transform = ut.matrix_to_displacement_field(
                 transform, fix.shape, spacing=fix_spacing,
             )
+        ##################################################################
 
+
+        ################ Apply weights for linear blending ###############
         # create the standard weight array
         core = tuple(x - 2*y + 2 for x, y in zip(blocksize, overlaps))
         pad = tuple((2*y - 1, 2*y - 1) for y in overlaps)
@@ -325,8 +339,8 @@ def distributed_piecewise_alignment_pipeline(
             weights = weights.astype(np.float32)
 
         # crop weights if block is on edge of domain
-        for i in range(3):
-            region = [slice(None),]*3
+        for i in range(fix.ndim):
+            region = [slice(None),]*fix.ndim
             if block_index[i] == 0:
                 region[i] = slice(overlaps[i], None)
                 weights = weights[tuple(region)]
@@ -336,12 +350,14 @@ def distributed_piecewise_alignment_pipeline(
 
         # crop any incomplete blocks (on the ends)
         if np.any( weights.shape != transform.shape[:-1] ):
-            crop = tuple(slice(0, s) for s in transform.shape[:-1])
-            weights = weights[crop]
+            weights = weights[tuple(slice(0, s) for s in transform.shape[:-1])]
 
         # apply weights
         transform = transform * weights[..., None]
+        ##################################################################
 
+
+        ################ Write or return result ##########################
         # if there's no write path, just return the transform block
         if not write_path:
             return transform
@@ -363,9 +379,11 @@ def distributed_piecewise_alignment_pipeline(
             # release the lock
             lock.release()
             return True
-    # END CLOSURE
+        ##################################################################
+    ######################################################################
 
 
+    #################### Submit all blocks, parse output #################
     # submit all alignments to cluster
     futures = cluster.client.map(
         align_single_block, indices,
@@ -384,6 +402,7 @@ def distributed_piecewise_alignment_pipeline(
     else:
         all_written = np.all( cluster.client.gather(futures) )
         return output_transform
+    ######################################################################
 
 
 # TODO: THIS FUNCTION CURRENTLY DOES NOT WORK FOR LARGER THAN MEMORY TRANSFORMS

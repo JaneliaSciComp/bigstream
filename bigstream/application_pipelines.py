@@ -190,12 +190,12 @@ def easifish_registration_pipeline(
     np.save(f'{write_directory}/affine.npy', aligned)
 
     # configure local deformable alignment at highres
-    ratio = np.min(fix_spacing_lowres) / np.min(fix_spacing_highres)
+    ratio = np.min(fix_lowres_spacing) / np.min(fix_highres_spacing)
     blob_min = int(round(blob_min * ratio))
-    blob_max = int(round(blob_min * ratio))
+    blob_max = int(round(blob_max * ratio))
     a = {'blob_sizes':[blob_min, blob_max]}
-    b = {'smooth_sigmas':(2*np.min(fix_spacing_highres),),
-         'control_point_spacing':np.min(fix_spacing_highres)*128,
+    b = {'smooth_sigmas':(2*np.min(fix_highres_spacing),),
+         'control_point_spacing':np.min(fix_highres_spacing)*128,
          'control_point_levels':(1,),
          'optimizer_args':{
              'learningRate':0.25,

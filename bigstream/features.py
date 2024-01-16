@@ -75,10 +75,12 @@ def get_contexts(image, coords, radius):
     neighborhoods : list of nd-arrays
         List of the extracted neighborhoods
     """
-
+    if isinstance(radius, (int, np.integer)):
+        radius = (radius,) * image.ndim  # Convert scalar radius to ndim radius
+ 
     contexts = []
     for coord in coords:
-        crop = tuple(slice(int(x-radius), int(x+radius+1)) for x in coord)
+        crop = tuple(slice(int(x - r), int(x + r + 1)) for x, r in zip(coord, radius))
         contexts.append(image[crop])
     return contexts    
 
@@ -160,7 +162,7 @@ def match_points(a_pos, b_pos, scores, threshold, max_distance=None):
     max_score = np.max(scores) + 1
     if max_distance is not None:
         a_kdtree = cKDTree(a_pos)
-        valid_paris = a_kdtree.query_ball_tree(
+        valid_pairs = a_kdtree.query_ball_tree(
             cKDTree(b_pos), max_distance,
         )
         for iii, fancy_index in enumerate(valid_pairs):

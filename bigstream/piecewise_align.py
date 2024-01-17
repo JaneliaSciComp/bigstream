@@ -167,7 +167,7 @@ def distributed_piecewise_alignment_pipeline(
     new_list = []
     zarr_blocks = (128,) * fix.ndim + (fix.ndim,)
     for iii, transform in enumerate(static_transform_list):
-        if len(transform.shape) <= fix.ndim:  # fields are always fix.ndim + 1
+        if len(transform.shape) > fix.ndim:  # fields are always fix.ndim + 1
             path = temporary_directory.name + f'/deform{iii}.zarr'
             transform = ut.numpy_to_zarr(transform, zarr_blocks, path)
         new_list.append(transform)

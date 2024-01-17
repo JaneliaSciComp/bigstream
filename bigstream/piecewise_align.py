@@ -257,12 +257,12 @@ def distributed_piecewise_alignment_pipeline(
                 )
                 transform = ut.change_affine_matrix_origin(transform, fix_block_coords_phys[0])
             else:
+                spacing = ut.relative_spacing(transform, fix_zarr, fix_spacing)
                 ratio = np.array(transform.shape[:-1]) / fix_zarr.shape
                 start = np.round( ratio * fix_block_coords[0] ).astype(int)
                 stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)
                 transform_slices = tuple(slice(a, b) for a, b in zip(start, stop))
                 transform = transform[transform_slices]
-                spacing = ut.relative_spacing(transform, fix, fix_spacing)
                 origin = spacing * start
                 mov_block_coords_phys = apply_transform_to_coordinates(
                     mov_block_coords_phys, [transform,], spacing, origin

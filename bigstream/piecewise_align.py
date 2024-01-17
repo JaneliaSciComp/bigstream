@@ -220,12 +220,12 @@ def distributed_piecewise_alignment_pipeline(
     # determine foreground neighbor structure
     neighbor_flags = []
     neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=fix.ndim)))
-    for index in zip(indices):
+    for index in indices:
         flags = {tuple(o): tuple(index + o) in indices for o in neighbor_offsets}
         neighbor_flags.append(flags)
 
     # bundle the three parallel lists together
-    block_data = zip(indices, slices, neighbor_flags)
+    block_data = list(zip(indices, slices, neighbor_flags))
     ######################################################################
 
 
@@ -394,7 +394,7 @@ def distributed_piecewise_alignment_pipeline(
     #################### Submit all blocks, parse output #################
     # submit all alignments to cluster
     futures = cluster.client.map(
-        align_single_block, indices,
+        align_single_block, block_data,
         static_transform_list=static_transform_list,
     )
 

@@ -405,7 +405,7 @@ def distributed_piecewise_alignment_pipeline(
         for batch in as_completed(futures, with_results=True).batches():
             for future, result in batch:
                 iii = future_keys.index(future.key)
-                transform[indices[iii][1]] += result
+                transform[block_data[iii][1]] += result
         return transform
     else:
         all_written = np.all( cluster.client.gather(futures) )

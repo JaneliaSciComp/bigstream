@@ -146,7 +146,7 @@ local_transform = distributed_piecewise_alignment_pipeline(
 )
 
 # apply the transforms
-local_aligned = piecewise_apply_transform(
+local_aligned = distributed_apply_transform(
     fix_highres, mov_highres,
     fix_highres_spacing, mov_highres_spacing,
     transform_list=[global_transform, local_transform],

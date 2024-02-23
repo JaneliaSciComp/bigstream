@@ -3,7 +3,7 @@ import numpy as np
 import SimpleITK as sitk
 import bigstream.utility as ut
 from bigstream.configure_irm import configure_irm
-from bigstream.transform import apply_transform, compose_transform_list
+from bigstream.transform import apply_transform, compose_transform_list, compress_transform_list
 from bigstream.metrics import patch_mutual_information
 from bigstream import features
 import cv2
@@ -1220,11 +1220,7 @@ def alignment_pipeline(
     if return_format == 'independent':
         return new_transforms
     elif return_format == 'compressed':
-        shapes = np.array([x.shape for x in new_transforms], dtype=object)
-        changes = np.where(shapes[:-1] != shapes[1:])[0] + 1
-        changes = [0,] + list(changes) + [len(new_transforms),]
-        F = lambda a, b: compose_transform_list(new_transforms[a:b], fix_spacing)
-        return [F(a, b) for a, b in zip(changes[:-1], changes[1:])]
+        return compress_transform_list(new_transforms, [fix_spacing,]*len(new_transforms))
     elif return_format == 'flatten':
         return compose_transform_list(new_transforms, fix_spacing)
 

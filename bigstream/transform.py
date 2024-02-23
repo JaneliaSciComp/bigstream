@@ -16,6 +16,7 @@ def apply_transform(
     mov_origin=None,
     interpolator='1',
     extrapolate_with_nn=False,
+    compress_transforms=False,
 ):
     """
     Resample moving image onto fixed image through a list
@@ -74,6 +75,18 @@ def apply_transform(
         segmentation/multi-label data. Also prevents edge effects from padding
         when warping image data.
 
+    compress_transforms : Bool (default: False)
+        If False, all transforms are independently added to the composite transform
+        before it is applied to the moving image. If True, we compose all neighboring
+        transforms of similar type in the transform list before applying. For example,
+        with this transform list, [affine1, affine2, deform1, deform2, affine3] and
+        compress_transform_list == False, the composite transform will include all five
+        transforms as indpendent objects. Especially when more than one deformation is
+        applied, this can sometimes result in interpolation artifacts on the edges of
+        images. With compress_transform_list == True, the given list would compress to
+        [composed_affine, composed_deform, affine3]. This reduces the likelihood of
+        edge artifacts, but is also slower.
+
     Returns
     -------
     warped image : ndarray
@@ -85,9 +98,18 @@ def apply_transform(
     ncores = ut.get_number_of_cores()
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(2*ncores)
 
-    # construct transform
+    # format transform spacing
     fix_spacing = np.array(fix_spacing)
     if transform_spacing is None: transform_spacing = fix_spacing
+    if not isinstance(transform_spacing, tuple):
+        transform_spacing = (transform_spacing,) * len(transform_list)
+
+    # construct transform
+    if compress_transforms:
+        transform_list, transform_spacing = compress_transform_list(
+            transform_list, list(transform_spacing),
+        )
+        transform_spacing = tuple(transform_spacing)
     transform = ut.transform_list_to_composite_transform(
         transform_list, transform_spacing, transform_origin,
     )
@@ -342,6 +364,46 @@ def compose_transform_list(transforms, spacings):
             spacings.pop(), transform_spacing,
         )
     return transform
+
+
+def compress_transform_list(transforms, spacings):
+    """
+    Separately compose all neighboring transforms of the same type
+    For example, [affine1, affine2, deform1, deform2, affine3, deform3]
+    becomes [composed_affine, composed_deform, affine3, deform3]
+
+    Parameters
+    ----------
+    transforms : list
+        Elements of list must be either 3x3 or 4x4 affine matrices or displacement
+        vector fields
+
+    spacings : list of 1d-arrays
+        The voxel spacing of all transforms in the list
+        Ignored for affine transforms (just put in a dummy value)
+
+    Returns
+    -------
+    compressed_transform_list : list of nd-arrays
+        A list of transforms where all neighboring transforms of the same type
+        are composed
+    compressed_spacings_list : list of 1d-arrays
+        A list of spacings for the transforms in compressed_transform_list
+    """
+
+    if len(transforms) == 2:
+        dims = [len(x.shape) for x in transforms]
+        if dims[0] == dims[1]:
+            transforms = [compose_transform_list(transforms, spacings),]
+            spacings = [spacings[1],]
+    if len(transforms) > 2:
+        dims = np.array([len(x.shape) for x in transforms])
+        changes = np.where(dims[:-1] != dims[1:])[0] + 1
+        changes = [0,] + list(changes) + [len(transforms),]
+        F = lambda a, b: compose_transform_list(transforms[a:b], spacings[a:b])
+        transforms = [F(a, b) for a, b in zip(changes[:-1], changes[1:])]
+        spacings = [spacings[x-1] for x in changes[1:]]
+    return transforms, spacings
 
 
 def invert_displacement_vector_field(

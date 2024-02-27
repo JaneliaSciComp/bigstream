@@ -6,9 +6,6 @@ import yaml
 from flatten_json import flatten
 from os.path import exists
 from ClusterWrap.clusters import (local_cluster, remote_cluster)
-from bigstream.align import alignment_pipeline
-from bigstream.transform import apply_transform
-from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import distributed_apply_transform
 
 
@@ -148,9 +145,9 @@ def _run_apply_transform(args):
             fix_voxel_spacing, mov_voxel_spacing,
             output_blocks, # use block chunk size for distributing the work
             affine_transforms_list + [local_deform], # transform_list
+            cluster.client,
             overlap_factor=args.blocks_overlap_factor,
             aligned_data=output_dataarray,
-            cluster=cluster,
         )
         return output_dataarray
     else:

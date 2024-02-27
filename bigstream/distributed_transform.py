@@ -5,21 +5,19 @@ import bigstream.transform as bs_transform
 import bigstream.utility as ut
 
 from itertools import product
-from ClusterWrap.decorator import cluster
+
 from dask.distributed import as_completed
 
 
-@cluster
 def distributed_apply_transform(
     fix, mov,
     fix_spacing, mov_spacing,
     blocksize,
     transform_list,
+    cluster_client,
     overlap_factor=0.5,
     aligned_data=None,
     transform_spacing=None,
-    cluster=None,
-    cluster_kwargs={},
     **kwargs,
 ):
     """
@@ -62,17 +60,8 @@ def distributed_apply_transform(
         Spacing to be applied for each transform. If not set
         it uses the fixed spacing
 
-    cluster : ClusterWrap.cluster object (default: None)
-        Only set if you have constructed your own static cluster. The default behavior
-        is to construct a cluster for the duration of this function, then close it
-        when the function is finished.
-
-    cluster_kwargs : dict (default: {})
-        Arguments passed to ClusterWrap.cluster
-        If working with an LSF cluster, this will be
-        ClusterWrap.janelia_lsf_cluster. If on a workstation
-        this will be ClusterWrap.local_cluster.
-        This is how distribution parameters are specified.
+    cluster_client : Dask cluster client proxy
+        the cluster must exists before this method is invoked
 
     **kwargs : Any additional keyword arguments
         Passed to bigstream.transform.apply_transform
@@ -119,7 +108,7 @@ def distributed_apply_transform(
           'with partition size' ,blocksize_array,
           flush=True)
     # align all blocks
-    futures = cluster.client.map(
+    futures = cluster_client.map(
         _transform_single_block,
         blocks_coords,
         full_fix=fix,
@@ -265,15 +254,13 @@ def _transform_single_block(block_coords,
     return final_block_coords, aligned_block
 
 
-@cluster
 def distributed_apply_transform_to_coordinates(
     coordinates,
     transform_list,
     voxel_blocksize,
+    cluster_client,
     coords_spacing=None,
     coords_origin=None,
-    cluster=None,
-    cluster_kwargs={},
 ):
     """
     Move a set of coordinates through a list of transforms
@@ -309,17 +296,8 @@ def distributed_apply_transform_to_coordinates(
         the same logic as transform_spacing. Origins given for affine transforms
         are ignored.
 
-    cluster : ClusterWrap.cluster object (default: None)
-        Only set if you have constructed your own static cluster. The default behavior
-        is to construct a cluster for the duration of this function, then close it
-        when the function is finished.
-
-    cluster_kwargs : dict (default: {})
-        Arguments passed to ClusterWrap.cluster
-        If working with an LSF cluster, this will be
-        ClusterWrap.janelia_lsf_cluster. If on a workstation
-        this will be ClusterWrap.local_cluster.
-        This is how distribution parameters are specified.
+    cluster_client : Dask cluster client proxy
+        the cluster must exists before this method is invoked
 
     Returns
     -------
@@ -375,7 +353,7 @@ def distributed_apply_transform_to_coordinates(
                   flush=True)
     original_points_indexes = np.concatenate(blocks_points_indexes, axis=0)
     # transform all partitions and return
-    futures = cluster.client.map(
+    futures = cluster_client.map(
         _transform_coords,
         blocks_indexes,
         blocks_slices,
@@ -384,7 +362,7 @@ def distributed_apply_transform_to_coordinates(
         coords_spacing=coords_spacing,
         transform_list=transform_list,
     )
-    transform_results = np.concatenate(cluster.client.gather(futures), axis=0)
+    transform_results = np.concatenate(cluster_client.gather(futures), axis=0)
     # maintain the same order for the warped results
     results = np.empty_like(transform_results)
     results[original_points_indexes] = transform_results
@@ -452,20 +430,18 @@ def _transform_coords(block_index,
     return warped_coord_indexed_values
 
 
-@cluster
 def distributed_invert_displacement_vector_field(
     vectorfield_array,
     spacing,
     blocksize,
     inv_vectorfield_array,
+    cluster_client,
     overlap_factor=0.25,
     step=0.5,
     iterations=10,
     sqrt_order=2,
     sqrt_step=0.5,
     sqrt_iterations=5,
-    cluster=None,
-    cluster_kwargs={},
 ):
     """
     Numerically find the inverse of a larger-than-memory displacement vector field
@@ -502,17 +478,8 @@ def distributed_invert_displacement_vector_field(
     sqrt_iterations : scalar int (default: 5)
         The number of iterations to find the field composition square root.
 
-    cluster : ClusterWrap.cluster object (default: None)
-        Only set if you have constructed your own static cluster. The default behavior
-        is to construct a cluster for the duration of this function, then close it
-        when the function is finished.
-
-    cluster_kwargs : dict (default: {})
-        Arguments passed to ClusterWrap.cluster
-        If working with an LSF cluster, this will be
-        ClusterWrap.janelia_lsf_cluster. If on a workstation
-        this will be ClusterWrap.local_cluster.
-        This is how distribution parameters are specified.
+    cluster_client : Dask cluster client proxy
+        the cluster must exists before this method is invoked
 
     """
 
@@ -537,7 +504,7 @@ def distributed_invert_displacement_vector_field(
           'with partition size', blocksize_array,
           flush=True)
 
-    invert_res = cluster.client.map(
+    invert_res = cluster_client.map(
         _invert_block,
         blocks_coords,
         full_vectorfield=vectorfield_array,
@@ -550,7 +517,7 @@ def distributed_invert_displacement_vector_field(
         sqrt_iterations=sqrt_iterations,
     )
 
-    write_invert_res = cluster.client.map(
+    write_invert_res = cluster_client.map(
         _write_block,
         invert_res,
         output=inv_vectorfield_array

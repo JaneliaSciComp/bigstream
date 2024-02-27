@@ -838,12 +838,12 @@ def _align_local_data(fix_input,
         fix_spacing, mov_spacing,
         steps,
         local_transform_blocksize, # parallelize on the transform block chunk size
+        cluster.client,
         overlap_factor=blocks_overlap_factor,
         fix_mask=fix_mask,
         mov_mask=mov_mask,
         static_transform_list=global_transforms_list,
         output_transform=local_deform,
-        cluster=cluster,
     )
     if deform_path and local_inv_transform_name:
         inv_deform_path = output_dir + '/' + local_inv_transform_name
@@ -867,11 +867,11 @@ def _align_local_data(fix_input,
             fix_spacing,
             local_inv_transform_blocksize, # use blocksize for partitioning
             local_inv_deform,
+            cluster.client,
             overlap_factor=blocks_overlap_factor,
             iterations=inv_iterations,
             sqrt_order=inv_order,
             sqrt_iterations=inv_sqrt_iterations,
-            cluster=cluster,
         )
 
     if output_dir and local_aligned_name:
@@ -895,9 +895,9 @@ def _align_local_data(fix_input,
             fix_spacing, mov_spacing,
             output_blocksize, # use block chunk size for distributing work
             global_transforms_list + [local_deform], # transform_list
+            cluster.client,
             overlap_factor=blocks_overlap_factor,
             aligned_data=local_aligned,
-            cluster=cluster,
         )
     else:
         local_aligned = None

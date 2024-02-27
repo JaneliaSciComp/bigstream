@@ -4,13 +4,9 @@ import bigstream.n5_utils as n5_utils
 import yaml
 
 from flatten_json import flatten
-from os.path import exists
 from ClusterWrap.clusters import (local_cluster, remote_cluster)
-from bigstream.align import alignment_pipeline
-from bigstream.transform import apply_transform
-from bigstream.distributed_align import distributed_alignment_pipeline
-from bigstream.distributed_transform import (distributed_apply_transform,
-     distributed_apply_transform_to_coordinates)
+from bigstream.distributed_transform import (
+    distributed_apply_transform_to_coordinates)
 
 
 def _inttuple(arg):
@@ -161,8 +157,8 @@ def _run_apply_transform(args):
             zyx_coords,
             affine_transforms_list + [local_deform], # transform_list
             processing_blocksize,
+            cluster.client,
             coords_spacing=voxel_spacing,
-            cluster=cluster,
         )
         output_coords = np.empty_like(warped_zyx_coords)
         # flip z,y,x back to x,y,z before writing them to file

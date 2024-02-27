@@ -4,7 +4,6 @@ import time
 
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform_to_coordinates
-from ClusterWrap.decorator import cluster
 from dask.distributed import as_completed, MultiLock
 from itertools import product
 
@@ -304,7 +303,6 @@ def _complete_block(block_info):
     return block_index, block_slice_coords
 
 
-@cluster
 def distributed_alignment_pipeline(
     fix,
     mov,
@@ -312,15 +310,14 @@ def distributed_alignment_pipeline(
     mov_spacing,
     steps,
     blocksize,
+    cluster_client,
     overlap_factor=0.5,
     fix_mask=None,
     mov_mask=None,
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
-    cluster=None,
     cluster_batch_size=2,
-    cluster_kwargs={},
     **kwargs,
 ):
     """
@@ -366,6 +363,9 @@ def distributed_alignment_pipeline(
     blocksize : tuple
         Partition or block size for distributing the work
 
+    cluster_client : Dask cluster client proxy
+        the cluster must exists before this method is invoked
+
     overlap_factor : float in range [0, 1] (default: 0.5)
         Block overlap size as a percentage of block size
 
@@ -393,18 +393,6 @@ def distributed_alignment_pipeline(
     write_group_interval : float (default: 30.)
         The time each of the 27 mutually exclusive write block groups have
         each round to write finished data.
-
-    cluster : ClusterWrap.cluster object (default: None)
-        Only set if you have constructed your own static cluster. The default behavior
-        is to construct a cluster for the duration of this function, then close it
-        when the function is finished.
-
-    cluster_kwargs : dict (default: {})
-        Arguments passed to ClusterWrap.cluster
-        If working with an LSF cluster, this will be
-        ClusterWrap.janelia_lsf_cluster. If on a workstation
-        this will be ClusterWrap.local_cluster.
-        This is how distribution parameters are specified.
 
     kwargs : any additional arguments
         Arguments that will apply to all alignment steps. These are overruled by
@@ -455,7 +443,7 @@ def distributed_alignment_pipeline(
 
     print(f'{time.ctime(time.time())} Prepare params for',
           len(fix_blocks_infos), 'bocks', flush=True)
-    blocks = cluster.client.map(_prepare_compute_block_transform_params,
+    blocks = cluster_client.map(_prepare_compute_block_transform_params,
                                 fix_blocks_infos,
                                 full_fix=fix,
                                 full_mov=mov,
@@ -468,7 +456,7 @@ def distributed_alignment_pipeline(
 
     print(f'{time.ctime(time.time())} Submit compute transform for',
           len(blocks), 'bocks', flush=True)
-    block_transform_res = cluster.client.map(_compute_block_transform, 
+    block_transform_res = cluster_client.map(_compute_block_transform,
                                              blocks,
                                              fix_spacing=fix_spacing,
                                              mov_spacing=mov_spacing,

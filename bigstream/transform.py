@@ -414,6 +414,7 @@ def invert_displacement_vector_field(
     sqrt_order=2,
     sqrt_step=0.5,
     sqrt_iterations=5,
+    verbose=True,
 ):
     """
     Numerically find the inverse of a displacement vector field.
@@ -442,6 +443,9 @@ def invert_displacement_vector_field(
     sqrt_iterations : scalar int (default: 5)
         The number of iterations to find the field composition square root
 
+    verbose : bool (default: True)
+        Whether or not to print optimization feedback to standard output
+
     Returns
     -------
     inverse_field : nd-array
@@ -455,13 +459,19 @@ def invert_displacement_vector_field(
     # initialize inverse as negative root
     root = _displacement_field_composition_nth_square_root(
         field, spacing, sqrt_order, sqrt_step, sqrt_iterations,
+        verbose=verbose,
     )
     inv = - np.copy(root)
 
     # iterate to invert
+    if verbose: print('INVERTING ROOT')
     for i in range(iterations):
         residual = compose_transforms(root, inv, spacing, spacing)
         inv -= step * residual
+        if verbose:
+            residual_magnitude = np.linalg.norm(residual)
+            print(f'FITTING INVERSE  -  Iteration: {i} --> Residual: {residual_magnitude}')
+    if verbose: print('', flush=True)
 
     # square-compose inv order times
     for i in range(sqrt_order):
@@ -477,6 +487,7 @@ def _displacement_field_composition_nth_square_root(
     order,
     step,
     iterations,
+    verbose=True,
 ):
     """
     """
@@ -486,8 +497,9 @@ def _displacement_field_composition_nth_square_root(
 
     # iterate taking square roots
     for i in range(order):
+        if verbose: print(f'FINDING ROOT ORDER {i}')
         root = _displacement_field_composition_square_root(
-            root, spacing, step, iterations,
+            root, spacing, step, iterations, verbose=verbose,
         )
 
     # return result
@@ -499,6 +511,7 @@ def _displacement_field_composition_square_root(
     spacing,
     step,
     iterations,
+    verbose=True,
 ):
     """
     """
@@ -509,8 +522,10 @@ def _displacement_field_composition_square_root(
     # iterate
     for i in range(iterations):
         residual = (field - compose_transforms(root, root, spacing, spacing))
-        gradient = np.einsum('...ij,...j', displacement_field_jacobian(root, spacing), residual) + residual
-        root += step * gradient
+        root += step * residual
+        if verbose:
+            residual_magnitude = np.linalg.norm(residual)
+            print(f'FITTING ROOT  -  Iteration: {i} --> Residual: {residual_magnitude}')
 
     # return result
     return root

@@ -6,7 +6,8 @@ import yaml
 
 from flatten_json import flatten
 from os.path import exists
-from ClusterWrap.clusters import (local_cluster, remote_cluster)
+from dask.distributed import (Client, LocalCluster)
+from flatten_json import flatten
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform
 from bigstream.distributed_align import distributed_alignment_pipeline
@@ -683,15 +684,15 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
             mov_local_path, args.moving_local_subpath)
 
         if (args.dask_config):
+            import dask.config
             with open(args.dask_config) as f:
                 dask_config = flatten(yaml.safe_load(f))
-        else:
-            dask_config = {}
+                dask.config.set(dask_config)
 
         if args.dask_scheduler:
-            cluster = remote_cluster(args.dask_scheduler, config=dask_config)
+            cluster_client = Client(address=args.dask_scheduler)
         else:
-            cluster = local_cluster(config=dask_config)
+            cluster_client = Client(LocalCluster())
 
         blocks_overlap_factor = (0.5 if (args.blocks_overlap_factor <= 0 or
                                     args.blocks_overlap_factor >= 1)
@@ -772,7 +773,7 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
             args.inv_iterations,
             args.inv_order,
             args.inv_sqrt_iterations,
-            cluster,
+            cluster_client,
         )
     else:
         print('Skip local alignment because no local steps were specified.')
@@ -800,7 +801,7 @@ def _align_local_data(fix_input,
                       inv_iterations,
                       inv_order,
                       inv_sqrt_iterations,
-                      cluster):
+                      cluster_client):
     fix_path, fix_dataset, fix_dataarray = fix_input
     mov_path, mov_dataset, mov_dataarray = mov_input
 
@@ -838,7 +839,7 @@ def _align_local_data(fix_input,
         fix_spacing, mov_spacing,
         steps,
         local_transform_blocksize, # parallelize on the transform block chunk size
-        cluster.client,
+        cluster_client,
         overlap_factor=blocks_overlap_factor,
         fix_mask=fix_mask,
         mov_mask=mov_mask,
@@ -867,7 +868,7 @@ def _align_local_data(fix_input,
             fix_spacing,
             local_inv_transform_blocksize, # use blocksize for partitioning
             local_inv_deform,
-            cluster.client,
+            cluster_client,
             overlap_factor=blocks_overlap_factor,
             iterations=inv_iterations,
             sqrt_order=inv_order,
@@ -895,7 +896,7 @@ def _align_local_data(fix_input,
             fix_spacing, mov_spacing,
             output_blocksize, # use block chunk size for distributing work
             global_transforms_list + [local_deform], # transform_list
-            cluster.client,
+            cluster_client,
             overlap_factor=blocks_overlap_factor,
             aligned_data=local_aligned,
         )

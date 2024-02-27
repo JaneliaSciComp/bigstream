@@ -539,5 +539,3 @@ def displacement_field_jacobian_determinant(field, spacing):
 
     jacobian = displacement_field_jacobian(field, spacing)
     return np.linalg.det(jacobian)
-
-

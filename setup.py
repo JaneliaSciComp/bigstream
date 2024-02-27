@@ -27,5 +27,7 @@ setuptools.setup(
         'SimpleITK>=2.2.0',
         'tifffile>=2022.10.10',
         'morphsnakes>=2.0.0'
+        'pynrrd>=1.0.0',
+        'scikit-image>=0.20.0',
     ]
 )

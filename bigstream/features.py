@@ -1,16 +1,20 @@
 import numpy as np
+import time
+
 from fishspot.filter import white_tophat, apply_foreground_mask
-from fishspot.detect import detect_spots_log
-from scipy.stats.mstats import winsorize
 from scipy.spatial import cKDTree
+from scipy.stats.mstats import winsorize
+from skimage.feature import blob_dog, blob_log
 
 
 def blob_detection(
     image,
     min_blob_radius,
     max_blob_radius,
+    num_sigma=5,
     winsorize_limits=None,
     background_subtract=False,
+    blob_method='log',
     mask=None,
     **kwargs,
 ):
@@ -40,18 +44,60 @@ def blob_detection(
         detected blobs. The last column is the image intensity at the
         detected coordinate location.
     """
-
     processed_image = np.copy(image)
-    if winsorize_limits is not None:
-        processed_image = winsorize(processed_image, limits=winsorize_limits)
+    start_time = time.time()
+
+    # ensure iterable radii
+    if not isinstance(min_blob_radius, (tuple, list, np.ndarray)):
+        min_blob_radius = (min_blob_radius,)*image.ndim
+    if not isinstance(max_blob_radius, (tuple, list, np.ndarray)):
+        max_blob_radius = (max_blob_radius,)*image.ndim
+
+    blob_detect_method = None
+    if blob_method == 'dog':
+        # difference of gaussian
+        blob_detect_method = blob_dog
+    else:
+        # laplacian of gaussian
+        blob_detect_method = blob_log
+        kwargs['num_sigma'] = num_sigma
+
+    # set given arguments
+    kwargs['min_sigma'] = np.array(min_blob_radius) / np.sqrt(image.ndim)
+    kwargs['max_sigma'] = np.array(max_blob_radius) / np.sqrt(image.ndim)
+
+    # set additional defaults
+    if 'threshold' not in kwargs or kwargs['threshold'] is None:
+        kwargs['threshold'] = None
+        kwargs['threshold_rel'] = 0.1
+
+    print(f'{time.ctime(time.time())}',
+          f'Start spot detection ({min_blob_radius}, {max_blob_radius})',
+          kwargs,
+          flush=True)
+    if winsorize_limits:
+        processed_image = winsorize(processed_image, limits=winsorize_limits,
+                                    inplace=True)
+        done_winsorize_time = time.time()
+        print(f'{time.ctime(time.time())}',
+              f'Winsorization completed in {done_winsorize_time-start_time}s',
+              flush=True)
     if background_subtract:
+        done_tophat_time = time.time()
         processed_image = white_tophat(processed_image, max_blob_radius)
-    spots = detect_spots_log(
+        print(f'{time.ctime(time.time())}',
+              f'White top hat completed in {done_tophat_time-start_time}s',
+              flush=True)
+
+    spots = blob_detect_method(
         processed_image,
-        min_blob_radius,
-        max_blob_radius,
         **kwargs,
     ).astype(int)
+    done_spots_time = time.time()
+    print(f'{time.ctime(time.time())}',
+          f'Spot detection ({min_blob_radius}, {max_blob_radius})',
+          f'completed in {done_spots_time-start_time}s',
+          flush=True)
     if mask is not None: spots = apply_foreground_mask(spots, mask)
     intensities = image[ tuple(spots[:, iii] for iii in range(image.ndim)) ]
     return np.hstack((spots[:, :image.ndim], intensities[..., None]))
@@ -88,13 +134,19 @@ def get_contexts(image, coords, radius):
 def _stats(arr):
     """
     """
-
-    # compute mean and standard deviation along columns
-    arr = arr.astype(np.float64)
-    means = np.mean(arr, axis=1)
-    sqr_means = np.mean(np.square(arr), axis=1)
-    stddevs = np.sqrt( sqr_means - np.square(means) )
-    return means, stddevs
+    try:
+        # compute mean and standard deviation along columns
+        arr = arr.astype(np.float64)
+        means = np.mean(arr, axis=1)
+        sqr_means = np.mean(np.square(arr), axis=1)
+        stddevs = np.sqrt( sqr_means - np.square(means) )
+        return means, stddevs
+    except Exception as e:
+        print(f'{time.ctime(time.time())}',
+              'Stats exception for array of shape',
+              arr.shape, e,
+              flush=True)
+        raise e
 
 
 def pairwise_correlation(A, B):

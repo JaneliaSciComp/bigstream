@@ -6,6 +6,7 @@ from ClusterWrap.decorator import cluster
 import dask.array as da
 import zarr
 import bigstream.transform as bs_transform
+from dask.distributed import as_completed
 
 
 @cluster
@@ -117,6 +118,7 @@ def distributed_apply_transform(
     nblocks = np.ceil(np.array(fix_zarr.shape) / blocksize).astype(int)
 
     # store block coordinates in a dask array
+    # TODO: remove use of dask array
     block_coords = np.empty(nblocks, dtype=tuple)
     for (i, j, k) in np.ndindex(*nblocks):
         start = blocksize * (i, j, k) - overlap
@@ -352,10 +354,10 @@ def distributed_apply_transform_to_coordinates(
 
 @cluster
 def distributed_invert_displacement_vector_field(
-    field_zarr,
+    field,
     spacing,
     blocksize,
-    write_path,
+    write_path=None,
     step=0.5,
     iterations=10,
     sqrt_order=2,
@@ -363,13 +365,14 @@ def distributed_invert_displacement_vector_field(
     sqrt_iterations=5,
     cluster=None,
     cluster_kwargs={},
+    temporary_directory=None,
 ):
     """
     Numerically find the inverse of a larger-than-memory displacement vector field
 
     Parameters
     ----------
-    field_zarr : zarr array
+    field : array like, can be zarr or numpy array
         The displacement vector field to invert
 
     spacing : 1d-array
@@ -379,7 +382,9 @@ def distributed_invert_displacement_vector_field(
         The shape of blocks in voxels
 
     write_path : string (default: None)
-        Location on disk to write the resampled data as a zarr array
+        Location on disk to write the inverted displacement field
+        If None, then the inverted transform is returned in memory
+        to the client process (make sure you have enough RAM if you do this!)
 
     step : float (default: 0.5)
         The step size used for each iteration of the stationary point algorithm
@@ -409,34 +414,62 @@ def distributed_invert_displacement_vector_field(
         this will be ClusterWrap.local_cluster.
         This is how distribution parameters are specified.
 
+    temporary_directory : string (default: None)
+        Temporary files may be created during inversion. The temporary files will be
+        in their own folder within the `temporary_directory`. The default is the
+        current directory. Temporary files are removed if the function completes
+        successfully.
+
     Returns
     -------
     inverse_field : zarr array
         The numerical inverse of the given displacement vector field as a zarr array.
     """
 
+    # ensure input field is zarr
+    temporary_directory = tempfile.TemporaryDirectory(
+        prefix='.', dir=temporary_directory or os.getcwd(),
+    )
+    zarr_blocks = tuple(blocksize) + (field.shape[-1],)
+    field_zarr_path = temporary_directory.name + '/field.zarr'
+    field_zarr = ut.numpy_to_zarr(field, zarr_blocks, field_zarr_path)
+
+    # create output array
+    if write_path:
+        output_zarr = ut.create_zarr(
+            write_path,
+            field_zarr.shape,
+            zarr_blocks,
+            field_zarr.dtype,
+        )
+
     # get overlap and number of blocks
     blocksize = np.array(blocksize)
     overlap = np.round(blocksize * 0.25).astype(int)
     nblocks = np.ceil(np.array(field_zarr.shape[:-1]) / blocksize).astype(int)
 
-    # TODO: eliminate use of dask array
-    # store block coordinates in a dask array
-    block_coords = np.empty(nblocks, dtype=tuple)
+    # determine block coordinates
+    block_coords = []
+    block_coords_overlaps = []
     for (i, j, k) in np.ndindex(*nblocks):
-        start = blocksize * (i, j, k) - overlap
-        stop = start + blocksize + 2 * overlap
-        start = np.maximum(0, start)
+        start = blocksize * (i, j, k)
+        stop = start + blocksize
+        start_ol = start - overlap
+        stop_ol = stop + overlap
+
+        start_ol = np.maximum(0, start_ol)
         stop = np.minimum(field_zarr.shape[:-1], stop)
+        stop_ol = np.minimum(field_zarr.shape[:-1], stop_ol)
+
         coords = tuple(slice(x, y) for x, y in zip(start, stop))
-        block_coords[i, j, k] = coords
-    block_coords = da.from_array(block_coords, chunks=(1,)*block_coords.ndim)
+        coords_ol = tuple(slice(x, y) for x, y in zip(start_ol, stop_ol))
+        block_coords.append(coords)
+        block_coords_overlaps.append(coords_ol)
 
+    # the function to run on every block
+    def invert_block(slices, slices_overlaps):
 
-    def invert_block(slices):
-
-        slices = slices.item()
-        field = field_zarr[slices]
+        field = field_zarr[slices_overlaps]
         inverse = bs_transform.invert_displacement_vector_field(
             field,
             spacing,
@@ -452,7 +485,7 @@ def distributed_invert_displacement_vector_field(
 
             # left side
             slc = [slice(None),]*(inverse.ndim - 1)
-            if slices[axis].start != 0:
+            if slices_overlaps[axis].start != 0:
                 slc[axis] = slice(overlap[axis], None)
                 inverse = inverse[tuple(slc)]
 
@@ -462,24 +495,30 @@ def distributed_invert_displacement_vector_field(
                 slc[axis] = slice(None, blocksize[axis])
                 inverse = inverse[tuple(slc)]
 
-        # return result
-        return inverse
+        # handle output
+        if not write_path:
+            return inverse
+        else:
+            output_zarr[slices] = inverse
+            return True
 
-    # invert all blocks
-    inverse = da.map_blocks(
+    # submit all blocks
+    futures = cluster.client.map(
         invert_block,
         block_coords,
-        dtype=field_zarr.dtype,
-        new_axis=[3,],
-        chunks=tuple(blocksize) + (3,),
+        block_coords_overlaps,
     )
 
-    # crop to original size
-    inverse = inverse[tuple(slice(0, s) for s in field_zarr.shape[:-1])]
-
-    # compute result, write to zarr array
-    da.to_zarr(inverse, write_path)
-
-    # return reference to result
-    return zarr.open(write_path, 'r+')
+    # reconstruct output if necessary
+    if not write_path:
+        future_keys = [f.key for f in futures]
+        inverse = np.zeros_like(field)
+        for batch in as_completed(futures, with_results=True).batches():
+            for future, result in batch:
+                iii = future_keys.index(future.key)
+                inverse[block_coords[iii]] = result
+        return inverse
+    else:
+        all_written = np.all(cluster.client.gather(futures))
+        return output_zarr
 

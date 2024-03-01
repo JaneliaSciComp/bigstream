@@ -136,6 +136,9 @@ def distributed_apply_transform(
                       '(', aligned_block.shape, ')',
                       flush=True)
                 aligned_data[finished_block_coords] = aligned_block
+    print(f'{time.ctime(time.time())} Distributed deform transform applied successfully',
+            flush=True)
+    return aligned_data
     
 
 def _transform_single_block(block_coords,

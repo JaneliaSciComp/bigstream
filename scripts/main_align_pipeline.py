@@ -891,7 +891,7 @@ def _align_local_data(fix_input,
         print('Apply', deform_path, 'to',
               mov_path, mov_dataset, '->', aligned_path, local_aligned_subpath,
               flush=True)
-        distributed_apply_transform(
+        local_aligned = distributed_apply_transform(
             fix_dataarray, mov_dataarray,
             fix_spacing, mov_spacing,
             output_blocksize, # use block chunk size for distributing work

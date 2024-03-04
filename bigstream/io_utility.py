@@ -1,5 +1,9 @@
+import os
+import nrrd
 import numpy as np
 import zarr
+
+from skimage import io
 
 
 def create_dataset(n5_path, n5_subpath, shape, chunks, dtype,
@@ -28,7 +32,27 @@ def create_dataset(n5_path, n5_subpath, shape, chunks, dtype,
         raise e
 
 
-def open(n5_path, n5_subpath):
+def open(container_path, subpath):
+    path_comps = os.path.splitext(container_path)
+
+    container_ext = path_comps[1]
+
+    if container_ext == '.nrrd':
+        return nrrd.read(container_path)
+    elif container_ext == '.tif' or container_ext == '.tiff':
+        im = io.imread(container_path)
+        return im, {}
+    elif container_ext == '.npy':
+        im = np.load(container_path)
+        return im, {}
+    elif container_ext == '.n5' or os.path.exists(f'{container_path}/attributes.json'):
+        return _open_n5(container_path, subpath)
+    else:
+        print('Cannot handle', container_path, subpath)
+        return None, {}
+
+
+def _open_n5(n5_path, n5_subpath):
     try:
         n5_container = zarr.open(store=zarr.N5Store(n5_path), mode='r')
         a = n5_container[n5_subpath] if n5_subpath else n5_container

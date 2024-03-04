@@ -1,6 +1,6 @@
 import argparse
 import numpy as np
-import bigstream.n5_utils as n5_utils
+import bigstream.io_utility as io_utility
 
 from bigstream.transform import apply_transform
 
@@ -67,10 +67,10 @@ def _run_apply_transform(args):
     mov_subpath = args.moving_subpath if args.moving_subpath else fix_subpath
     output_subpath = args.output_subpath if args.output_subpath else mov_subpath
 
-    fix_data, fix_attrs = n5_utils.open(args.fixed, fix_subpath)
-    mov_data, mov_attrs = n5_utils.open(args.moving, mov_subpath)
-    fix_voxel_spacing = n5_utils.get_voxel_spacing(fix_attrs)
-    mov_voxel_spacing = n5_utils.get_voxel_spacing(mov_attrs)
+    fix_data, fix_attrs = io_utility.open(args.fixed, fix_subpath)
+    mov_data, mov_attrs = io_utility.open(args.moving, mov_subpath)
+    fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
+    mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
     print('Fixed volume attributes:',
           fix_data.shape, fix_voxel_spacing, flush=True)
@@ -97,7 +97,7 @@ def _run_apply_transform(args):
             transform_list=transforms_list
         )
 
-        output_dataset = n5_utils.create_dataset(
+        output_dataset = io_utility.create_dataset(
             args.output,
             output_subpath,
             fix_data.shape,

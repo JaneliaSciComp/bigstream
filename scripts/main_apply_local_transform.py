@@ -1,6 +1,6 @@
 import argparse
 import numpy as np
-import bigstream.n5_utils as n5_utils
+import bigstream.io_utility as io_utility
 import yaml
 
 from flatten_json import flatten
@@ -87,10 +87,10 @@ def _run_apply_transform(args):
     mov_subpath = args.moving_subpath if args.moving_subpath else fix_subpath
     output_subpath = args.output_subpath if args.output_subpath else mov_subpath
 
-    fix_data, fix_attrs = n5_utils.open(args.fixed, fix_subpath)
-    mov_data, mov_attrs = n5_utils.open(args.moving, mov_subpath)
-    fix_voxel_spacing = n5_utils.get_voxel_spacing(fix_attrs)
-    mov_voxel_spacing = n5_utils.get_voxel_spacing(mov_attrs)
+    fix_data, fix_attrs = io_utility.open(args.fixed, fix_subpath)
+    mov_data, mov_attrs = io_utility.open(args.moving, mov_subpath)
+    fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
+    mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
     print('Fixed volume attributes:',
           fix_data.shape, fix_voxel_spacing, flush=True)
@@ -109,8 +109,8 @@ def _run_apply_transform(args):
         cluster = local_cluster(config=dask_config)
 
     # read local deform, but ignore attributes as they are not needed
-    local_deform, _ = n5_utils.open(args.local_transform,
-                                    args.local_transform_subpath)
+    local_deform, _ = io_utility.open(args.local_transform,
+                                      args.local_transform_subpath)
 
     if (args.output_blocksize is not None and
         len(args.output_blocksize) > 0):
@@ -120,7 +120,7 @@ def _run_apply_transform(args):
         output_blocks = (args.output_chunk_size,) * fix_data.ndim
 
     if args.output:
-        output_dataarray = n5_utils.create_dataset(
+        output_dataarray = io_utility.create_dataset(
             args.output,
             output_subpath,
             fix_data.shape,

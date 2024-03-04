@@ -1,7 +1,6 @@
 import argparse
 import numpy as np
-import bigstream.io_utils as io_utils
-import bigstream.n5_utils as n5_utils
+import bigstream.io_utility as io_utility
 import yaml
 
 from flatten_json import flatten
@@ -555,16 +554,16 @@ def _run_global_alignment(args, steps, global_output_dir):
         print(f'Open fix vol {args.fixed_global} {args.fixed_global_subpath}',
               'for global registration',
               flush=True)
-        fix_arraydata, fix_attrs = n5_utils.open(
+        fix_arraydata, fix_attrs = io_utility.open(
             args.fixed_global, args.fixed_global_subpath)
         print(f'Open moving vol {args.moving_global} {args.moving_global_subpath}',
               'for global registration',
               flush=True)
-        mov_arraydata, mov_attrs = n5_utils.open(
+        mov_arraydata, mov_attrs = io_utility.open(
             args.moving_global, args.moving_global_subpath)
         # get voxel spacing for fix and moving volume
-        fix_voxel_spacing = n5_utils.get_voxel_spacing(fix_attrs)
-        mov_voxel_spacing = n5_utils.get_voxel_spacing(mov_attrs)
+        fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
+        mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
         print('Fixed lowres volume attributes:',
               fix_arraydata.shape, fix_voxel_spacing, flush=True)
@@ -572,14 +571,14 @@ def _run_global_alignment(args, steps, global_output_dir):
               mov_arraydata.shape, mov_voxel_spacing, flush=True)
 
         if args.fixed_global_mask:
-            fix_maskarray, _ = io_utils.open(
+            fix_maskarray, _ = io_utility.open(
                 args.fixed_global_mask, args.fixed_global_mask_subpath
             )
         else:
             fix_maskarray = None
 
         if args.moving_global_mask:
-            mov_maskarray, _ = io_utils.open(
+            mov_maskarray, _ = io_utility.open(
                 args.moving_global_mask, args.moving_global_mask_subpath
             )
         else:
@@ -619,7 +618,7 @@ def _run_global_alignment(args, steps, global_output_dir):
                 output_blocksize = (args.output_chunk_size,) * global_alignment.ndim
             print('Save global aligned volume to', global_aligned_file,
                   'with blocksize', output_blocksize)
-            n5_utils.create_dataset(
+            io_utility.create_dataset(
                 global_aligned_file,
                 args.moving_global_subpath, # same dataset as the moving image
                 global_alignment.shape,
@@ -675,12 +674,12 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
         print(f'Open fix vol {fix_local_path} {args.fixed_local_subpath}',
               'for local registration',
               flush=True)
-        fix_highres_ldata, fix_local_attrs = n5_utils.open(
+        fix_highres_ldata, fix_local_attrs = io_utility.open(
             fix_local_path, args.fixed_local_subpath)
         print(f'Open moving vol {mov_local_path} {args.moving_local_subpath}',
               'for local registration',
               flush=True)
-        mov_highres_ldata, mov_local_attrs = n5_utils.open(
+        mov_highres_ldata, mov_local_attrs = io_utility.open(
             mov_local_path, args.moving_local_subpath)
 
         if (args.dask_config):
@@ -722,14 +721,14 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
             local_inv_transform_blocksize = local_transform_blocksize
 
         if args.fixed_local_mask:
-            fix_maskarray, _ = io_utils.open(
+            fix_maskarray, _ = io_utility.open(
                 args.fixed_local_mask, args.fixed_local_mask_subpath
             )
         else:
             fix_maskarray = None
 
         if args.moving_local_mask:
-            mov_maskarray, _ = io_utils.open(
+            mov_maskarray, _ = io_utility.open(
                 args.moving_local_mask, args.moving_local_mask_subpath
             )
         else:
@@ -807,8 +806,8 @@ def _align_local_data(fix_input,
 
     print('Run local alignment:', steps, output_blocksize, flush=True)
 
-    fix_spacing = n5_utils.get_voxel_spacing(fix_attrs)
-    mov_spacing = n5_utils.get_voxel_spacing(mov_attrs)
+    fix_spacing = io_utility.get_voxel_spacing(fix_attrs)
+    mov_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
     print('Align moving data',
           mov_path, mov_dataset, mov_dataarray.shape, mov_spacing,
@@ -818,7 +817,7 @@ def _align_local_data(fix_input,
 
     if output_dir and local_transform_name:
         deform_path = output_dir + '/' + local_transform_name
-        local_deform = n5_utils.create_dataset(
+        local_deform = io_utility.create_dataset(
             deform_path,
             local_transform_subpath,
             fix_dataarray.shape + (fix_dataarray.ndim,),
@@ -848,7 +847,7 @@ def _align_local_data(fix_input,
     )
     if deform_path and local_inv_transform_name:
         inv_deform_path = output_dir + '/' + local_inv_transform_name
-        local_inv_deform = n5_utils.create_dataset(
+        local_inv_deform = io_utility.create_dataset(
             inv_deform_path,
             local_inv_transform_subpath,
             fix_dataarray.shape + (fix_dataarray.ndim,),
@@ -879,7 +878,7 @@ def _align_local_data(fix_input,
         # Apply local transformation only if 
         # highres aligned output name is set
         aligned_path = output_dir + '/' + local_aligned_name
-        local_aligned = n5_utils.create_dataset(
+        local_aligned = io_utility.create_dataset(
             aligned_path,
             local_aligned_subpath,
             fix_dataarray.shape,

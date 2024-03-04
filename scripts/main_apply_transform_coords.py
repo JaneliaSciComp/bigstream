@@ -1,6 +1,6 @@
 import argparse
 import numpy as np
-import bigstream.n5_utils as n5_utils
+import bigstream.io_utility as io_utility
 import yaml
 
 from flatten_json import flatten
@@ -98,9 +98,9 @@ def _get_voxel_spacing(pixel_resolution, downsampling_factors,
         return voxel_spacing[::-1] # zyx order
 
     if input_volume_path is not None:
-        _, volume_attrs = n5_utils.open(
+        _, volume_attrs = io_utility.open(
             input_volume_path, input_dataset)
-        return n5_utils.get_voxel_spacing(volume_attrs)
+        return io_utility.get_voxel_spacing(volume_attrs)
     else:
         print('Not enough information to get voxel spacing')
         return None
@@ -131,8 +131,8 @@ def _run_apply_transform(args):
         cluster = local_cluster(config=dask_config)
 
     # read local deform, but ignore attributes as they are not needed
-    local_deform, _ = n5_utils.open(args.local_transform,
-                                    args.local_transform_subpath)
+    local_deform, _ = io_utility.open(args.local_transform,
+                                      args.local_transform_subpath)
 
     if (args.processing_blocksize is not None and
         len(args.processing_blocksize) > 0):

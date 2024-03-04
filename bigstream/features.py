@@ -83,8 +83,8 @@ def blob_detection(
               f'Winsorization completed in {done_winsorize_time-start_time}s',
               flush=True)
     if background_subtract:
-        done_tophat_time = time.time()
         processed_image = white_tophat(processed_image, max_blob_radius)
+        done_tophat_time = time.time()
         print(f'{time.ctime(time.time())}',
               f'White top hat completed in {done_tophat_time-start_time}s',
               flush=True)

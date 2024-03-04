@@ -290,6 +290,9 @@ def feature_point_ransac_affine_align(
         to still be considered matching spots; in microns. This helps
         prevent false positive correspondences.
 
+    point_matches_threshold : scalar int (default: 50)
+        Minimum number of matching points for a valid alignment
+
     align_threshold : scalar float (default: 2.0)
         The maximum distance two points can be to be considered aligned
         by the affine transform; in microns.
@@ -309,8 +312,18 @@ def feature_point_ransac_affine_align(
     fix_spots : nd-array Nx3 (default: None)
         Skip the spot detection for the fixed image and provide your own spot coordinate
 
+    fix_spots_count_threshold : scalar int (default: 100)
+        Minimum number of fixed spots that need to exist for a valid alignment.
+        Note that many times in order to have a better alignment it is better to tweak
+        threshold and/or threshold_rel in fix_spot_detection_kwargs then to lower this value
+
     mov_spots : nd-array Nx3 (default: None)
         Skip the spot detection for the moving image and provide your own spot coordinate
+
+    mov_spots_count_threshold : scalar int (default: 100)
+        Minimum number of fixed spots that need to exist for a valid alignment.
+        Note that many times in order to have a better alignment it is better to tweak
+        threshold and/or threshold_rel in mov_spot_detection_kwargs then to lower this value
 
     fix_mask : binary nd-array (default: None)
         Spots from fixed image can only be found in the foreground of this mask

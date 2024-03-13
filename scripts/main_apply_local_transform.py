@@ -87,15 +87,19 @@ def _run_apply_transform(args):
     mov_subpath = args.moving_subpath if args.moving_subpath else fix_subpath
     output_subpath = args.output_subpath if args.output_subpath else mov_subpath
 
-    fix_data, fix_attrs = io_utility.open(args.fixed, fix_subpath)
-    mov_data, mov_attrs = io_utility.open(args.moving, mov_subpath)
+    fix_attrs = io_utility.read_attributes(args.fixed, fix_subpath)
+    mov_attrs = io_utility.read_attributes(args.moving, mov_subpath)
+
+    fix_shape, fix_ndim = io_utility.get_dimensions(fix_attrs)
+    mov_shape, mov_ndim = io_utility.get_dimensions(mov_attrs)
+
     fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
     mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
     print('Fixed volume attributes:',
-          fix_data.shape, fix_voxel_spacing, flush=True)
+          fix_shape, fix_voxel_spacing, flush=True)
     print('Moving volume attributes:',
-          mov_data.shape, mov_voxel_spacing, flush=True)
+          mov_shape, mov_voxel_spacing, flush=True)
 
     if (args.dask_config):
         with open(args.dask_config) as f:
@@ -123,9 +127,9 @@ def _run_apply_transform(args):
         output_dataarray = io_utility.create_dataset(
             args.output,
             output_subpath,
-            fix_data.shape,
+            fix_shape,
             output_blocks,
-            fix_data.dtype,
+            io_utility.get_dtype(fix_attrs),
             pixelResolution=mov_attrs.get('pixelResolution'),
             downsamplingFactors=mov_attrs.get('downsamplingFactors'),
         )
@@ -141,7 +145,9 @@ def _run_apply_transform(args):
         print('Apply', all_transforms,
               args.moving, mov_subpath, '->', args.output, output_subpath)
         distributed_apply_transform(
-            fix_data, mov_data,
+            args.fixed, fix_subpath,
+            args.moving, mov_subpath,
+            fix_shape, mov_shape,
             fix_voxel_spacing, mov_voxel_spacing,
             output_blocks, # use block chunk size for distributing the work
             affine_transforms_list + [local_deform], # transform_list

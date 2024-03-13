@@ -69,10 +69,14 @@ def apply_alignment_spacing(
     # get mask spacings
     fix_mask_spacing = None
     if fix_mask is not None:
-        fix_mask_spacing = ut.relative_spacing(fix_mask, fix, fix_spacing)
+        fix_mask_spacing = ut.relative_spacing(fix_mask.shape,
+                                               fix.shape,
+                                               fix_spacing)
     mov_mask_spacing = None
     if mov_mask is not None:
-        mov_mask_spacing = ut.relative_spacing(mov_mask, mov, mov_spacing)
+        mov_mask_spacing = ut.relative_spacing(mov_mask.shape,
+                                               mov.shape,
+                                               mov_spacing)
 
     # skip sample
     if alignment_spacing:
@@ -194,7 +198,9 @@ def format_static_transform_data(
     for transform in transforms:
         spacing = fix_spacing
         if len(transform.shape) not in [1, 2]:
-            spacing = ut.relative_spacing(transform, fix, fix_spacing)
+            spacing = ut.relative_spacing(transform.shape, 
+                                          fix.shape,
+                                          fix_spacing)
         spacings.append(spacing)
     spacings = tuple(spacings)
     origins = (fix_origin,)*len(transforms)

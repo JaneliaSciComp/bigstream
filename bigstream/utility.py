@@ -420,17 +420,17 @@ def bspline_to_displacement_field(
 # TODO: function that takes a numpy array and return transform type
 
 
-def relative_spacing(query, reference, reference_spacing):
+def relative_spacing(query_shape, reference_shape, reference_spacing):
     """
     Determine a voxel spacing from two images and one voxel spacing
 
     Parameters
     ----------
-    query : nd-array
-        The voxel grid whose spacing you'd like to know
+    query_shape : shape of a voxel grid
+        for which we want to find the spacing
 
-    reference : nd-array
-        A different voxel grid over the same domain whose spacing you do know
+    reference_shape : shape of a voxel grid
+        in the same domain as the query grid with known spacing
 
     reference_spacing : tuple
         The known voxel spacing
@@ -442,7 +442,7 @@ def relative_spacing(query, reference, reference_spacing):
     """
 
     ndim = len(reference_spacing)
-    ratio = np.array(reference.shape[:ndim]) / query.shape[:ndim]
+    ratio = np.array(reference_shape[:ndim]) / query_shape[:ndim]
     return reference_spacing * ratio
 
 

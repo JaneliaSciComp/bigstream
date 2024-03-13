@@ -257,7 +257,7 @@ def distributed_piecewise_alignment_pipeline(
                 )
                 transform = ut.change_affine_matrix_origin(transform, fix_block_coords_phys[0])
             else:
-                spacing = ut.relative_spacing(transform, fix_zarr, fix_spacing)
+                spacing = ut.relative_spacing(transform.shape, fix_zarr.shape, fix_spacing)
                 ratio = np.array(transform.shape[:-1]) / fix_zarr.shape
                 start = np.round( ratio * fix_block_coords[0] ).astype(int)
                 stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)

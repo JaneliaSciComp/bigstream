@@ -234,7 +234,9 @@ def _define_args(global_descriptor, local_descriptor):
     args_parser.add_argument('--dask-config', dest='dask_config',
                              type=str, default=None,
                              help='YAML file containing dask configuration')
-
+    args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
+                             type=int, default=0,
+                             help='Maximum number of parallel cluster tasks if >= 0')
     args_parser.add_argument('--debug', dest='debug',
                              action='store_true',
                              help='Save some intermediate images for debugging')
@@ -671,7 +673,7 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
         fix_local_path = args.fixed_local if args.fixed_local else args.fixed_global
         mov_local_path = args.moving_local if args.moving_local else args.moving_global
 
-        print(f'Open fix vol {fix_local_path} {args.fixed_local_subpath}',
+        print(f'Open fix vol {fix_local_path}:{args.fixed_local_subpath}',
               'for local registration',
               flush=True)
         fix_highres_ldata, fix_local_attrs = io_utility.open(
@@ -750,10 +752,10 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
             local_aligned_subpath = args.moving_local_subpath
 
         _align_local_data(
-            (fix_local_path, args.fixed_local_subpath, fix_highres_ldata),
-            (mov_local_path, args.moving_local_subpath, mov_highres_ldata),
-            fix_local_attrs,
-            mov_local_attrs,
+            (fix_local_path, args.fixed_local_subpath,
+             fix_local_attrs, fix_highres_ldata),
+            (mov_local_path, args.moving_local_subpath,
+             mov_local_attrs, mov_highres_ldata),
             steps,
             blocks_overlap_factor,
             fix_maskarray,
@@ -773,6 +775,7 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
             args.inv_order,
             args.inv_sqrt_iterations,
             cluster_client,
+            args.cluster_max_tasks,
         )
     else:
         print('Skip local alignment because no local steps were specified.')
@@ -780,8 +783,6 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
 
 def _align_local_data(fix_input,
                       mov_input,
-                      fix_attrs,
-                      mov_attrs,
                       steps,
                       blocks_overlap_factor,
                       fix_mask,
@@ -800,9 +801,21 @@ def _align_local_data(fix_input,
                       inv_iterations,
                       inv_order,
                       inv_sqrt_iterations,
-                      cluster_client):
-    fix_path, fix_dataset, fix_dataarray = fix_input
-    mov_path, mov_dataset, mov_dataarray = mov_input
+                      cluster_client,
+                      cluster_max_tasks):
+    fix_path, fix_dataset, fix_attrs, fix_data = fix_input
+    mov_path, mov_dataset, mov_attrs, mov_data = mov_input
+
+    fix_shape = fix_data.shape
+    fix_ndim = fix_data.ndim
+    mov_shape = mov_data.shape
+    mov_ndim = mov_data.ndim
+
+    # only check for ndim and not shape because as it happens 
+    # the test data has different shape for fix.highres and mov.highres
+    if mov_ndim != fix_ndim:
+        raise Exception(f'{mov_path}:{mov_dataset} expected to have ',
+                        f'the same ndim as {fix_path}:{fix_dataset}')
 
     print('Run local alignment:', steps, output_blocksize, flush=True)
 
@@ -810,9 +823,9 @@ def _align_local_data(fix_input,
     mov_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
     print('Align moving data',
-          mov_path, mov_dataset, mov_dataarray.shape, mov_spacing,
+          mov_path, mov_dataset, mov_shape, mov_spacing,
           'to reference',
-          fix_path, fix_dataset, fix_dataarray.shape, fix_spacing,
+          fix_path, fix_dataset, fix_shape, fix_spacing,
           flush=True)
 
     if output_dir and local_transform_name:
@@ -820,8 +833,8 @@ def _align_local_data(fix_input,
         local_deform = io_utility.create_dataset(
             deform_path,
             local_transform_subpath,
-            fix_dataarray.shape + (fix_dataarray.ndim,),
-            local_transform_blocksize + (fix_dataarray.ndim,),
+            fix_shape + (fix_ndim,),
+            local_transform_blocksize + (fix_ndim,),
             np.float32,
             # the transformation does not have to have spacing attributes
         )
@@ -833,8 +846,8 @@ def _align_local_data(fix_input,
           'to reference',
           fix_path, fix_dataset,
           flush=True)
-    distributed_alignment_pipeline(
-        fix_dataarray, mov_dataarray,
+    deform_ok = distributed_alignment_pipeline(
+        fix_data, mov_data,
         fix_spacing, mov_spacing,
         steps,
         local_transform_blocksize, # parallelize on the transform block chunk size
@@ -844,14 +857,15 @@ def _align_local_data(fix_input,
         mov_mask=mov_mask,
         static_transform_list=global_transforms_list,
         output_transform=local_deform,
+        max_tasks=cluster_max_tasks,
     )
-    if deform_path and local_inv_transform_name:
+    if deform_ok and deform_path and local_inv_transform_name:
         inv_deform_path = output_dir + '/' + local_inv_transform_name
         local_inv_deform = io_utility.create_dataset(
             inv_deform_path,
             local_inv_transform_subpath,
-            fix_dataarray.shape + (fix_dataarray.ndim,),
-            local_inv_transform_blocksize + (fix_dataarray.ndim,),
+            fix_shape + (fix_ndim,),
+            local_inv_transform_blocksize + (fix_ndim,),
             np.float32,
             # the transformation does not have to have spacing attributes
         )
@@ -874,24 +888,24 @@ def _align_local_data(fix_input,
             sqrt_iterations=inv_sqrt_iterations,
         )
 
-    if output_dir and local_aligned_name:
+    if deform_ok and output_dir and local_aligned_name:
         # Apply local transformation only if 
         # highres aligned output name is set
         aligned_path = output_dir + '/' + local_aligned_name
         local_aligned = io_utility.create_dataset(
             aligned_path,
             local_aligned_subpath,
-            fix_dataarray.shape,
+            fix_shape,
             output_blocksize,
-            fix_dataarray.dtype,
+            fix_data.dtype,
             pixelResolution=mov_attrs.get('pixelResolution'),
             downsamplingFactors=mov_attrs.get('downsamplingFactors'),
         )
         print('Apply', deform_path, 'to',
               mov_path, mov_dataset, '->', aligned_path, local_aligned_subpath,
               flush=True)
-        local_aligned = distributed_apply_transform(
-            fix_dataarray, mov_dataarray,
+        distributed_apply_transform(
+            fix_data, mov_data,
             fix_spacing, mov_spacing,
             output_blocksize, # use block chunk size for distributing work
             global_transforms_list + [local_deform], # transform_list

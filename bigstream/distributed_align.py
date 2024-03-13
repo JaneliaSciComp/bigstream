@@ -1,33 +1,32 @@
+import functools
 import numpy as np
 import bigstream.utility as ut
+import bigstream.io_utility as io_utility
+import sys
 import time
+import traceback
 
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform_to_coordinates
-from dask.distributed import as_completed, MultiLock
+from dask.distributed import as_completed, Semaphore
 from itertools import product
 
 
 def _prepare_compute_block_transform_params(block_info,
-                                            full_fix=None,
-                                            full_mov=None,
+                                            fix_shape=None,
+                                            mov_shape=None,
                                             fix_spacing=None,
                                             mov_spacing=None,
-                                            full_fix_mask=None,
-                                            full_mov_mask=None,
+                                            fix_fullmask_shape=None,
+                                            mov_fullmask_shape=None,
                                             static_transform_list=[]):
 
-    block_index, block_slice_coords = block_info
+    print(f'{time.ctime(time.time())} Prepare block coords',
+          block_info, flush=True)
 
-    print(f'{time.ctime(time.time())} Get blocks data',
-          block_index, block_slice_coords,
-          flush=True)
-
-    # read fix block
-    fix_block = full_fix[block_slice_coords]
-
+    block_index, fix_block_coords = block_info
     (fix_block_voxel_coords,
-     fix_block_phys_coords) = _get_block_corner_coords(block_slice_coords,
+     fix_block_phys_coords) = _get_block_corner_coords(fix_block_coords,
                                                        fix_spacing)
 
     # parse initial transforms
@@ -36,10 +35,9 @@ def _prepare_compute_block_transform_params(block_info,
     mov_block_phys_coords = np.copy(fix_block_phys_coords)
     # traverse current transformations in reverse order
     for transform in static_transform_list[::-1]:
-        mov_block_phys_coords, block_transform = _get_moving_block(
-            fix_block,
+        mov_block_phys_coords, block_transform = _get_moving_block_coords(
+            fix_shape,
             fix_spacing,
-            full_fix.shape,
             fix_block_voxel_coords[0],
             fix_block_voxel_coords[-1],
             fix_block_phys_coords,
@@ -55,44 +53,60 @@ def _prepare_compute_block_transform_params(block_info,
     mov_start = np.min(mov_block_coords, axis=0)
     mov_stop = np.max(mov_block_coords, axis=0)
     mov_start = np.maximum(0, mov_start)
-    mov_stop = np.minimum(np.array(full_mov.shape)-1, mov_stop)
+    mov_stop = np.minimum(np.array(mov_shape)-1, mov_stop)
     mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
-    mov_block = full_mov[mov_slices]
 
     # get moving image origin
     new_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
 
     # read masks
-    fix_block_mask, mov_block_mask = None, None
-    if full_fix_mask is not None:
-        ratio = np.array(full_fix_mask.shape) / full_fix.shape
+    fix_blockmask_coords, mov_blockmask_coords = None, None
+    if fix_fullmask_shape is not None:
+        ratio = np.array(fix_fullmask_shape) / fix_shape
         fix_mask_start = np.round(ratio * fix_block_voxel_coords[0]).astype(int)
         fix_mask_stop = np.round(
             ratio * (fix_block_voxel_coords[-1] + 1)).astype(int)
-        fix_mask_slices = tuple(slice(a, b)
-                                for a, b in zip(fix_mask_start, fix_mask_stop))
-        fix_block_mask = full_fix_mask[fix_mask_slices]
+        fix_blockmask_coords = tuple(slice(a, b)
+                                     for a, b in zip(fix_mask_start,
+                                                     fix_mask_stop))
 
-    if full_mov_mask is not None:
-        ratio = np.array(full_mov_mask.shape) / full_mov.shape
+    if mov_fullmask_shape is not None:
+        ratio = np.array(mov_fullmask_shape) / mov_shape
         mov_mask_start = np.round(ratio * mov_start).astype(int)
         mov_mask_stop = np.round(ratio * mov_stop).astype(int)
-        mov_mask_slices = tuple(slice(a, b)
-                                for a, b in zip(mov_mask_start, mov_mask_stop))
-        mov_block_mask = full_mov_mask[mov_mask_slices]
+        mov_blockmask_coords = tuple(slice(a, b)
+                                    for a, b in zip(mov_mask_start,
+                                                    mov_mask_stop))
 
     print(f'{time.ctime(time.time())} Return blocks data',
-          block_index, block_slice_coords,
+          block_index, fix_block_coords,
           flush=True)
 
     return (block_index,
-            block_slice_coords,
-            fix_block,
-            mov_block,
-            fix_block_mask,
-            mov_block_mask,
+            fix_block_coords,
+            mov_slices,
+            fix_blockmask_coords,
+            mov_blockmask_coords,
             new_origin,
             block_transform_list)
+
+
+def _read_image_block(extract_block_coords_method, blocks_info, image=None):
+    # blocks_info is a tuple containing the fields below 
+    # and the extract method knows to get the coords of the block to be read
+    #    block_index,
+    #    fix_block_coords,
+    #    mov_block,
+    #    fix_mask_block_coords,
+    #    mov_mask_block_coords,
+    #    origin,
+    #    block_transforms
+    block_coords = extract_block_coords_method(blocks_info)
+    print(f'{time.ctime(time.time())} '
+          f'Read block {blocks_info} -> {block_coords}',
+          f'using {extract_block_coords_method}', flush=True)
+
+    return io_utility.read_block(block_coords, image=image)
 
 
 # get image block corners both in voxel and physical units
@@ -107,15 +121,14 @@ def _get_block_corner_coords(block_slice_coords, voxel_spacing):
     return block_corners_voxel_units, block_corners_phys_units
 
 
-def _get_moving_block(fix_block,
-                      fix_spacing,
-                      full_fix_shape,
-                      min_fix_block_voxel_coords,
-                      max_fix_block_voxel_coords,
-                      fix_block_phys_coords,
-                      original_mov_block_phys_coords,
-                      original_transform):
-    if original_transform.shape == (4, 4):
+def _get_moving_block_coords(fix_shape,
+                             fix_spacing,
+                             fix_block_min_voxel_coords,
+                             fix_block_max_voxel_coords,
+                             fix_block_phys_coords,
+                             original_mov_block_phys_coords,
+                             original_transform):
+    if len(original_transform.shape) == 2:
         mov_block_phys_coords = apply_transform_to_coordinates(
             original_mov_block_phys_coords,
             [original_transform,],
@@ -123,13 +136,15 @@ def _get_moving_block(fix_block,
         block_transform = ut.change_affine_matrix_origin(
             original_transform, fix_block_phys_coords[0])
     else:
-        ratio = np.array(original_transform.shape[:-1]) / full_fix_shape
-        start = np.round(ratio * min_fix_block_voxel_coords).astype(int)
-        stop = np.round(ratio * (max_fix_block_voxel_coords + 1)).astype(int)
+        ratio = np.array(original_transform.shape[:-1]) / fix_shape
+        start = np.round(ratio * fix_block_min_voxel_coords).astype(int)
+        stop = np.round(ratio * (fix_block_max_voxel_coords + 1)).astype(int)
         transform_slices = tuple(slice(a, b)
                                  for a, b in zip(start, stop))
         block_transform = original_transform[transform_slices]
-        spacing = ut.relative_spacing(block_transform, fix_block, fix_spacing)
+        spacing = ut.relative_spacing(block_transform.shape,
+                                      fix_shape,
+                                      fix_spacing)
         origin = spacing * start
         mov_block_phys_coords = apply_transform_to_coordinates(
             original_mov_block_phys_coords, [block_transform,], spacing, origin
@@ -138,6 +153,10 @@ def _get_moving_block(fix_block,
 
 
 def _compute_block_transform(compute_transform_params,
+                             fix_block,
+                             mov_block,
+                             fix_mask_block,
+                             mov_mask_block,
                              fix_spacing=None,
                              mov_spacing=None,
                              block_size=None,
@@ -146,13 +165,14 @@ def _compute_block_transform(compute_transform_params,
                              align_steps=[]):
     start_time = time.time()
     (block_index,
-     block_slice_coords,
-     fix_block, mov_block,
-     fix_block_mask, mov_block_mask,
+     block_coords,
+     _, # mov_block_coords,
+     _, # fix_mask_block_coords,
+     _, # mov_mask_block_coords,
      new_origin_phys,
      static_block_transform_list) = compute_transform_params
     print(f'{time.ctime(start_time)} Compute block transform',
-          block_index,
+          f'{block_index} -> {block_coords}',
           flush=True)
 
     # run alignment pipeline
@@ -160,12 +180,13 @@ def _compute_block_transform(compute_transform_params,
         fix_block, mov_block,
         fix_spacing, mov_spacing,
         align_steps,
-        fix_mask=fix_block_mask, mov_mask=mov_block_mask,
+        fix_mask=fix_mask_block,
+        mov_mask=mov_mask_block,
         mov_origin=new_origin_phys,
         static_transform_list=static_block_transform_list,
     )
     # ensure transform is a vector field
-    if transform.shape == (4, 4):
+    if len(transform.shape) == 2:
         transform = ut.matrix_to_displacement_field(
             transform, fix_block.shape, spacing=fix_spacing,
         )
@@ -193,7 +214,7 @@ def _compute_block_transform(compute_transform_params,
           block_index,
           flush=True)
 
-    return block_index, block_slice_coords, transform
+    return block_index, block_coords, transform
 
 
 def _get_transform_weights(block_index,
@@ -255,7 +276,6 @@ def _get_transform_weights(block_index,
 
 
 def _write_block_transform(block_transform_results,
-                           with_lock=False,
                            output_transform=None):
     start_time = time.time()
     (block_index,
@@ -266,40 +286,17 @@ def _write_block_transform(block_transform_results,
           flush=True)
 
     if output_transform is not None:
-        lock = None
-        if with_lock:
-            lock_strs = []
-            for delta in product((-1, 0, 1,), repeat=3):
-                lock_strs.append(str(tuple(a + b 
-                                           for a, b in zip(block_index, delta))))
-            lock = MultiLock(lock_strs)
-            lock.acquire()
-            print(f'{time.ctime(start_time)} Lock acquired for writing block',
-                  block_index,
-                  flush=True)
-
         output_transform[block_slice_coords] += block_transform
         print(f'{time.ctime(time.time())} Updated vector field for block: ',
                 block_index,
                 'at', block_slice_coords,
                 flush=True)
 
-        if lock is not None:
-            lock.release()
-
     end_time = time.time()
     print(f'{time.ctime(end_time)} Finished writing vector field for block: ',
             block_index,
             flush=True)
 
-    return block_index, block_slice_coords
-
-
-def _complete_block(block_info):
-    (block_index, block_slice_coords) = block_info
-    print(f'{time.ctime(time.time())} Completed block',
-          block_index,
-          flush=True)
     return block_index, block_slice_coords
 
 
@@ -317,7 +314,7 @@ def distributed_alignment_pipeline(
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
-    cluster_batch_size=2,
+    max_tasks=0,
     **kwargs,
 ):
     """
@@ -410,8 +407,10 @@ def distributed_alignment_pipeline(
     # since they are already zarr arrays
 
     # determine fixed image slices for blocking
+    fix_shape = fix.shape
+    mov_shape = mov.shape
     block_partition_size = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix.shape) / block_partition_size).astype(int)
+    nblocks = np.ceil(np.array(fix_shape) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
     
     fix_blocks_infos = []
@@ -419,14 +418,14 @@ def distributed_alignment_pipeline(
         start = block_partition_size * (i, j, k) - overlaps
         stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
-        stop = np.minimum(fix.shape, stop)
+        stop = np.minimum(fix_shape, stop)
         block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
         if fix_mask is not None:
             start = block_partition_size * (i, j, k)
             stop = start + block_partition_size
-            ratio = np.array(fix_mask.shape) / fix.shape
+            ratio = np.array(fix_mask.shape) / fix_shape
             start = np.round(ratio * start).astype(int)
             stop = np.round(ratio * stop).astype(int)
             mask_crop = fix_mask[tuple(slice(a, b)
@@ -442,38 +441,122 @@ def distributed_alignment_pipeline(
     block_align_steps = [(a, {**kwargs, **b}) for a, b in steps]
 
     print(f'{time.ctime(time.time())} Prepare params for',
-          len(fix_blocks_infos), 'bocks', flush=True)
-    blocks = cluster_client.map(_prepare_compute_block_transform_params,
-                                fix_blocks_infos,
-                                full_fix=fix,
-                                full_mov=mov,
-                                fix_spacing=fix_spacing,
-                                mov_spacing=mov_spacing,
-                                full_fix_mask=fix_mask,
-                                full_mov_mask=mov_mask,
-                                static_transform_list=static_transform_list,
-                                batch_size=cluster_batch_size)
+          len(fix_blocks_infos), 
+          f'bocks for a {fix_shape} volume',
+          flush=True)
+
+    partial_prepare_blocks = functools.partial(
+        _prepare_compute_block_transform_params,
+        fix_shape=fix_shape,
+        mov_shape=mov_shape,
+        fix_spacing=fix_spacing,
+        mov_spacing=mov_spacing,
+        fix_fullmask_shape=(fix_mask.shape if
+                            fix_mask  is not None
+                            else None),
+        mov_fullmask_shape=(mov_mask.shape if
+                            mov_mask  is not None
+                            else None),
+        static_transform_list=static_transform_list,
+    )
+
+    if max_tasks > 0:
+        print(f'Limit segmentation tasks to {max_tasks}', flush=True)
+        tasks_semaphore = Semaphore(max_leases=max_tasks,
+                                    name='AlignLimiter')
+        prepare_blocks_method = _throttle(partial_prepare_blocks, tasks_semaphore)
+    else:
+        prepare_blocks_method = partial_prepare_blocks
+
+    blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
+
+    read_fix_image_blocks = functools.partial(
+        _read_image_block,
+        lambda bi: bi[1], # fix_block_coords
+        image=fix,
+    )
+    fix_blocks = cluster_client.map(
+        read_fix_image_blocks,
+        blocks,
+    )
+
+    read_mov_image_blocks = functools.partial(
+        _read_image_block,
+        lambda bi: bi[2], # mov_block_coords
+        image=mov,
+    )
+    mov_blocks = cluster_client.map(
+        read_mov_image_blocks,
+        blocks,
+    )
+
+    read_fix_mask_blocks = functools.partial(
+        _read_image_block,
+        lambda bi: bi[3], # fix_mask_block_coords
+        image=fix_mask,
+    )
+    fix_mask_blocks = cluster_client.map(
+        read_fix_mask_blocks,
+        blocks,
+    )
+
+    read_mov_mask_blocks = functools.partial(
+        _read_image_block,
+        lambda bi: bi[4], # mov_mask_block_coords
+        image=mov_mask,
+    )
+    mov_mask_blocks = cluster_client.map(
+        read_mov_mask_blocks,
+        blocks,
+    )
 
     print(f'{time.ctime(time.time())} Submit compute transform for',
           len(blocks), 'bocks', flush=True)
     block_transform_res = cluster_client.map(_compute_block_transform,
                                              blocks,
+                                             fix_blocks,
+                                             mov_blocks,
+                                             fix_mask_blocks,
+                                             mov_mask_blocks,
                                              fix_spacing=fix_spacing,
                                              mov_spacing=mov_spacing,
                                              block_size=block_partition_size,
                                              block_overlaps=overlaps,
                                              nblocks=nblocks,
-                                             align_steps=block_align_steps,
-                                             batch_size=cluster_batch_size)
+                                             align_steps=block_align_steps)
 
-    _collect_results(block_transform_res, output_transform=output_transform)
+    res = _collect_results(block_transform_res, output_transform=output_transform)
     print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
             flush=True)
-    return output_transform
+    return res
+
+
+def _throttle(m, sem):
+    def throttled_m(*args, **kwargs):
+        with sem:
+            print(f'{time.ctime(time.time())} Secured slot to run {m}',
+                  flush=True)
+            try:
+                return m(*args, **kwargs)
+            finally:
+                print(f'{time.ctime(time.time())} Release slot used for {m}',
+                      flush=True)
+
+    return throttled_m
 
 
 def _collect_results(futures_res, output_transform=None):
+    res = True
     for batch in as_completed(futures_res, with_results=True).batches():
-        for _, result in batch:
-            _write_block_transform(result,
-                                   output_transform=output_transform)
+        for f,result in batch:
+            if f.cancelled():
+                exc = f.exception()
+                print(f'{time.ctime(time.time())} Block exception:', exc,
+                    file=sys.stderr, flush=True)
+                tb = f.traceback()
+                traceback.print_tb(tb)
+                res = False
+            else:
+                _write_block_transform(result,
+                                    output_transform=output_transform)
+    return res

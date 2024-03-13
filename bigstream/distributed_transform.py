@@ -1,7 +1,9 @@
+import functools
 import numpy as np
 import time
 
 import bigstream.transform as bs_transform
+import bigstream.io_utility as io_utility
 import bigstream.utility as ut
 
 from itertools import product
@@ -75,8 +77,10 @@ def distributed_apply_transform(
     """
 
     # get overlap and number of blocks
+    fix_shape = fix.shape
+    mov_shape = mov.shape
     blocksize_array = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix.shape) / blocksize_array).astype(int)
+    nblocks = np.ceil(np.array(fix_shape) / blocksize_array).astype(int)
     overlaps = np.round(blocksize_array * overlap_factor).astype(int)
 
     # ensure there's a 1:1 correspondence between transform spacing 
@@ -100,29 +104,38 @@ def distributed_apply_transform(
         start = blocksize_array * (i, j, k) - overlaps
         stop = start + blocksize_array + 2 * overlaps
         start = np.maximum(0, start)
-        stop = np.minimum(fix.shape, stop)
+        stop = np.minimum(fix_shape, stop)
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
         blocks_coords.append(block_coords)
 
     print('Transform', len(blocks_coords), 'blocks',
           'with partition size' ,blocksize_array,
           flush=True)
-    # align all blocks
-    futures = cluster_client.map(
+
+    fix_block_reader = functools.partial(io_utility.read_block, image=fix)
+    mov_block_reader = functools.partial(io_utility.read_block, image=mov)
+    transform_block = functools.partial(
         _transform_single_block,
-        blocks_coords,
-        full_fix=fix,
-        full_mov=mov,
+        fix_block_reader,
+        mov_block_reader,
+        full_mov_shape=mov_shape,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
         blocksize=blocksize_array,
         blockoverlaps=overlaps,
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,
-        *kwargs
+        *kwargs,
     )
 
-    for batch in as_completed(futures, with_results=True).batches():
+    # apply transformation to all blocks
+    transform_block_res = cluster_client.map(
+        transform_block,
+        blocks_coords,
+    )
+
+    for batch in as_completed(transform_block_res,
+                              with_results=True).batches():
         for _, result in batch:
             finished_block_coords, aligned_block = result
 
@@ -138,12 +151,12 @@ def distributed_apply_transform(
                 aligned_data[finished_block_coords] = aligned_block
     print(f'{time.ctime(time.time())} Distributed deform transform applied successfully',
             flush=True)
-    return aligned_data
     
 
-def _transform_single_block(block_coords,
-                            full_fix=None,
-                            full_mov=None,
+def _transform_single_block(fix_block_read_method,
+                            mov_block_read_method,
+                            block_coords,
+                            full_mov_shape=None,
                             fix_spacing=None,
                             mov_spacing=None,
                             blocksize=None,
@@ -162,7 +175,7 @@ def _transform_single_block(block_coords,
           'Block size:', blocksize,
           'Overlap:', blockoverlaps,
           flush=True)
-    fix_block = full_fix[block_coords]
+    fix_block = fix_block_read_method(block_coords);
 
     # read relevant region of transforms
     applied_transform_list = []
@@ -196,19 +209,19 @@ def _transform_single_block(block_coords,
 
     mov_block_coords = np.round(mov_block_coords / mov_spacing).astype(int)
     mov_block_coords = np.maximum(0, mov_block_coords)
-    mov_block_coords = np.minimum(full_mov.shape, mov_block_coords)
+    mov_block_coords = np.minimum(full_mov_shape, mov_block_coords)
     print('Rounded transformed moving block coords:', block_coords, '->', mov_block_coords,
           flush=True)
 
     mov_start = np.min(mov_block_coords, axis=0)
     mov_stop = np.max(mov_block_coords, axis=0)
     mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
-    mov_block = full_mov[mov_slices]
     mov_origin = mov_spacing * [s.start for s in mov_slices]
     print('Moving block origin:', fix_origin, '->', mov_origin,
           flush=True)
     print('Moving block coords:', block_coords, '->', mov_slices,
           flush=True)
+    mov_block = mov_block_read_method(mov_slices)
 
     # resample
     aligned_block = bs_transform.apply_transform(

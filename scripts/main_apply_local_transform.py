@@ -5,7 +5,7 @@ import yaml
 
 from flatten_json import flatten
 from os.path import exists
-from ClusterWrap.clusters import (local_cluster, remote_cluster)
+from dask.distributed import (Client, LocalCluster)
 from bigstream.distributed_transform import distributed_apply_transform
 
 
@@ -87,30 +87,27 @@ def _run_apply_transform(args):
     mov_subpath = args.moving_subpath if args.moving_subpath else fix_subpath
     output_subpath = args.output_subpath if args.output_subpath else mov_subpath
 
-    fix_attrs = io_utility.read_attributes(args.fixed, fix_subpath)
-    mov_attrs = io_utility.read_attributes(args.moving, mov_subpath)
-
-    fix_shape, fix_ndim = io_utility.get_dimensions(fix_attrs)
-    mov_shape, mov_ndim = io_utility.get_dimensions(mov_attrs)
+    fix_data, fix_attrs = io_utility.open(args.fixed, fix_subpath)
+    mov_data, mov_attrs = io_utility.open(args.moving, mov_subpath)
 
     fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
     mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
     print('Fixed volume attributes:',
-          fix_shape, fix_voxel_spacing, flush=True)
+          fix_data.shape, fix_voxel_spacing, flush=True)
     print('Moving volume attributes:',
-          mov_shape, mov_voxel_spacing, flush=True)
+          mov_data.shape, mov_voxel_spacing, flush=True)
 
     if (args.dask_config):
+        import dask.config
         with open(args.dask_config) as f:
             dask_config = flatten(yaml.safe_load(f))
-    else:
-        dask_config = {}
+            dask.config.set(dask_config)
 
     if args.dask_scheduler:
-        cluster = remote_cluster(args.dask_scheduler, config=dask_config)
+        cluster_client = Client(address=args.dask_scheduler)
     else:
-        cluster = local_cluster(config=dask_config)
+        cluster_client = Client(LocalCluster())
 
     # read local deform, but ignore attributes as they are not needed
     local_deform, _ = io_utility.open(args.local_transform,
@@ -127,14 +124,16 @@ def _run_apply_transform(args):
         output_dataarray = io_utility.create_dataset(
             args.output,
             output_subpath,
-            fix_shape,
+            fix_data.shape,
             output_blocks,
-            io_utility.get_dtype(fix_attrs),
+            fix_data.dtype,
             pixelResolution=mov_attrs.get('pixelResolution'),
             downsamplingFactors=mov_attrs.get('downsamplingFactors'),
         )
 
         if args.affine_transformations:
+            print('Affine transformations arg:', args.affine_transformations,
+                  flush=True)
             affine_transforms_list = [np.loadtxt(tfile)
                                       for tfile in args.affine_transformations]
         else:
@@ -142,16 +141,15 @@ def _run_apply_transform(args):
 
         all_transforms = (args.affine_transformations +
                           [(args.local_transform, args.local_transform_subpath)])
-        print('Apply', all_transforms,
+        print('Apply', all_transforms, ' to ',
               args.moving, mov_subpath, '->', args.output, output_subpath)
+
         distributed_apply_transform(
-            args.fixed, fix_subpath,
-            args.moving, mov_subpath,
-            fix_shape, mov_shape,
+            fix_data, mov_data,
             fix_voxel_spacing, mov_voxel_spacing,
             output_blocks, # use block chunk size for distributing the work
             affine_transforms_list + [local_deform], # transform_list
-            cluster.client,
+            cluster_client,
             overlap_factor=args.blocks_overlap_factor,
             aligned_data=output_dataarray,
         )

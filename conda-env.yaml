@@ -15,5 +15,4 @@ dependencies:
     - opencv-python>=4.5.5.64
     - pynrrd
     - SimpleITK>=2.2.1
-    - tornado
     - git+https://github.com/GFleishman/ClusterWrap.git@ecdcb7a

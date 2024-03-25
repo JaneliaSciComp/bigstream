@@ -2,6 +2,8 @@ import sys
 import numpy as np
 import SimpleITK as sitk
 import bigstream.utility as ut
+import time
+
 from bigstream.configure_irm import configure_irm
 from bigstream.transform import apply_transform, compose_transform_list, compress_transform_list
 from bigstream.metrics import patch_mutual_information
@@ -67,10 +69,14 @@ def apply_alignment_spacing(
     # get mask spacings
     fix_mask_spacing = None
     if fix_mask is not None:
-        fix_mask_spacing = ut.relative_spacing(fix_mask, fix, fix_spacing)
+        fix_mask_spacing = ut.relative_spacing(fix_mask.shape,
+                                               fix.shape,
+                                               fix_spacing)
     mov_mask_spacing = None
     if mov_mask is not None:
-        mov_mask_spacing = ut.relative_spacing(mov_mask, mov, mov_spacing)
+        mov_mask_spacing = ut.relative_spacing(mov_mask.shape,
+                                               mov.shape,
+                                               mov_spacing)
 
     # skip sample
     if alignment_spacing:
@@ -192,7 +198,9 @@ def format_static_transform_data(
     for transform in transforms:
         spacing = fix_spacing
         if len(transform.shape) not in [1, 2]:
-            spacing = ut.relative_spacing(transform, fix, fix_spacing)
+            spacing = ut.relative_spacing(transform.shape, 
+                                          fix.shape,
+                                          fix_spacing)
         spacings.append(spacing)
     spacings = tuple(spacings)
     origins = (fix_origin,)*len(transforms)
@@ -210,12 +218,15 @@ def feature_point_ransac_affine_align(
     nspots=5000,
     match_threshold=0.7,
     max_spot_match_distance=None,
+    point_matches_threshold=50,
     align_threshold=2.0,
     diagonal_constraint=0.25,
     fix_spot_detection_kwargs={},
     mov_spot_detection_kwargs={},
     fix_spots=None,
+    fix_spots_count_threshold=100,
     mov_spots=None,
+    mov_spots_count_threshold=100,
     fix_mask=None,
     mov_mask=None,
     fix_origin=None,
@@ -285,6 +296,9 @@ def feature_point_ransac_affine_align(
         to still be considered matching spots; in microns. This helps
         prevent false positive correspondences.
 
+    point_matches_threshold : scalar int (default: 50)
+        Minimum number of matching points for a valid alignment
+
     align_threshold : scalar float (default: 2.0)
         The maximum distance two points can be to be considered aligned
         by the affine transform; in microns.
@@ -304,8 +318,18 @@ def feature_point_ransac_affine_align(
     fix_spots : nd-array Nx3 (default: None)
         Skip the spot detection for the fixed image and provide your own spot coordinate
 
+    fix_spots_count_threshold : scalar int (default: 100)
+        Minimum number of fixed spots that need to exist for a valid alignment.
+        Note that many times in order to have a better alignment it is better to tweak
+        threshold and/or threshold_rel in fix_spot_detection_kwargs then to lower this value
+
     mov_spots : nd-array Nx3 (default: None)
         Skip the spot detection for the moving image and provide your own spot coordinate
+
+    mov_spots_count_threshold : scalar int (default: 100)
+        Minimum number of fixed spots that need to exist for a valid alignment.
+        Note that many times in order to have a better alignment it is better to tweak
+        threshold and/or threshold_rel in mov_spot_detection_kwargs then to lower this value
 
     fix_mask : binary nd-array (default: None)
         Spots from fixed image can only be found in the foreground of this mask
@@ -378,55 +402,67 @@ def feature_point_ransac_affine_align(
     # get fix spots
     num_sigma = int(min(blob_sizes[1] - blob_sizes[0], num_sigma_max))
     assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
-    print('computing fixed spots', flush=True)
+    print(f'{time.ctime(time.time())} computing fixed spots', flush=True)
     if fix_spots is None:
         fix_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
-            'mask':fix_mask,
         }
         fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
+        print(f'{time.ctime(time.time())} fixed spots detection using',
+              fix_kwargs, flush=True)
         fix_spots = features.blob_detection(
             fix, blob_sizes[0], blob_sizes[1],
+            mask=fix_mask,
             **fix_kwargs,
         )
-    print(f'found {len(fix_spots)} fixed spots')
-    if len(fix_spots) < 100:
-        print('insufficient fixed spots found, returning default', flush=True)
+    print(f'{time.ctime(time.time())} found {len(fix_spots)} fixed spots',
+          flush=True)
+    if len(fix_spots) < fix_spots_count_threshold:
+        print(f'{time.ctime(time.time())}',
+              'insufficient fixed spots found, returning default',
+              flush=True)
         return default
 
     # get mov spots
-    print('computing moving spots', flush=True)
+    print(f'{time.ctime(time.time())} computing moving spots', flush=True)
     if mov_spots is None:
         mov_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
-            'mask':mov_mask,
         }
         mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
+        print(f'{time.ctime(time.time())} moving spots detection using',
+              mov_kwargs, flush=True)
         mov_spots = features.blob_detection(
             mov, blob_sizes[0], blob_sizes[1],
+            mask=mov_mask,
             **mov_kwargs,
         )
-    print(f'found {len(mov_spots)} moving spots')
-    if len(mov_spots) < 100:
-        print('insufficient moving spots found, returning default', flush=True)
+
+    print(f'{time.ctime(time.time())} found {len(mov_spots)} moving spots',
+          flush=True)
+    if len(mov_spots) < mov_spots_count_threshold:
+        print(f'{time.ctime(time.time())}',
+              'insufficient moving spots found, returning default',
+              flush=True)
         return default
 
     # sort
-    print('sorting spots', flush=True)
+    print(f'{time.ctime(time.time())} sorting spots', flush=True)
     sort_idx = np.argsort(fix_spots[:, 3])[::-1]
     fix_spots = fix_spots[sort_idx, :3][:nspots]
     sort_idx = np.argsort(mov_spots[:, 3])[::-1]
     mov_spots = mov_spots[sort_idx, :3][:nspots]
 
     # get contexts
-    print('extracting contexts', flush=True)
+    print(f'{time.ctime(time.time())} extracting contexts', flush=True)
     fix_spot_contexts = features.get_contexts(fix, fix_spots, cc_radius)
     mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
 
     # get pairwise correlations
-    print('computing pairwise correlations', flush=True)
+    print(f'{time.ctime(time.time())} computing pairwise correlations',
+          flush=True)
     correlations = features.pairwise_correlation(
         fix_spot_contexts, mov_spot_contexts,
     )
@@ -441,15 +477,21 @@ def feature_point_ransac_affine_align(
         correlations, match_threshold,
         max_distance=max_spot_match_distance,
     )
-    print(f'found {len(fix_spots)} matched spot pairs')
-    if len(fix_spots) < 50 or len(mov_spots) < 50:
-        print('insufficient spot matches found, returning default', flush=True)
+    print(f'{time.ctime(time.time())} {len(fix_spots)} - {len(mov_spots)} matched spots',
+          flush=True)
+    if len(fix_spots) < point_matches_threshold or len(mov_spots) < point_matches_threshold:
+        print(f'{time.ctime(time.time())}',
+              'insufficient point matches found, returning default',
+              flush=True)
         return default
 
     # align
-    # TODO: this is a hard 3D constraint, check opencv for a 2D version
-    print('aligning', flush=True)
-    r, Aff, inline = cv2.estimateAffine3D(
+    print(f'{time.ctime(time.time())}',
+          'Found enough spots to estimate the affine',
+          'fix:', len(fix_spots), ',',
+          'moving:', len(mov_spots),
+          flush=True)
+    _, Aff, _ = cv2.estimateAffine3D(
         fix_spots, mov_spots,
         ransacThreshold=align_threshold,
         confidence=0.999,
@@ -458,7 +500,9 @@ def feature_point_ransac_affine_align(
 
     # ensure affine is sensible
     if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
-        print("Degenerate affine produced, returning default", flush=True)
+        print(f'{time.ctime(time.time())}',
+              'Degenerate affine produced, returning default',
+              flush=True)
         return default
 
     # augment matrix and return
@@ -718,7 +762,7 @@ def random_affine_search(
         scores[iii] = score_affine(ut.physical_parameters_to_affine_matrix_3d(ppp, center))
         if print_running_improvements and scores[iii] < current_best_score:
                 current_best_score = scores[iii]
-                print(iii, ': ', current_best_score, '\n', ppp)
+                print(f'{time.ctime(time.time())}',iii, ': ', current_best_score, '\n', ppp)
     sys.stdout.flush()
 
     # return top results
@@ -892,19 +936,27 @@ def affine_align(
         irm.Execute(fix, mov)
         final_metric_value = irm.MetricEvaluate(fix, mov)
     except Exception as e:
-        print("Registration failed due to ITK exception:\n", e)
-        print("Returning default", flush=True)
+        print(f'{time.ctime(time.time())}',
+              'Registration failed due to ITK exception:\n', e,
+              flush=True)
+        print(f'{time.ctime(time.time())} Returning default',
+              flush=True)
         return default
 
     # if registration improved metric return result
     # otherwise return default
     if final_metric_value < initial_metric_value:
-        print("Registration succeeded", flush=True)
+        print(f'{time.ctime(time.time())} Registration succeeded',
+              flush=True)
         return ut.affine_transform_to_matrix(transform)
     else:
-        print("Optimization failed to improve metric")
-        print(f"METRIC VALUES initial: {initial_metric_value} final: {final_metric_value}")
-        print("Returning default", flush=True)
+        print(f'{time.ctime(time.time())} Optimization failed to improve metric',
+              flush=True)
+        print(f'{time.ctime(time.time())}',
+              f'METRIC VALUES initial: {initial_metric_value} final: {final_metric_value}',
+              flush=True)
+        print(f'{time.ctime(time.time())} Returning default',
+              flush=True)
         return default
 
 
@@ -1078,8 +1130,11 @@ def deformable_align(
         irm.Execute(fix, mov)
         final_metric_value = irm.MetricEvaluate(fix, mov)
     except Exception as e:
-        print("Registration failed due to ITK exception:\n", e)
-        print("Returning default", flush=True)
+        print(f'{time.ctime(time.time())}',
+              'Registration failed due to ITK exception:\n', e,
+              flush=True)
+        print(f'{time.ctime(time.time())} Returning default',
+              flush=True)
         return default
 
     # if registration improved metric return result
@@ -1091,12 +1146,17 @@ def deformable_align(
             spacing=initial_fix_spacing, origin=fix_origin,
             direction=np.eye(fix.GetDimension()),
         )
-        print("Registration succeeded", flush=True)
+        print(f'{time.ctime(time.time())} Registration succeeded',
+              flush=True)
         return params, field
     else:
-        print("Optimization failed to improve metric")
-        print(f"METRIC VALUES initial: {initial_metric_value} final: {final_metric_value}")
-        print("Returning default", flush=True)
+        print(f'{time.ctime(time.time())} Optimization failed to improve metric',
+              flush=True)
+        print(f'{time.ctime(time.time())}',
+              f'METRIC VALUES initial: {initial_metric_value} final: {final_metric_value}',
+              flush=True)
+        print(f'{time.ctime(time.time())} Returning default',
+              flush=True)
         return default
 
 
@@ -1212,6 +1272,8 @@ def alignment_pipeline(
     # loop over steps
     new_transforms = []
     for alignment, arguments in steps:
+        print(f'{time.ctime(time.time())} Run', alignment, arguments,
+              flush=True)
         arguments = {**kwargs, **arguments}
         arguments['static_transform_list'] = static_transform_list + new_transforms
         new_transforms.append(align[alignment](**arguments))

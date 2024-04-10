@@ -328,6 +328,8 @@ def distributed_apply_transform_to_coordinates(
                 spacing = transform_spacing
                 if isinstance(spacing, tuple): spacing = spacing[iii]
                 start = np.floor(a / spacing).astype(int)
+                last_index = np.array(transform.shape[:-1]) - 1
+                start = np.minimum(last_index, start)
                 stop = np.ceil(b / spacing).astype(int) + 1
                 crop = tuple(slice(x, y) for x, y in zip(start, stop))
                 transform = transform[crop]

@@ -425,7 +425,6 @@ def compose_delta_transforms(
     return new_transforms
         
 
-
 # TODO: VERY OLD - UPDATE TO TAKE ZARR INPUTS AND BE
 #    CONSISTENT WITH motion_correct FUNCTION
 def deformable_motion_correct(

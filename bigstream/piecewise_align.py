@@ -49,10 +49,7 @@ def distributed_piecewise_alignment_pipeline(
         the fixed image
 
     mov : ndarray
-        the moving image; `fix.shape` must equal `mov.shape`
-        I.e. typically piecewise affine alignment is done after
-        a global affine alignment wherein the moving image has
-        been resampled onto the fixed image voxel grid.
+        the moving image
 
     fix_spacing : 1d array
         The spacing in physical units (e.g. mm or um) between voxels

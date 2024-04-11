@@ -122,7 +122,8 @@ def _read_blocks_for_processing(blocks_info,
 
 def _read_block_as_da(block_coords, image):
     block = io_utility.read_block(block_coords, image=image)
-    return (da.from_array(block) if block is not None else None)
+    return (da.from_array(block, chunks=block.shape)
+            if block is not None else None)
 
 
 # get image block corners both in voxel and physical units
@@ -496,7 +497,7 @@ def distributed_alignment_pipeline(
         compute_block_transform = _compute_block_transform
 
     print(f'{time.ctime(time.time())} Submit compute transform for',
-          len(blocks), 'bocks', flush=True)
+          len(blocks), 'blocks', flush=True)
     block_transform_res = cluster_client.map(compute_block_transform,
                                              blocks_to_process,
                                              fix_spacing=fix_spacing,
@@ -505,6 +506,8 @@ def distributed_alignment_pipeline(
                                              block_overlaps=overlaps,
                                              nblocks=nblocks,
                                              align_steps=block_align_steps)
+    print(f'{time.ctime(time.time())} Collect compute transform results for',
+          len(block_transform_res), 'blocks', flush=True)
 
     res = _collect_results(block_transform_res, output_transform=output_transform)
     print(f'{time.ctime(time.time())} Distributed alignment completed successfully',

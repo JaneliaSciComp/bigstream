@@ -112,16 +112,20 @@ def _read_blocks_for_processing(blocks_info,
                                                     image=fix))
     mov_block = da.from_array(io_utility.read_block(blocks_info[2],
                                                     image=mov))
-    fix_mask_block = da.from_array(io_utility.read_block(blocks_info[3],
-                                                         image=fix_mask))
-    mov_mask_block = da.from_array(io_utility.read_block(blocks_info[4],
-                                                         image=mov_mask))
+    fix_mask_block = io_utility.read_block(blocks_info[3],
+                                           image=fix_mask)
+    da_fix_mask_block = (da.from_array(fix_mask_block)
+                         if fix_mask_block is not None else None)
+    mov_mask_block = io_utility.read_block(blocks_info[4],
+                                           image=mov_mask)
+    da_mov_mask_block = (da.from_array(mov_mask_block)
+                         if fix_mask_block is not None else None)
 
     return (blocks_info,
             fix_block,
             mov_block,
-            fix_mask_block,
-            mov_mask_block)
+            da_fix_mask_block,
+            da_mov_mask_block)
 
 
 # get image block corners both in voxel and physical units

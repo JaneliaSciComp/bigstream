@@ -122,8 +122,12 @@ def _read_blocks_for_processing(blocks_info,
 
 def _read_block_as_da(block_coords, image):
     block = io_utility.read_block(block_coords, image=image)
-    return (da.from_array(block, chunks=block.shape)
-            if block is not None else None)
+    if block is None:
+        return None
+    elif isinstance(block, da.Array):
+        return block
+    else:
+        return da.from_array(block, chunks=block.shape)
 
 
 # get image block corners both in voxel and physical units

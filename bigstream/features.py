@@ -96,14 +96,16 @@ def blob_detection(
     done_spots_time = time.time()
     print(f'{time.ctime(time.time())}',
           f'Spot detection ({min_blob_radius}, {max_blob_radius})',
-          f'completed in {done_spots_time-start_time}s',
+          f'found {len(spots)} spots in {done_spots_time-start_time}s',
           flush=True)
     if mask is not None: spots = apply_foreground_mask(spots, mask)
-    if image.vindex:
-        intensities = image.vindex[ tuple(spots[:, iii] for iii in range(image.ndim)) ].compute()
+
+    if hasattr(image, 'compute'):
+        # compute the image first
+        intensities = image.compute()[ tuple(spots[:, iii] for iii in range(image.ndim)) ]
     else:
         intensities = image[ tuple(spots[:, iii] for iii in range(image.ndim)) ]
-    print('!!!!! INTENSITIES: ', intensities, flush=True)
+
     return np.hstack((spots[:, :image.ndim], intensities[..., None]))
 
 

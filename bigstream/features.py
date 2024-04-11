@@ -99,7 +99,11 @@ def blob_detection(
           f'completed in {done_spots_time-start_time}s',
           flush=True)
     if mask is not None: spots = apply_foreground_mask(spots, mask)
-    intensities = image[ tuple(spots[:, iii] for iii in range(image.ndim)) ]
+    if image.vindex:
+        intensities = image.vindex[ tuple(spots[:, iii] for iii in range(image.ndim)) ].compute()
+    else:
+        intensities = image[ tuple(spots[:, iii] for iii in range(image.ndim)) ]
+    print('!!!!! INTENSITIES: ', intensities, flush=True)
     return np.hstack((spots[:, :image.ndim], intensities[..., None]))
 
 

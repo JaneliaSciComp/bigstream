@@ -1277,6 +1277,8 @@ def alignment_pipeline(
         arguments = {**kwargs, **arguments}
         arguments['static_transform_list'] = static_transform_list + new_transforms
         new_transforms.append(align[alignment](**arguments))
+        print(f'{time.ctime(time.time())} Completed', alignment, arguments,
+              flush=True)
 
     # return in the requested format
     if return_format == 'independent':

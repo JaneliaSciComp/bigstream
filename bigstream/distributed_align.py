@@ -181,21 +181,23 @@ def _compute_block_transform(compute_transform_params,
                              nblocks=None,
                              align_steps=[]):
     start_time = time.time()
-    (block_index,
-     block_coords,
-     _, # mov_block_coords,
-     _, # fix_mask_block_coords,
-     _, # mov_mask_block_coords,
-     new_origin_phys,
-     static_block_transform_list) = compute_transform_params[0]
+    ((block_index,
+      block_coords,
+      _, # mov_block_coords,
+      _, # fix_mask_block_coords,
+      _, # mov_mask_block_coords,
+      new_origin_phys,
+      static_block_transform_list,
+     ),
+     fix_block,
+     mov_block,
+     fix_mask_block,
+     mov_mask_block,
+     ) = compute_transform_params
     print(f'{time.ctime(start_time)} Compute block transform',
-          f'{block_index} -> {block_coords}',
+          f'{block_index}: {block_coords}',
+          static_block_transform_list,
           flush=True)
-    fix_block = compute_transform_params[1]
-    mov_block = compute_transform_params[2]
-    fix_mask_block = compute_transform_params[3]
-    mov_mask_block = compute_transform_params[4]
-
     # run alignment pipeline
     transform = alignment_pipeline(
         fix_block, mov_block,
@@ -211,6 +213,10 @@ def _compute_block_transform(compute_transform_params,
         transform = ut.matrix_to_displacement_field(
             transform, fix_block.shape, spacing=fix_spacing,
         )
+
+    print(f'{time.ctime(start_time)} Finished block alignment for ',
+          f'{block_index}:{block_coords} -> {transform.shape}',
+          flush=True)
 
     weights = _get_transform_weights(block_index, 
                                      block_size,
@@ -550,5 +556,5 @@ def _collect_results(futures_res, output_transform=None):
                 res = False
             else:
                 _write_block_transform(result,
-                                    output_transform=output_transform)
+                                       output_transform=output_transform)
     return res

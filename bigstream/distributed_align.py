@@ -108,24 +108,21 @@ def _read_blocks_for_processing(blocks_info,
     #    block_transforms
     print(f'{time.ctime(time.time())} '
           f'Read blocks: {blocks_info}', flush=True)
-    fix_block = da.from_array(io_utility.read_block(blocks_info[1],
-                                                    image=fix))
-    mov_block = da.from_array(io_utility.read_block(blocks_info[2],
-                                                    image=mov))
-    fix_mask_block = io_utility.read_block(blocks_info[3],
-                                           image=fix_mask)
-    da_fix_mask_block = (da.from_array(fix_mask_block)
-                         if fix_mask_block is not None else None)
-    mov_mask_block = io_utility.read_block(blocks_info[4],
-                                           image=mov_mask)
-    da_mov_mask_block = (da.from_array(mov_mask_block)
-                         if fix_mask_block is not None else None)
+    fix_block = _read_block_as_da(blocks_info[1], fix)
+    mov_block = _read_block_as_da(blocks_info[2], mov)
+    fix_mask_block = _read_block_as_da(blocks_info[3], fix_mask)
+    mov_mask_block = _read_block_as_da(blocks_info[4], mov_mask)
 
     return (blocks_info,
             fix_block,
             mov_block,
-            da_fix_mask_block,
-            da_mov_mask_block)
+            fix_mask_block,
+            mov_mask_block)
+
+
+def _read_block_as_da(block_coords, image):
+    block = io_utility.read_block(block_coords, image=image)
+    return (da.from_array(block) if block is not None else None)
 
 
 # get image block corners both in voxel and physical units

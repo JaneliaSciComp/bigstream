@@ -468,12 +468,6 @@ def distributed_alignment_pipeline(
         image=fix,
     )
 
-    if max_tasks > 0:
-        print(f'Limit fixed blocks read to {max_tasks}', flush=True)
-        tasks_semaphore = Semaphore(max_leases=max_tasks,
-                                    name='FixedBlocksReadLimiter')
-        read_fix_image_blocks = _throttle(read_fix_image_blocks, tasks_semaphore)
-
     fix_blocks = cluster_client.map(
         read_fix_image_blocks,
         blocks,
@@ -484,12 +478,6 @@ def distributed_alignment_pipeline(
         lambda bi: bi[2], # mov_block_coords
         image=mov,
     )
-
-    if max_tasks > 0:
-        print(f'Limit moving blocks read to {max_tasks}', flush=True)
-        tasks_semaphore = Semaphore(max_leases=max_tasks,
-                                    name='MovingBlocksReadLimiter')
-        read_mov_image_blocks = _throttle(read_mov_image_blocks, tasks_semaphore)
 
     mov_blocks = cluster_client.map(
         read_mov_image_blocks,

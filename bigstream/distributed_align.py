@@ -1,3 +1,4 @@
+import dask.array as da
 import functools
 import numpy as np
 import bigstream.utility as ut
@@ -91,22 +92,36 @@ def _prepare_compute_block_transform_params(block_info,
             block_transform_list)
 
 
-def _read_image_block(extract_block_coords_method, blocks_info, image=None):
+def _read_blocks_for_processing(blocks_info,
+                                fix=None,
+                                mov=None,
+                                fix_mask=None,
+                                mov_mask=None):
     # blocks_info is a tuple containing the fields below 
     # and the extract method knows to get the coords of the block to be read
     #    block_index,
     #    fix_block_coords,
-    #    mov_block,
+    #    mov_block_coords,
     #    fix_mask_block_coords,
     #    mov_mask_block_coords,
     #    origin,
     #    block_transforms
-    block_coords = extract_block_coords_method(blocks_info)
     print(f'{time.ctime(time.time())} '
-          f'Read block {blocks_info} -> {block_coords}',
-          f'using {extract_block_coords_method}', flush=True)
+          f'Read blocks: {blocks_info}', flush=True)
+    fix_block = da.from_array(io_utility.read_block(blocks_info[1],
+                                                    image=fix))
+    mov_block = da.from_array(io_utility.read_block(blocks_info[2],
+                                                    image=mov))
+    fix_mask_block = da.from_array(io_utility.read_block(blocks_info[3],
+                                                         image=fix_mask))
+    mov_mask_block = da.from_array(io_utility.read_block(blocks_info[4],
+                                                         image=mov_mask))
 
-    return io_utility.read_block(block_coords, image=image)
+    return (blocks_info,
+            fix_block,
+            mov_block,
+            fix_mask_block,
+            mov_mask_block)
 
 
 # get image block corners both in voxel and physical units
@@ -153,10 +168,6 @@ def _get_moving_block_coords(fix_shape,
 
 
 def _compute_block_transform(compute_transform_params,
-                             fix_block,
-                             mov_block,
-                             fix_mask_block,
-                             mov_mask_block,
                              fix_spacing=None,
                              mov_spacing=None,
                              block_size=None,
@@ -170,10 +181,14 @@ def _compute_block_transform(compute_transform_params,
      _, # fix_mask_block_coords,
      _, # mov_mask_block_coords,
      new_origin_phys,
-     static_block_transform_list) = compute_transform_params
+     static_block_transform_list) = compute_transform_params[0]
     print(f'{time.ctime(start_time)} Compute block transform',
           f'{block_index} -> {block_coords}',
           flush=True)
+    fix_block = compute_transform_params[1]
+    mov_block = compute_transform_params[2]
+    fix_mask_block = compute_transform_params[3]
+    mov_mask_block = compute_transform_params[4]
 
     # run alignment pipeline
     transform = alignment_pipeline(
@@ -462,46 +477,13 @@ def distributed_alignment_pipeline(
 
     blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
 
-    read_fix_image_blocks = functools.partial(
-        _read_image_block,
-        lambda bi: bi[1], # fix_block_coords
-        image=fix,
-    )
-
-    fix_blocks = cluster_client.map(
-        read_fix_image_blocks,
+    blocks_to_process = cluster_client.map(
+        _read_blocks_for_processing,
         blocks,
-    )
-
-    read_mov_image_blocks = functools.partial(
-        _read_image_block,
-        lambda bi: bi[2], # mov_block_coords
-        image=mov,
-    )
-
-    mov_blocks = cluster_client.map(
-        read_mov_image_blocks,
-        blocks,
-    )
-
-    read_fix_mask_blocks = functools.partial(
-        _read_image_block,
-        lambda bi: bi[3], # fix_mask_block_coords
-        image=fix_mask,
-    )
-    fix_mask_blocks = cluster_client.map(
-        read_fix_mask_blocks,
-        blocks,
-    )
-
-    read_mov_mask_blocks = functools.partial(
-        _read_image_block,
-        lambda bi: bi[4], # mov_mask_block_coords
-        image=mov_mask,
-    )
-    mov_mask_blocks = cluster_client.map(
-        read_mov_mask_blocks,
-        blocks,
+        fix=fix,
+        mov=mov,
+        fix_mask=fix_mask,
+        mov_mask=mov_mask
     )
 
     if max_tasks > 0:
@@ -515,11 +497,7 @@ def distributed_alignment_pipeline(
     print(f'{time.ctime(time.time())} Submit compute transform for',
           len(blocks), 'bocks', flush=True)
     block_transform_res = cluster_client.map(compute_block_transform,
-                                             blocks,
-                                             fix_blocks,
-                                             mov_blocks,
-                                             fix_mask_blocks,
-                                             mov_mask_blocks,
+                                             blocks_to_process,
                                              fix_spacing=fix_spacing,
                                              mov_spacing=mov_spacing,
                                              block_size=block_partition_size,

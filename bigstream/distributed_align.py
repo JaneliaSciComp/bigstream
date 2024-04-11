@@ -479,13 +479,17 @@ def distributed_alignment_pipeline(
 
     blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
 
+    da_fix = da.from_array(fix)
+    da_mov = da.from_array(mov)
+    da_fix_mask = da.from_array(fix_mask) if fix_mask else None
+    da_mov_mask = da.from_array(mov_mask) if mov_mask else None
     blocks_to_process = cluster_client.map(
         _read_blocks_for_processing,
         blocks,
-        fix=fix,
-        mov=mov,
-        fix_mask=fix_mask,
-        mov_mask=mov_mask
+        fix=da_fix,
+        mov=da_mov,
+        fix_mask=da_fix_mask,
+        mov_mask=da_mov_mask,
     )
 
     if max_tasks > 0:

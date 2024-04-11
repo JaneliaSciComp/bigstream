@@ -445,7 +445,7 @@ def distributed_alignment_pipeline(
           f'bocks for a {fix_shape} volume',
           flush=True)
 
-    partial_prepare_blocks = functools.partial(
+    prepare_blocks_method = functools.partial(
         _prepare_compute_block_transform_params,
         fix_shape=fix_shape,
         mov_shape=mov_shape,
@@ -460,14 +460,6 @@ def distributed_alignment_pipeline(
         static_transform_list=static_transform_list,
     )
 
-    if max_tasks > 0:
-        print(f'Limit segmentation tasks to {max_tasks}', flush=True)
-        tasks_semaphore = Semaphore(max_leases=max_tasks,
-                                    name='AlignLimiter')
-        prepare_blocks_method = _throttle(partial_prepare_blocks, tasks_semaphore)
-    else:
-        prepare_blocks_method = partial_prepare_blocks
-
     blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
 
     read_fix_image_blocks = functools.partial(
@@ -475,6 +467,13 @@ def distributed_alignment_pipeline(
         lambda bi: bi[1], # fix_block_coords
         image=fix,
     )
+
+    if max_tasks > 0:
+        print(f'Limit fixed blocks read to {max_tasks}', flush=True)
+        tasks_semaphore = Semaphore(max_leases=max_tasks,
+                                    name='FixedBlocksReadLimiter')
+        read_fix_image_blocks = _throttle(read_fix_image_blocks, tasks_semaphore)
+
     fix_blocks = cluster_client.map(
         read_fix_image_blocks,
         blocks,
@@ -485,6 +484,13 @@ def distributed_alignment_pipeline(
         lambda bi: bi[2], # mov_block_coords
         image=mov,
     )
+
+    if max_tasks > 0:
+        print(f'Limit moving blocks read to {max_tasks}', flush=True)
+        tasks_semaphore = Semaphore(max_leases=max_tasks,
+                                    name='MovingBlocksReadLimiter')
+        read_mov_image_blocks = _throttle(read_mov_image_blocks, tasks_semaphore)
+
     mov_blocks = cluster_client.map(
         read_mov_image_blocks,
         blocks,
@@ -510,9 +516,17 @@ def distributed_alignment_pipeline(
         blocks,
     )
 
+    if max_tasks > 0:
+        print(f'Limit computing block transformations to {max_tasks}', flush=True)
+        tasks_semaphore = Semaphore(max_leases=max_tasks,
+                                    name='ComputeBlocksTransformLimiter')
+        compute_block_transform = _throttle(_compute_block_transform, tasks_semaphore)
+    else:
+        compute_block_transform = _compute_block_transform
+
     print(f'{time.ctime(time.time())} Submit compute transform for',
           len(blocks), 'bocks', flush=True)
-    block_transform_res = cluster_client.map(_compute_block_transform,
+    block_transform_res = cluster_client.map(compute_block_transform,
                                              blocks,
                                              fix_blocks,
                                              mov_blocks,

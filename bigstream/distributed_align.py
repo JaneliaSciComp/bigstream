@@ -200,7 +200,8 @@ def _compute_block_transform(compute_transform_params,
           flush=True)
     # run alignment pipeline
     transform = alignment_pipeline(
-        fix_block, mov_block,
+        fix_block.compute(),
+        mov_block.compute(),
         fix_spacing, mov_spacing,
         align_steps,
         fix_mask=fix_mask_block,

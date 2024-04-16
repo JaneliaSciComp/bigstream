@@ -293,9 +293,9 @@ def distributed_apply_transform_to_coordinates(
 
     # ensure all deforms are zarr
     new_list = []
-    zarr_blocks = (128,)*3 + (3,)  # TODO: generalize
+    zarr_blocks = (128,)*3 + (3,)
     for iii, transform in enumerate(transform_list):
-        if transform.shape != (4, 4):
+        if not len(transform.shape) in [1, 2]:
             zarr_path = temporary_directory.name + f'/deform{iii}.zarr'
             transform = ut.numpy_to_zarr(transform, zarr_blocks, zarr_path)
         new_list.append(transform)
@@ -306,8 +306,8 @@ def distributed_apply_transform_to_coordinates(
     nblocks = np.max(coordinates, axis=0) - origin
     nblocks = np.ceil(nblocks / partition_size).astype(int)
     partitions, indices = [], []
-    for (i, j, k) in np.ndindex(*nblocks):
-        lower_bound = origin + partition_size * np.array((i, j, k))
+    for index in np.ndindex(*nblocks):
+        lower_bound = origin + partition_size * np.array(index)
         upper_bound = lower_bound + partition_size
         not_too_low = np.all(coordinates >= lower_bound, axis=1)
         not_too_high = np.all(coordinates < upper_bound, axis=1)
@@ -324,7 +324,7 @@ def distributed_apply_transform_to_coordinates(
         b = np.max(coordinates, axis=0)
         new_list = []
         for iii, transform in enumerate(transform_list):
-            if transform.shape != (4, 4):
+            if not len(transform.shape) in [1, 2]:
                 spacing = transform_spacing
                 if isinstance(spacing, tuple): spacing = spacing[iii]
                 start = np.floor(a / spacing).astype(int)

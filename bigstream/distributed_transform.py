@@ -7,6 +7,7 @@ import bigstream.io_utility as io_utility
 import bigstream.utility as ut
 
 from itertools import product
+from bigstream.distributed_utils import throttle_method_invocations
 
 from dask.distributed import as_completed
 
@@ -20,6 +21,7 @@ def distributed_apply_transform(
     overlap_factor=0.5,
     aligned_data=None,
     transform_spacing=None,
+    max_tasks=0,
     **kwargs,
 ):
     """
@@ -114,18 +116,21 @@ def distributed_apply_transform(
 
     fix_block_reader = functools.partial(io_utility.read_block, image=fix)
     mov_block_reader = functools.partial(io_utility.read_block, image=mov)
-    transform_block = functools.partial(
-        _transform_single_block,
-        fix_block_reader,
-        mov_block_reader,
-        full_mov_shape=mov_shape,
-        fix_spacing=fix_spacing,
-        mov_spacing=mov_spacing,
-        blocksize=blocksize_array,
-        blockoverlaps=overlaps,
-        transform_list=transform_list,
-        transform_spacing_list=transform_spacing_list,
-        *kwargs,
+    transform_block = throttle_method_invocations(
+        functools.partial(
+            _transform_single_block,
+            fix_block_reader,
+            mov_block_reader,
+            full_mov_shape=mov_shape,
+            fix_spacing=fix_spacing,
+            mov_spacing=mov_spacing,
+            blocksize=blocksize_array,
+            blockoverlaps=overlaps,
+            transform_list=transform_list,
+            transform_spacing_list=transform_spacing_list,
+            *kwargs,
+        ),
+        max_tasks
     )
 
     # apply transformation to all blocks
@@ -458,6 +463,7 @@ def distributed_invert_displacement_vector_field(
     sqrt_order=2,
     sqrt_step=0.5,
     sqrt_iterations=5,
+    max_tasks=0,
 ):
     """
     Numerically find the inverse of a larger-than-memory displacement vector field
@@ -520,8 +526,11 @@ def distributed_invert_displacement_vector_field(
           'with partition size', blocksize_array,
           flush=True)
 
+    invert_block =  throttle_method_invocations(
+        _invert_block, max_tasks
+    )
     invert_res = cluster_client.map(
-        _invert_block,
+        invert_block,
         blocks_coords,
         full_vectorfield=vectorfield_array,
         spacing=spacing,

@@ -886,6 +886,7 @@ def _align_local_data(fix_input,
             iterations=inv_iterations,
             sqrt_order=inv_order,
             sqrt_iterations=inv_sqrt_iterations,
+            max_tasks=cluster_max_tasks,
         )
 
     if deform_ok and output_dir and local_aligned_name:
@@ -912,6 +913,7 @@ def _align_local_data(fix_input,
             cluster_client,
             overlap_factor=blocks_overlap_factor,
             aligned_data=local_aligned,
+            max_tasks=cluster_max_tasks,
         )
     else:
         local_aligned = None

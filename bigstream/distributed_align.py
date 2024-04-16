@@ -9,7 +9,8 @@ import traceback
 
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform_to_coordinates
-from dask.distributed import as_completed, Semaphore
+from bigstream.distributed_utils import throttle_method_invocations
+from dask.distributed import as_completed
 from itertools import product
 
 
@@ -508,13 +509,8 @@ def distributed_alignment_pipeline(
         mov_mask=da_mov_mask,
     )
 
-    if max_tasks > 0:
-        print(f'Limit computing block transformations to {max_tasks}', flush=True)
-        tasks_semaphore = Semaphore(max_leases=max_tasks,
-                                    name='ComputeBlocksTransformLimiter')
-        compute_block_transform = _throttle(_compute_block_transform, tasks_semaphore)
-    else:
-        compute_block_transform = _compute_block_transform
+    compute_block_transform = throttle_method_invocations(
+        _compute_block_transform, max_tasks)
 
     print(f'{time.ctime(time.time())} Submit compute transform for',
           len(blocks), 'blocks', flush=True)
@@ -533,20 +529,6 @@ def distributed_alignment_pipeline(
     print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
             flush=True)
     return res
-
-
-def _throttle(m, sem):
-    def throttled_m(*args, **kwargs):
-        with sem:
-            print(f'{time.ctime(time.time())} Secured slot to run {m}',
-                  flush=True)
-            try:
-                return m(*args, **kwargs)
-            finally:
-                print(f'{time.ctime(time.time())} Release slot used for {m}',
-                      flush=True)
-
-    return throttled_m
 
 
 def _collect_results(futures_res, output_transform=None):

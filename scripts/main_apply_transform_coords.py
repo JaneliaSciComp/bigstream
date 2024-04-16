@@ -4,7 +4,7 @@ import bigstream.io_utility as io_utility
 import yaml
 
 from flatten_json import flatten
-from ClusterWrap.clusters import (local_cluster, remote_cluster)
+from dask.distributed import (Client, LocalCluster)
 from bigstream.distributed_transform import (
     distributed_apply_transform_to_coordinates)
 
@@ -120,15 +120,15 @@ def _run_apply_transform(args):
     zyx_coords[:, 3:] = input_coords[:, 3:]
 
     if (args.dask_config):
+        import dask.config
         with open(args.dask_config) as f:
             dask_config = flatten(yaml.safe_load(f))
-    else:
-        dask_config = {}
+            dask.config.set(dask_config)
 
     if args.dask_scheduler:
-        cluster = remote_cluster(args.dask_scheduler, config=dask_config)
+        cluster_client = Client(address=args.dask_scheduler)
     else:
-        cluster = local_cluster(config=dask_config)
+        cluster_client = Client(LocalCluster())
 
     # read local deform, but ignore attributes as they are not needed
     local_deform, _ = io_utility.open(args.local_transform,
@@ -157,7 +157,7 @@ def _run_apply_transform(args):
             zyx_coords,
             affine_transforms_list + [local_deform], # transform_list
             processing_blocksize,
-            cluster.client,
+            cluster_client,
             coords_spacing=voxel_spacing,
         )
         output_coords = np.empty_like(warped_zyx_coords)

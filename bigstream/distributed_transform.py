@@ -1,3 +1,4 @@
+import dask.array as da
 import functools
 import numpy as np
 import time
@@ -616,7 +617,7 @@ def _invert_block(block_coords,
           inverse_block_coords, inverse_block.shape,
           flush=True)
     # return result
-    return inverse_block_coords, inverse_block
+    return inverse_block_coords, da.from_array(inverse_block)
 
 
 def _write_block(block, output=None):

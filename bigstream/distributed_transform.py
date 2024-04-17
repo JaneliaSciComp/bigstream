@@ -512,6 +512,9 @@ def distributed_invert_displacement_vector_field(
     nblocks = np.ceil(np.array(vectorfield_array.shape[:-1]) / 
                       blocksize_array).astype(int)
 
+    print(f'{time.ctime(time.time())} Prepare inverting', len(blocks_coords),
+          'blocks with partition size', blocksize_array,
+          flush=True)
     # store block coordinates in a dask array
     blocks_coords = []
     for (i, j, k) in np.ndindex(*nblocks):
@@ -523,16 +526,8 @@ def distributed_invert_displacement_vector_field(
         blocks_coords.append(coords)
 
     # invert all blocks
-    print(f'{time.ctime(time.time())} Invert', len(blocks_coords), 'blocks',
-          'with partition size', blocksize_array,
-          flush=True)
-
-    invert_block =  throttle_method_invocations(
-        _invert_block, max_tasks
-    )
-    invert_res = cluster_client.map(
-        invert_block,
-        blocks_coords,
+    invert_block_method = functools.partial(
+        _invert_block,
         full_vectorfield=vectorfield_array,
         spacing=spacing,
         blocksize=blocksize_array,
@@ -542,7 +537,15 @@ def distributed_invert_displacement_vector_field(
         sqrt_step=sqrt_step,
         sqrt_iterations=sqrt_iterations,
     )
-
+    invert_block =  throttle_method_invocations(
+        invert_block_method, max_tasks
+    )
+    print(f'{time.ctime(time.time())} Submit Invert for',
+          len(blocks_coords), 'blocks',
+          flush=True)
+    invert_res = cluster_client.map(invert_block,
+        blocks_coords,
+    )
     write_invert_res = cluster_client.map(
         _write_block,
         invert_res,
@@ -551,9 +554,9 @@ def distributed_invert_displacement_vector_field(
 
     for batch in as_completed(write_invert_res, with_results=True).batches():
         for _, result in batch:
-            block_coords = result
-
-            print(f'{time.ctime(time.time())} Finished inverting block:',
+            block_coords, block_shape = result
+            print(f'{time.ctime(time.time())} ',
+                  f'Finished inverting {block_shape} block:',
                   block_coords,
                   flush=True)
 
@@ -630,4 +633,4 @@ def _write_block(block, output=None):
                 flush=True)
         output[block_coords] = block_data
 
-    return block_coords
+    return block_coords, block_data.shape

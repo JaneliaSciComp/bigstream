@@ -552,7 +552,7 @@ def distributed_invert_displacement_vector_field(
         output=inv_vectorfield_array
     )
     for f in as_completed(write_invert_res):
-        block_coords, _ = f.result()
+        block_coords = f.result()
         print(f'{time.ctime(time.time())} ',
                 f'Finished inverting block:',
                 block_coords,
@@ -631,4 +631,4 @@ def _write_block(block, output=None):
                 flush=True)
         output[block_coords] = block_data.compute()
 
-    return block_coords, block_data
+    return block_coords

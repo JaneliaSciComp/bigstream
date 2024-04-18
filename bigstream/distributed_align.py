@@ -331,7 +331,7 @@ def _write_block_transform(block_transform_results,
             block_index,
             flush=True)
 
-    return block_index, block_slice_coords, block_transform
+    return block_index, block_slice_coords
 
 
 def distributed_alignment_pipeline(
@@ -546,7 +546,7 @@ def _collect_results(futures_res):
             traceback.print_tb(tb)
             res = False
         else:
-            block_index, block_slice_coords, _ = f.result()
+            block_index, block_slice_coords = f.result()
             print(f'{time.ctime(time.time())} Completed block: ',
                     block_index,
                     'at', block_slice_coords,

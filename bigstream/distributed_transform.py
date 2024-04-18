@@ -512,8 +512,8 @@ def distributed_invert_displacement_vector_field(
     nblocks = np.ceil(np.array(vectorfield_array.shape[:-1]) / 
                       blocksize_array).astype(int)
 
-    print(f'{time.ctime(time.time())} Prepare inverting', len(blocks_coords),
-          'blocks with partition size', blocksize_array,
+    print(f'{time.ctime(time.time())}'
+          'Prepare inverting blocks with partition size', blocksize_array,
           flush=True)
     # store block coordinates in a dask array
     blocks_coords = []

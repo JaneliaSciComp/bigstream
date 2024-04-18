@@ -537,7 +537,7 @@ def distributed_alignment_pipeline(
 
 def _collect_results(futures_res):
     res = True
-    for f,result in as_completed(futures_res, witth_results=True):
+    for f,result in as_completed(futures_res, with_results=True):
         if f.cancelled():
             exc = f.exception()
             print(f'{time.ctime(time.time())} Block exception:', exc,

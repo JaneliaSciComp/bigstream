@@ -551,14 +551,12 @@ def distributed_invert_displacement_vector_field(
         invert_res,
         output=inv_vectorfield_array
     )
-
-    for batch in as_completed(write_invert_res, with_results=True).batches():
-        for _, result in batch:
-            block_coords, block_shape = result
-            print(f'{time.ctime(time.time())} ',
-                  f'Finished inverting {block_shape} block:',
-                  block_coords,
-                  flush=True)
+    for f in as_completed(write_invert_res):
+        block_coords, _ = f.result()
+        print(f'{time.ctime(time.time())} ',
+                f'Finished inverting block:',
+                block_coords,
+                flush=True)
 
 
 def _invert_block(block_coords,
@@ -633,4 +631,4 @@ def _write_block(block, output=None):
                 flush=True)
         output[block_coords] = block_data
 
-    return block_coords, block_data.shape
+    return block_coords, block_data

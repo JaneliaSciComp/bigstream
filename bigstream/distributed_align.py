@@ -248,7 +248,7 @@ def _compute_block_transform(compute_transform_params,
           block_index,
           flush=True)
 
-    return block_index, block_coords, transform
+    return block_index, block_coords, da.from_array(transform)
 
 
 def _get_transform_weights(block_index,
@@ -331,7 +331,7 @@ def _write_block_transform(block_transform_results,
             block_index,
             flush=True)
 
-    return block_index, block_slice_coords
+    return block_index, block_slice_coords, block_transform
 
 
 def distributed_alignment_pipeline(
@@ -525,24 +525,31 @@ def distributed_alignment_pipeline(
     print(f'{time.ctime(time.time())} Collect compute transform results for',
           len(block_transform_res), 'blocks', flush=True)
 
-    res = _collect_results(block_transform_res, output_transform=output_transform)
+    written_block_res = cluster_client.map(_write_block_transform,
+                                           block_transform_res,
+                                           output_transform=output_transform)
+
+    res = _collect_results(written_block_res)
     print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
             flush=True)
     return res
 
 
-def _collect_results(futures_res, output_transform=None):
+def _collect_results(futures_res):
     res = True
-    for batch in as_completed(futures_res, with_results=True).batches():
-        for f,result in batch:
-            if f.cancelled():
-                exc = f.exception()
-                print(f'{time.ctime(time.time())} Block exception:', exc,
-                    file=sys.stderr, flush=True)
-                tb = f.traceback()
-                traceback.print_tb(tb)
-                res = False
-            else:
-                _write_block_transform(result,
-                                       output_transform=output_transform)
+    for f in as_completed(futures_res):
+        if f.cancelled():
+            exc = f.exception()
+            print(f'{time.ctime(time.time())} Block exception:', exc,
+                file=sys.stderr, flush=True)
+            tb = f.traceback()
+            traceback.print_tb(tb)
+            res = False
+        else:
+            block_index, block_slice_coords, _ = f.result()
+            print(f'{time.ctime(time.time())} Completed block: ',
+                    block_index,
+                    'at', block_slice_coords,
+                    flush=True)
+
     return res

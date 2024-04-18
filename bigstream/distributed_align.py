@@ -320,7 +320,7 @@ def _write_block_transform(block_transform_results,
           flush=True)
 
     if output_transform is not None:
-        output_transform[block_slice_coords] += block_transform
+        output_transform[block_slice_coords] += block_transform.compute()
         print(f'{time.ctime(time.time())} Updated vector field for block: ',
                 block_index,
                 'at', block_slice_coords,

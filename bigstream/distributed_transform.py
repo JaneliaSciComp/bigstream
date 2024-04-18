@@ -629,6 +629,6 @@ def _write_block(block, output=None):
                 block_coords,
                 '(', block_data.shape, ')',
                 flush=True)
-        output[block_coords] = block_data
+        output[block_coords] = block_data.compute()
 
     return block_coords, block_data

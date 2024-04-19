@@ -209,7 +209,17 @@ def distributed_piecewise_alignment_pipeline(
             mask_crop = fix_mask[tuple(slice(a, b) for a, b in zip(start, stop))]
             if not np.sum(mask_crop) / np.prod(mask_crop.shape) >= foreground_percentage:
                 foreground = False
-
+                
+        if mov_mask is not None:
+            start = blocksize * (i, j, k)
+            stop = start + blocksize
+            ratio = np.array(mov_mask.shape) / mov.shape
+            start = np.round( ratio * start ).astype(int)
+            stop = np.round( ratio * stop ).astype(int)
+            mask_crop = mov_mask[tuple(slice(a, b) for a, b in zip(start, stop))]
+            if not np.sum(mask_crop) / np.prod(mask_crop.shape) >= foreground_percentage:
+                foreground = False
+            
         if foreground:
             indices.append((i, j, k,))
             slices.append(coords)

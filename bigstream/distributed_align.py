@@ -320,7 +320,7 @@ def _write_block_transform(block_transform_results,
           flush=True)
 
     if output_transform is not None:
-        output_transform[block_slice_coords] += block_transform.compute()
+        output_transform[block_slice_coords] += block_transform
         print(f'{time.ctime(time.time())} Updated vector field for block: ',
                 block_index,
                 'at', block_slice_coords,
@@ -525,19 +525,15 @@ def distributed_alignment_pipeline(
     print(f'{time.ctime(time.time())} Collect compute transform results for',
           len(block_transform_res), 'blocks', flush=True)
 
-    written_block_res = cluster_client.map(_write_block_transform,
-                                           block_transform_res,
-                                           output_transform=output_transform)
-
-    res = _collect_results(written_block_res)
+    res = _collect_results(block_transform_res, output=output_transform)
     print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
             flush=True)
     return res
 
 
-def _collect_results(futures_res):
+def _collect_results(futures, output=None):
     res = True
-    for f,result in as_completed(futures_res, with_results=True):
+    for f, result in as_completed(futures, with_results=True):
         if f.cancelled():
             exc = f.exception()
             print(f'{time.ctime(time.time())} Block exception:', exc,
@@ -546,10 +542,6 @@ def _collect_results(futures_res):
             traceback.print_tb(tb)
             res = False
         else:
-            block_index, block_slice_coords = result
-            print(f'{time.ctime(time.time())} Completed block: ',
-                    block_index,
-                    'at', block_slice_coords,
-                    flush=True)
+            _write_block_transform(result, output_transform=output)
 
     return res

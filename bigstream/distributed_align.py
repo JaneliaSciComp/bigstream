@@ -309,12 +309,12 @@ def _get_transform_weights(block_index,
     return weights[tuple(region)]
 
 
-def _write_block_transform(block_transform_results,
+def _write_block_transform(block_transform_future,
                            output_transform=None):
     start_time = time.time()
     (block_index,
      block_slice_coords,
-     block_transform) = block_transform_results
+     block_transform) = block_transform_future.result()
     print(f'{time.ctime(start_time)} Write block transform results',
           block_index,
           flush=True)
@@ -533,7 +533,7 @@ def distributed_alignment_pipeline(
 
 def _collect_results(futures, output=None):
     res = True
-    for f, result in as_completed(futures, with_results=True):
+    for f in as_completed(futures):
         if f.cancelled():
             exc = f.exception()
             print(f'{time.ctime(time.time())} Block exception:', exc,
@@ -542,6 +542,6 @@ def _collect_results(futures, output=None):
             traceback.print_tb(tb)
             res = False
         else:
-            _write_block_transform(result, output_transform=output)
+            _write_block_transform(f, output_transform=output)
 
     return res

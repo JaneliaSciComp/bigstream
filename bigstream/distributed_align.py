@@ -1,4 +1,3 @@
-import dask.array as da
 import functools
 import numpy as np
 import bigstream.utility as ut
@@ -109,10 +108,10 @@ def _read_blocks_for_processing(blocks_info,
     #    block_transforms
     print(f'{time.ctime(time.time())} '
           f'Read blocks: {blocks_info}', flush=True)
-    fix_block = _read_block_as_da(blocks_info[1], fix)
-    mov_block = _read_block_as_da(blocks_info[2], mov)
-    fix_mask_block = _read_block_as_da(blocks_info[3], fix_mask)
-    mov_mask_block = _read_block_as_da(blocks_info[4], mov_mask)
+    fix_block = _read_block(blocks_info[1], fix)
+    mov_block = _read_block(blocks_info[2], mov)
+    fix_mask_block = _read_block(blocks_info[3], fix_mask)
+    mov_mask_block = _read_block(blocks_info[4], mov_mask)
 
     return (blocks_info,
             fix_block,
@@ -121,14 +120,8 @@ def _read_blocks_for_processing(blocks_info,
             mov_mask_block)
 
 
-def _read_block_as_da(block_coords, image):
-    block = io_utility.read_block(block_coords, image=image)
-    if block is None:
-        return None
-    elif isinstance(block, da.Array):
-        return block
-    else:
-        return da.from_array(block, chunks=block.shape)
+def _read_block(block_coords, image):
+    return io_utility.read_block(block_coords, image=image)
 
 
 # get image block corners both in voxel and physical units
@@ -248,7 +241,7 @@ def _compute_block_transform(compute_transform_params,
           block_index,
           flush=True)
 
-    return block_index, block_coords, da.from_array(transform)
+    return block_index, block_coords, transform
 
 
 def _get_transform_weights(block_index,
@@ -320,7 +313,7 @@ def _write_block_transform(block_transform_future,
           flush=True)
 
     if output_transform is not None:
-        output_transform[block_slice_coords] += block_transform.compute()
+        output_transform[block_slice_coords] += block_transform
         print(f'{time.ctime(time.time())} Updated vector field for block: ',
                 block_index,
                 'at', block_slice_coords,
@@ -496,17 +489,14 @@ def distributed_alignment_pipeline(
 
     blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
 
-    da_fix = da.from_array(fix)
-    da_mov = da.from_array(mov)
-    da_fix_mask = da.from_array(fix_mask) if fix_mask else None
-    da_mov_mask = da.from_array(mov_mask) if mov_mask else None
+    print('!!!!! FIX:', fix, 'MOV:', mov)
     blocks_to_process = cluster_client.map(
         _read_blocks_for_processing,
         blocks,
-        fix=da_fix,
-        mov=da_mov,
-        fix_mask=da_fix_mask,
-        mov_mask=da_mov_mask,
+        fix=fix,
+        mov=mov,
+        fix_mask=fix_mask,
+        mov_mask=mov_mask,
     )
 
     compute_block_transform = throttle_method_invocations(

@@ -2,6 +2,8 @@ import dask.array as da
 import functools
 import numpy as np
 import time
+import traceback
+import sys
 
 import bigstream.transform as bs_transform
 import bigstream.io_utility as io_utility
@@ -546,17 +548,19 @@ def distributed_invert_displacement_vector_field(
     invert_res = cluster_client.map(invert_block,
         blocks_coords,
     )
-    write_invert_res = cluster_client.map(
-        _write_block,
-        invert_res,
-        output=inv_vectorfield_array
-    )
-    for f,result in as_completed(write_invert_res, with_results=True):
-        block_coords = result
-        print(f'{time.ctime(time.time())} ',
-                f'Finished inverting block:',
-                block_coords,
-                flush=True)
+    for f in as_completed(invert_res):
+        if f.cancelled():
+            exc = f.exception()
+            print(f'{time.ctime(time.time())} Invert block exception:', exc,
+                file=sys.stderr, flush=True)
+            tb = f.traceback()
+            traceback.print_tb(tb)
+        else:
+            block_coords = _write_block(f, output=inv_vectorfield_array)
+            print(f'{time.ctime(time.time())} ',
+                    f'Finished inverting and writing block:',
+                    block_coords,
+                    flush=True)
 
 
 def _invert_block(block_coords,
@@ -618,17 +622,17 @@ def _invert_block(block_coords,
           inverse_block_coords, inverse_block.shape,
           flush=True)
     # return result
-    return inverse_block_coords, da.from_array(inverse_block)
+    return inverse_block_coords, inverse_block
 
 
-def _write_block(block, output=None):
-    block_coords, block_data = block
+def _write_block(future, output=None):
+    block_coords, block_data = future.result()
 
     if output is not None:
         print(f'{time.ctime(time.time())} Write block:',
                 block_coords,
                 '(', block_data.shape, ')',
                 flush=True)
-        output[block_coords] = block_data.compute()
+        output[block_coords] = block_data
 
     return block_coords

@@ -196,11 +196,9 @@ def _compute_block_transform(compute_transform_params,
     # some pipeline algorithms use "fancy indexing" (list of tuples)
     # which is not supported yet by dask arrays
     # so in order to avoid the problem we materialize the fix and moving blocks
-    fix_block_array = fix_block.compute()
-    mov_block_array = mov_block.compute()
     transform = alignment_pipeline(
-        fix_block_array,
-        mov_block_array,
+        fix_block,
+        mov_block,
         fix_spacing, mov_spacing,
         align_steps,
         fix_mask=fix_mask_block,

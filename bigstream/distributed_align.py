@@ -487,7 +487,6 @@ def distributed_alignment_pipeline(
 
     blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
 
-    print('!!!!! FIX:', fix, 'MOV:', mov)
     blocks_to_process = cluster_client.map(
         _read_blocks_for_processing,
         blocks,

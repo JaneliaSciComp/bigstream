@@ -836,7 +836,9 @@ def _align_local_data(fix_input,
             fix_shape + (fix_ndim,),
             local_transform_blocksize + (fix_ndim,),
             np.float32,
-            # the transformation does not have to have spacing attributes
+            # use the voxel spacing from the fix image
+            pixelResolution=fix_attrs.get('pixelResolution'),
+            downsamplingFactors=fix_attrs.get('downsamplingFactors'),
         )
     else:
         deform_path = None
@@ -867,7 +869,9 @@ def _align_local_data(fix_input,
             fix_shape + (fix_ndim,),
             local_inv_transform_blocksize + (fix_ndim,),
             np.float32,
-            # the transformation does not have to have spacing attributes
+            # use the voxel spacing from the fix image
+            pixelResolution=fix_attrs.get('pixelResolution'),
+            downsamplingFactors=fix_attrs.get('downsamplingFactors'),
         )
         print('Calculate inverse transformation',
               inv_deform_path, 'from', deform_path,

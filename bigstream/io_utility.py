@@ -71,12 +71,15 @@ def open(container_path, subpath, block_coords=None):
 
 
 def get_voxel_spacing(attrs):
-    if (attrs.get('downsamplingFactors')):
+    if (attrs.get('downsamplingFactors') and attrs.get('pixelResolution')):
         voxel_spacing = (np.array(attrs['pixelResolution']) * 
                          np.array(attrs['downsamplingFactors']))
-    else:
+    elif attrs.get('pixelResolution'):
         voxel_spacing = np.array(attrs['pixelResolution']['dimensions'])
-    return voxel_spacing[::-1] # put in zyx order
+    else:
+        voxel_spacing = None
+    # put in zyx order if found
+    return voxel_spacing[::-1] if voxel_spacing is not None else None
 
 
 def get_dimensions(attrs):

@@ -63,6 +63,10 @@ def _define_args(global_descriptor, local_descriptor):
                              '--fixed-lowres-subpath',
                              dest='fixed_global_subpath',
                              help='Fixed global (low resolution) subpath')
+    args_parser.add_argument('--fixed-global-spacing',
+                             dest='fixed_global_spacing',
+                             type=_floattuple,
+                             help='Fixed global (low resolution) voxel spacing')
 
     args_parser.add_argument('--fixed-global-mask',
                              dest='fixed_global_mask',
@@ -78,6 +82,10 @@ def _define_args(global_descriptor, local_descriptor):
                              '--moving-lowres-subpath',
                              dest='moving_global_subpath',
                              help='Moving global (low resolution) subpath')
+    args_parser.add_argument('--moving-global-spacing',
+                             dest='moving_global_spacing',
+                             type=_floattuple,
+                             help='Moving global (low resolution) voxel spacing')
 
     args_parser.add_argument('--moving-global-mask',
                              dest='moving_global_mask',
@@ -92,6 +100,10 @@ def _define_args(global_descriptor, local_descriptor):
     args_parser.add_argument('--fixed-local-subpath',
                              dest='fixed_local_subpath',
                              help='Fixed local (high resolution) subpath')
+    args_parser.add_argument('--fixed-local-spacing',
+                             dest='fixed_local_spacing',
+                             type=_floattuple,
+                             help='Fixed local (high resolution) voxel spacing')
 
     args_parser.add_argument('--fixed-local-mask',
                              dest='fixed_local_mask',
@@ -106,6 +118,10 @@ def _define_args(global_descriptor, local_descriptor):
     args_parser.add_argument('--moving-local-subpath',
                              dest='moving_local_subpath',
                              help='Moving local (high resolution) subpath')
+    args_parser.add_argument('--moving-local-spacing',
+                             dest='moving_local_spacing',
+                             type=_floattuple,
+                             help='Moving local (high resolution) voxel spacing')
 
     args_parser.add_argument('--moving-local-mask',
                              dest='moving_local_mask',
@@ -564,8 +580,14 @@ def _run_global_alignment(args, steps, global_output_dir):
         mov_arraydata, mov_attrs = io_utility.open(
             args.moving_global, args.moving_global_subpath)
         # get voxel spacing for fix and moving volume
-        fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
-        mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
+        if args.fixed_global_spacing:
+            fix_voxel_spacing = args.fixed_global_spacing[::-1] # xyz -> zyx
+        else:
+            fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
+        if args.moving_global_spacing:
+            mov_voxel_spacing = args.moving_global_spacing[::-1] # xyz -> zyx
+        else:
+            mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
         print('Fixed lowres volume attributes:',
               fix_arraydata.shape, fix_voxel_spacing, flush=True)
@@ -678,11 +700,19 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
               flush=True)
         fix_highres_ldata, fix_local_attrs = io_utility.open(
             fix_local_path, args.fixed_local_subpath)
+        if args.fixed_local_spacing:
+            fix_local_spacing = args.fixed_local_spacing[::-1]
+        else:
+            fix_local_spacing = None
         print(f'Open moving vol {mov_local_path} {args.moving_local_subpath}',
               'for local registration',
               flush=True)
         mov_highres_ldata, mov_local_attrs = io_utility.open(
             mov_local_path, args.moving_local_subpath)
+        if args.moving_local_spacing:
+            mov_local_spacing = args.moving_local_spacing[::-1]
+        else:
+            mov_local_spacing = None
 
         if (args.dask_config):
             import dask.config
@@ -753,9 +783,9 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
 
         _align_local_data(
             (fix_local_path, args.fixed_local_subpath,
-             fix_local_attrs, fix_highres_ldata),
+             fix_local_spacing, fix_local_attrs, fix_highres_ldata),
             (mov_local_path, args.moving_local_subpath,
-             mov_local_attrs, mov_highres_ldata),
+             mov_local_spacing, mov_local_attrs, mov_highres_ldata),
             steps,
             blocks_overlap_factor,
             fix_maskarray,
@@ -803,8 +833,8 @@ def _align_local_data(fix_input,
                       inv_sqrt_iterations,
                       cluster_client,
                       cluster_max_tasks):
-    fix_path, fix_dataset, fix_attrs, fix_data = fix_input
-    mov_path, mov_dataset, mov_attrs, mov_data = mov_input
+    fix_path, fix_dataset, fix_spacing_arg, fix_attrs, fix_data = fix_input
+    mov_path, mov_dataset, mov_spacing_arg, mov_attrs, mov_data = mov_input
 
     fix_shape = fix_data.shape
     fix_ndim = fix_data.ndim
@@ -819,8 +849,14 @@ def _align_local_data(fix_input,
 
     print('Run local alignment:', steps, output_blocksize, flush=True)
 
-    fix_spacing = io_utility.get_voxel_spacing(fix_attrs)
-    mov_spacing = io_utility.get_voxel_spacing(mov_attrs)
+    if fix_spacing_arg:
+        fix_spacing = fix_spacing_arg
+    else:
+        fix_spacing = io_utility.get_voxel_spacing(fix_attrs)
+    if mov_spacing_arg:
+        mov_spacing = mov_spacing_arg
+    else:
+        mov_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
     print('Align moving data',
           mov_path, mov_dataset, mov_shape, mov_spacing,

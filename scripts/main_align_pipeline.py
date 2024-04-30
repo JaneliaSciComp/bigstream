@@ -597,11 +597,11 @@ def _run_global_alignment(args, steps, global_output_dir):
             args.moving_global, args.moving_global_subpath)
         # get voxel spacing for fix and moving volume
         if args.fixed_global_spacing:
-            fix_voxel_spacing = args.fixed_global_spacing[::-1] # xyz -> zyx
+            fix_voxel_spacing = np.array(args.fixed_global_spacing)[::-1] # xyz -> zyx
         else:
             fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
         if args.moving_global_spacing:
-            mov_voxel_spacing = args.moving_global_spacing[::-1] # xyz -> zyx
+            mov_voxel_spacing = np.array(args.moving_global_spacing)[::-1] # xyz -> zyx
         else:
             mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
@@ -717,18 +717,20 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
         fix_highres_ldata, fix_local_attrs = io_utility.open(
             fix_local_path, args.fixed_local_subpath)
         if args.fixed_local_spacing:
-            fix_local_spacing = args.fixed_local_spacing[::-1]
+             # xyz -> zyx
+            fix_local_voxel_spacing = np.array(args.fixed_local_spacing)[::-1]
         else:
-            fix_local_spacing = None
+            fix_local_voxel_spacing = None
         print(f'Open moving vol {mov_local_path} {args.moving_local_subpath}',
               'for local registration',
               flush=True)
         mov_highres_ldata, mov_local_attrs = io_utility.open(
             mov_local_path, args.moving_local_subpath)
         if args.moving_local_spacing:
-            mov_local_spacing = args.moving_local_spacing[::-1]
+             # xyz -> zyx
+            mov_local_voxel_spacing = np.array(args.moving_local_spacing)[::-1]
         else:
-            mov_local_spacing = None
+            mov_local_voxel_spacing = None
 
         if (args.dask_config):
             import dask.config
@@ -799,9 +801,9 @@ def _run_local_alignment(args, steps, global_transform, output_dir):
 
         _align_local_data(
             (fix_local_path, args.fixed_local_subpath,
-             fix_local_spacing, fix_local_attrs, fix_highres_ldata),
+             fix_local_voxel_spacing, fix_local_attrs, fix_highres_ldata),
             (mov_local_path, args.moving_local_subpath,
-             mov_local_spacing, mov_local_attrs, mov_highres_ldata),
+             mov_local_voxel_spacing, mov_local_attrs, mov_highres_ldata),
             steps,
             blocks_overlap_factor,
             fix_maskarray,

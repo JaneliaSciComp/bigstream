@@ -56,77 +56,93 @@ class _ArgsHelper:
 
 def _define_args(global_descriptor, local_descriptor):
     args_parser = argparse.ArgumentParser(description='Registration pipeline')
-    args_parser.add_argument('--fixed-global',
+    args_parser.add_argument('--global-fix',
+                             '--fixed-global',
                              dest='fixed_global',
                              help='Fixed global (low resolution) volume path')
-    args_parser.add_argument('--fixed-global-subpath',
+    args_parser.add_argument('--global-fix-subpath',
+                             '--fixed-global-subpath',
                              '--fixed-lowres-subpath',
                              dest='fixed_global_subpath',
                              help='Fixed global (low resolution) subpath')
-    args_parser.add_argument('--fixed-global-spacing',
+    args_parser.add_argument('--global-fix-spacing',
                              dest='fixed_global_spacing',
                              type=_floattuple,
                              help='Fixed global (low resolution) voxel spacing')
 
-    args_parser.add_argument('--fixed-global-mask',
+    args_parser.add_argument('--global-fix-mask',
+                             '--fixed-global-mask',
                              dest='fixed_global_mask',
                              help='Fixed global (low resolution) mask path')
-    args_parser.add_argument('--fixed-global-mask-subpath',
+    args_parser.add_argument('--global-fix-mask-subpath',
+                             '--fixed-global-mask-subpath',
                              dest='fixed_global_mask_subpath',
                              help='Fixed global (low resolution) mask subpath')
 
-    args_parser.add_argument('--moving-global',
+    args_parser.add_argument('--global-mov',
+                             '--moving-global',
                              dest='moving_global',
                              help='Moving global (low resolution) volume path')
-    args_parser.add_argument('--moving-global-subpath',
+    args_parser.add_argument('--global-mov-subpath',
+                             '--moving-global-subpath',
                              '--moving-lowres-subpath',
                              dest='moving_global_subpath',
                              help='Moving global (low resolution) subpath')
-    args_parser.add_argument('--moving-global-spacing',
+    args_parser.add_argument('--global-mov-spacing',
                              dest='moving_global_spacing',
                              type=_floattuple,
                              help='Moving global (low resolution) voxel spacing')
 
-    args_parser.add_argument('--moving-global-mask',
+    args_parser.add_argument('--global-mov-mask',
+                             '--moving-global-mask',
                              dest='moving_global_mask',
                              help='Moving global (low resolution) mask path')
-    args_parser.add_argument('--moving-global-mask-subpath',
+    args_parser.add_argument('--global-mov-mask-subpath',
+                             '--moving-global-mask-subpath',
                              dest='moving_global_mask_subpath',
                              help='Moving global (low resolution) mask subpath')
 
-    args_parser.add_argument('--fixed-local',
+    args_parser.add_argument('--local-fix',
+                             '--fixed-local',
                              dest='fixed_local',
                              help='Path to the fixed local (high resolution) volume')
-    args_parser.add_argument('--fixed-local-subpath',
+    args_parser.add_argument('--local-fix-subpath',
+                             '--fixed-local-subpath',
                              dest='fixed_local_subpath',
                              help='Fixed local (high resolution) subpath')
-    args_parser.add_argument('--fixed-local-spacing',
+    args_parser.add_argument('--local-fix-spacing',
                              dest='fixed_local_spacing',
                              type=_floattuple,
                              help='Fixed local (high resolution) voxel spacing')
 
-    args_parser.add_argument('--fixed-local-mask',
+    args_parser.add_argument('--local-fix-mask',
+                             '--fixed-local-mask',
                              dest='fixed_local_mask',
                              help='Fixed local (high resolution) mask path')
-    args_parser.add_argument('--fixed-local-mask-subpath',
+    args_parser.add_argument('--local-fix-mask-subpath',
+                             '--fixed-local-mask-subpath',
                              dest='fixed_local_mask_subpath',
                              help='Fixed local (high resolution) mask subpath')
 
-    args_parser.add_argument('--moving-local',
+    args_parser.add_argument('--local-mov',
+                             '--moving-local',
                              dest='moving_local',
                              help='Path to the moving local (high resolution) volume')
-    args_parser.add_argument('--moving-local-subpath',
+    args_parser.add_argument('--local-mov-subpath',
+                             '--moving-local-subpath',
                              dest='moving_local_subpath',
                              help='Moving local (high resolution) subpath')
-    args_parser.add_argument('--moving-local-spacing',
+    args_parser.add_argument('--local-mov-spacing',
                              dest='moving_local_spacing',
                              type=_floattuple,
                              help='Moving local (high resolution) voxel spacing')
 
-    args_parser.add_argument('--moving-local-mask',
+    args_parser.add_argument('--local-mov-mask',
+                             '--moving-local-mask',
                              dest='moving_local_mask',
                              help='Moving local (high resolution) mask path')
-    args_parser.add_argument('--moving-local-mask-subpath',
+    args_parser.add_argument('--local-mov-mask-subpath',
+                             '--moving-local-mask-subpath',
                              dest='moving_local_mask_subpath',
                              help='Moving local (high resolution) mask subpath')
 

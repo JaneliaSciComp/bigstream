@@ -1,13 +1,14 @@
+default_bigstream_config_str="""
 spot_detection: &spot_detection_args
-  blob_sizes: '6,20'
   blob_method: 'log'
   threshold:
   threshold_rel: 0.1
-  winsorize_limits: 0.01,0.01
+  winsorize_limits: [0.01, 0.01]
   background_subtract: false
 
 ransac: &ransac_args
   nspots: 2000
+  blob_sizes: [6, 20]
   num_sigma_max: 15
   cc_radius: 12
   match_threshold: 0.7
@@ -23,28 +24,25 @@ ransac: &ransac_args
     <<: *spot_detection_args
 
 affine: &affine_args
-  optimizer: LBFGS2
+  optimizer: RSGD # RSGD will require learning rate to be set 
   metric: MMI
   sampling: 'NONE'
   interpolator: '1'
-  shrink_factors:
-    - 1
-  smooth_sigmas:
-    - 0
+  # shrink_factors - list of int
+  shrink_factors: [1]
+  # smooth_sigmas - list of float
+  smooth_sigmas: [0]
+  alignment_spacing:
+  sampling_percentage:
   metric_args: {}
-  optimizer_args:
-    learningRate: 0.25
-    minStep: 0
-    numberOfIterations: 10
+  optimizer_args: {}
   sampling_percentage:
   exhaustive_step_sizes:
-  iterations: 1
 
 deform: &deform_args
   <<: *affine_args
   control_point_spacing: 50
-  control_point_levels: 1
-  alignment_spacing:
+  control_point_levels: [1]
 
 rigid:
   <<: *affine_args
@@ -55,22 +53,7 @@ random:
   use_patch_mutual_information: false
   print_running_improvements: false
 
-global_align:
-  - steps:
-    - ransac
-    - affine
-  - ransac:
-    <<: *ransac_args
-  - affine:
-    <<: *affine_args
-    iterations: 100
+global_align: {}
 
-local_align:
-  - steps:
-    - ransac
-    - deform
-  - ransac:
-    <<: *ransac_args
-  - deform:
-    <<: *deform_args
-    iterations: 10
+local_align: {}
+"""

@@ -9,6 +9,7 @@ dependencies:
   - scikit-image>=0.21.0
   - tifffile
   - pip
+  - pydantic=2.7.1
   - pip:
     - argparse
     - fishspot>=0.3.0

@@ -893,6 +893,7 @@ def affine_align(
     mov_mask_spacing = X[7]
 
     # set up registration object
+    print(f'Configure IRM args: {kwargs}', flush=True)
     irm = configure_irm(**kwargs)
     # set initial static transforms
     if static_transform_list:

@@ -1,6 +1,7 @@
 import argparse
 import numpy as np
 import bigstream.io_utility as io_utility
+import pydantic.v1.utils as pu
 import yaml
 
 from flatten_json import flatten
@@ -8,10 +9,11 @@ from os.path import exists
 from dask.distributed import (Client, LocalCluster)
 from flatten_json import flatten
 from bigstream.align import alignment_pipeline
-from bigstream.transform import apply_transform
+from bigstream.config import default_bigstream_config_str
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
     distributed_invert_displacement_vector_field)
+from bigstream.transform import apply_transform
 
 
 def _inttuple(arg):
@@ -54,188 +56,63 @@ class _ArgsHelper:
         return '{}_{}'.format(self._prefix, argname)
 
 
+class _RegistrationInputs:
+
+    def transform_path(self):
+        if self.output_dir and self.transform_name:
+            return f'{self.output_dir}/{self.transform_name}'
+        else:
+            return None
+
+    def inv_transform_path(self):
+        if self.output_dir and self.inv_transform_name:
+            return f'{self.output_dir}/{self.inv_transform_name}'
+        else:
+            return None
+
+    def align_path(self):
+        if self.output_dir and self.align_name:
+            return f'{self.output_dir}/{self.align_name}'
+        else:
+            return None
+
+    def align_dataset(self):
+        if self.align_subpath:
+            return self.align_subpath
+        else:
+            return self.mov_subpath
+
+
 def _define_args(global_descriptor, local_descriptor):
     args_parser = argparse.ArgumentParser(description='Registration pipeline')
-    args_parser.add_argument('--global-fix',
-                             '--fixed-global',
-                             dest='fixed_global',
-                             help='Fixed global (low resolution) volume path')
-    args_parser.add_argument('--global-fix-subpath',
-                             '--fixed-global-subpath',
-                             '--fixed-lowres-subpath',
-                             dest='fixed_global_subpath',
-                             help='Fixed global (low resolution) subpath')
-    args_parser.add_argument('--global-fix-spacing',
-                             dest='fixed_global_spacing',
-                             type=_floattuple,
-                             help='Fixed global (low resolution) voxel spacing')
 
-    args_parser.add_argument('--global-fix-mask',
-                             '--fixed-global-mask',
-                             dest='fixed_global_mask',
-                             help='Fixed global (low resolution) mask path')
-    args_parser.add_argument('--global-fix-mask-subpath',
-                             '--fixed-global-mask-subpath',
-                             dest='fixed_global_mask_subpath',
-                             help='Fixed global (low resolution) mask subpath')
+    _define_registration_input_args(
+        args_parser.add_argument_group(
+            description='Global registration input volumes'),
+        global_descriptor,
+    )
+    _define_registration_input_args(
+        args_parser.add_argument_group(
+            description='Local registration input volumes'),
+        local_descriptor,
+    )
 
-    args_parser.add_argument('--global-mov',
-                             '--moving-global',
-                             dest='moving_global',
-                             help='Moving global (low resolution) volume path')
-    args_parser.add_argument('--global-mov-subpath',
-                             '--moving-global-subpath',
-                             '--moving-lowres-subpath',
-                             dest='moving_global_subpath',
-                             help='Moving global (low resolution) subpath')
-    args_parser.add_argument('--global-mov-spacing',
-                             dest='moving_global_spacing',
-                             type=_floattuple,
-                             help='Moving global (low resolution) voxel spacing')
-
-    args_parser.add_argument('--global-mov-mask',
-                             '--moving-global-mask',
-                             dest='moving_global_mask',
-                             help='Moving global (low resolution) mask path')
-    args_parser.add_argument('--global-mov-mask-subpath',
-                             '--moving-global-mask-subpath',
-                             dest='moving_global_mask_subpath',
-                             help='Moving global (low resolution) mask subpath')
-
-    args_parser.add_argument('--local-fix',
-                             '--fixed-local',
-                             dest='fixed_local',
-                             help='Path to the fixed local (high resolution) volume')
-    args_parser.add_argument('--local-fix-subpath',
-                             '--fixed-local-subpath',
-                             dest='fixed_local_subpath',
-                             help='Fixed local (high resolution) subpath')
-    args_parser.add_argument('--local-fix-spacing',
-                             dest='fixed_local_spacing',
-                             type=_floattuple,
-                             help='Fixed local (high resolution) voxel spacing')
-
-    args_parser.add_argument('--local-fix-mask',
-                             '--fixed-local-mask',
-                             dest='fixed_local_mask',
-                             help='Fixed local (high resolution) mask path')
-    args_parser.add_argument('--local-fix-mask-subpath',
-                             '--fixed-local-mask-subpath',
-                             dest='fixed_local_mask_subpath',
-                             help='Fixed local (high resolution) mask subpath')
-
-    args_parser.add_argument('--local-mov',
-                             '--moving-local',
-                             dest='moving_local',
-                             help='Path to the moving local (high resolution) volume')
-    args_parser.add_argument('--local-mov-subpath',
-                             '--moving-local-subpath',
-                             dest='moving_local_subpath',
-                             help='Moving local (high resolution) subpath')
-    args_parser.add_argument('--local-mov-spacing',
-                             dest='moving_local_spacing',
-                             type=_floattuple,
-                             help='Moving local (high resolution) voxel spacing')
-
-    args_parser.add_argument('--local-mov-mask',
-                             '--moving-local-mask',
-                             dest='moving_local_mask',
-                             help='Moving local (high resolution) mask path')
-    args_parser.add_argument('--local-mov-mask-subpath',
-                             '--moving-local-mask-subpath',
-                             dest='moving_local_mask_subpath',
-                             help='Moving local (high resolution) mask subpath')
-
-    args_parser.add_argument('--use-existing-global-transform',
-                             dest='use_existing_global_transform',
+    args_parser.add_argument('--align-config',
+                             dest='align_config',
+                             help='Align config file')
+    args_parser.add_argument('--global-use-existing-transform',
+                             dest='global_use_existing_transform',
                              action='store_true',
                              help='If set use an existing global transform')
-
-    args_parser.add_argument('--output-chunk-size',
-                             dest='output_chunk_size',
-                             default=128,
-                             type=int,
-                             help='Output chunk size')
-    args_parser.add_argument('--output-blocksize',
-                             dest='output_blocksize',
+    args_parser.add_argument('--local-processing-size',
+                             dest='local_processing_size',
                              type=_inttuple,
-                             help='Output chunk size as a tuple.')
-
-    args_parser.add_argument(global_descriptor._argflag('output-dir'),
-                             dest=global_descriptor._argdest('output_dir'),
-                             help='Global alignment output directory')
-    args_parser.add_argument(local_descriptor._argflag('output-dir'),
-                             dest=local_descriptor._argdest('output_dir'),
-                             help='Local alignment output directory')
-    args_parser.add_argument('--global-registration-steps',
-                             dest='global_registration_steps',
-                             type=_stringlist,
-                             help='Global (lowres) registration steps, e.g. ransac,affine')
-    args_parser.add_argument('--global-transform-name',
-                             dest='global_transform_name',
-                             default='affine-transform.mat',
-                             type=str,
-                             help='Global transform name')
-    args_parser.add_argument('--global-inv-transform-name',
-                             dest='global_inv_transform_name',
-                             default='inv-affine-transform.mat',
-                             type=str,
-                             help='Inverse global transform name')
-    args_parser.add_argument('--global-aligned-name',
-                             dest='global_aligned_name',
-                             type=str,
-                             help='Global aligned name')
-
-    _define_ransac_args(args_parser.add_argument_group(
-        description='Global ransac arguments'),
-        global_descriptor)
-    _define_affine_args(args_parser.add_argument_group(
-        description='Global affine arguments'),
-        global_descriptor)
-
-    args_parser.add_argument('--local-registration-steps',
-                             dest='local_registration_steps',
-                             type=_stringlist,
-                             help='Local (highres) registration steps, .e.g. ransac,deform')
-    args_parser.add_argument('--blocks-overlap-factor',
-                             dest='blocks_overlap_factor',
+                             help='partition overlap when splitting the work - a fractional number between 0 - 1')
+    args_parser.add_argument('--local-processing-overlap-factor',
+                             dest='local_processing_overlap_factor',
                              default=0.5,
                              type=float,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
-    args_parser.add_argument('--local-transform-name',
-                             dest='local_transform_name',
-                             default='deform-transform',
-                             type=str,
-                             help='Local transform name')
-    args_parser.add_argument('--local-transform-subpath',
-                             dest='local_transform_subpath',
-                             type=str,
-                             help='Local transform subpath (defaults to moving subpath)')
-    args_parser.add_argument('--local-transform-blocksize',
-                             dest='local_transform_blocksize',
-                             type=_inttuple,
-                             help='Local transform chunk size')
-    args_parser.add_argument('--local-inv-transform-name',
-                             dest='local_inv_transform_name',
-                             default='inv-deform-transform',
-                             type=str,
-                             help='Local inverse transform name')
-    args_parser.add_argument('--local-inv-transform-subpath',
-                             dest='local_inv_transform_subpath',
-                             type=str,
-                             help='Local inverse transform subpath (defaults to direct transform subpath)')
-    args_parser.add_argument('--local-inv-transform-blocksize',
-                             dest='local_inv_transform_blocksize',
-                             type=_inttuple,
-                             help='Local inverse transform chunk size')
-    args_parser.add_argument('--local-aligned-name',
-                             dest='local_aligned_name',
-                             type=str,
-                             help='Local aligned name')
-    args_parser.add_argument('--local-aligned-subpath',
-                             dest='local_aligned_subpath',
-                             type=str,
-                             help='Local aligned subpath (defaults to moving subpath)')
     args_parser.add_argument('--inv-iterations',
                              dest='inv_iterations',
                              default=10,
@@ -251,13 +128,6 @@ def _define_args(global_descriptor, local_descriptor):
                              default=10,
                              type=int,
                              help="Number of square root iterations for getting the inverse transformation")
-
-    _define_ransac_args(args_parser.add_argument_group(
-        description='Local ransac arguments'),
-        local_descriptor)
-    _define_deform_args(args_parser.add_argument_group(
-        description='Local deform arguments'),
-        local_descriptor)
 
     args_parser.add_argument('--dask-scheduler', dest='dask_scheduler',
                              type=str, default=None,
@@ -276,405 +146,236 @@ def _define_args(global_descriptor, local_descriptor):
     return args_parser
 
 
-def _define_ransac_args(ransac_args, args):
-    ransac_args.add_argument(args._argflag('ransac-num-sigma-max'),
-                             dest=args._argdest('num_sigma_max'),
-                             type=int,
-                             default=15,
-                             help='Ransac sigma max')
-    ransac_args.add_argument(args._argflag('ransac-cc-radius'),
-                             dest=args._argdest('cc_radius'),
-                             type=int,
-                             default=12,
-                             help='Ransac radius')
-    ransac_args.add_argument(args._argflag('ransac-nspots'),
-                             dest=args._argdest('nspots'),
-                             type=int,
-                             default=5000,
-                             help='Ransac nspots')
-    ransac_args.add_argument(args._argflag('ransac-spot-detection-method'),
-                             dest=args._argdest('spot_detection_method'),
-                             type=str,
-                             default="log",
-                             help='Spot detection method:{log|dog}')
-    ransac_args.add_argument(args._argflag('ransac-diagonal-constraint'),
-                             dest=args._argdest('diagonal_constraint'),
-                             type=float,
-                             default=0.75,
-                             help='Ransac diagonal constraint')
-    ransac_args.add_argument(args._argflag('ransac-match-threshold'),
-                             dest=args._argdest('match_threshold'),
-                             type=float,
-                             default=0.7,
-                             help='Ransac match threshold')
-    ransac_args.add_argument(args._argflag('ransac-align-threshold'),
-                             dest=args._argdest('align_threshold'),
-                             type=float,
-                             default=2.0,
-                             help='Ransac align threshold')
-    ransac_args.add_argument(args._argflag('ransac-fix-spot-detection-threshold'),
-                             dest=args._argdest('fix_spot_detection_threshold'),
-                             type=float,
-                             default=0,
-                             help='Fix spot detection threshold')
-    ransac_args.add_argument(args._argflag('ransac-fix-spot-detection-threshold-rel'),
-                             dest=args._argdest('fix_spot_detection_threshold_rel'),
-                             type=float,
-                             default=0.05,
-                             help='Fix spot detection rel threshold')
-    ransac_args.add_argument(args._argflag('ransac-fix-spot-winsorize-limits'),
-                             dest=args._argdest('fix_spot_winsorize_limits'),
-                             type=_floattuple,
-                             help='Fix spot winsorize limits to elimitate outliers')
-    ransac_args.add_argument(args._argflag('ransac-mov-spot-detection-threshold'),
-                             dest=args._argdest('mov_spot_detection_threshold'),
-                             type=float,
-                             default=0,
-                             help='Mov spot detection threshold')
-    ransac_args.add_argument(args._argflag('ransac-mov-spot-detection-threshold-rel'),
-                             dest=args._argdest('mov_spot_detection_threshold_rel'),
-                             type=float,
-                             default=0.01,
-                             help='Mov spot detection rel threshold')
-    ransac_args.add_argument(args._argflag('ransac-mov-spot-winsorize-limits'),
-                             dest=args._argdest('mov_spot_winsorize_limits'),
-                             type=_floattuple,
-                             help='Mov spot winsorize limits to elimitate outliers')
-    ransac_args.add_argument(args._argflag('ransac-blob-sizes'),
-                             dest=args._argdest('blob_sizes'),
-                             metavar='s1,s2,...,sn',
-                             type=_intlist,
-                             default=[6, 20],
-                             help='Ransac blob sizes')
-    ransac_args.add_argument(args._argflag('ransac-fix-spots-count-threshold'),
-                             dest=args._argdest('fix_spots_count_threshold'),
-                             type=int,
-                             default=100,
-                             help='Ransac fix spots count limit')
-    ransac_args.add_argument(args._argflag('ransac-mov-spots-count-threshold'),
-                             dest=args._argdest('mov_spots_count_threshold'),
-                             type=int,
-                             default=100,
-                             help='Ransac mov spots count limit')
-    ransac_args.add_argument(args._argflag('ransac-point-matches-threshold'),
-                             dest=args._argdest('point_matches_threshold'),
-                             type=int,
-                             default=50,
-                             help='Ransac point matches count limit')
+def _define_registration_input_args(args, args_descriptor):
+    args.add_argument(args_descriptor._argflag('fix'),
+                      dest=args_descriptor._argdest('fix'),
+                      help='Fixed volume')
+    args.add_argument(args_descriptor._argflag('fix-subpath'),
+                      dest=args_descriptor._argdest('fix_subpath'),
+                      help='Fixed volume subpath')
+    args.add_argument(args_descriptor._argflag('fix-spacing'),
+                      dest=args_descriptor._argdest('fix_spacing'),
+                      type=_floattuple,
+                      help='Fixed volume voxel spacing')
+    args.add_argument(args_descriptor._argflag('fix-mask'),
+                      dest=args_descriptor._argdest('fix_mask'),
+                      help='Fixed volume mask')
+    args.add_argument(args_descriptor._argflag('fix-mask-subpath'),
+                      dest=args_descriptor._argdest('fix_mask_subpath'),
+                      help='Fixed volume mask subpath')
+
+    args.add_argument(args_descriptor._argflag('mov'),
+                      dest=args_descriptor._argdest('mov'),
+                      help='Moving volume')
+    args.add_argument(args_descriptor._argflag('mov-subpath'),
+                      dest=args_descriptor._argdest('mov_subpath'),
+                      help='Moving volume subpath')
+    args.add_argument(args_descriptor._argflag('mov-spacing'),
+                      dest=args_descriptor._argdest('mov_spacing'),
+                      type=_floattuple,
+                      help='Moving volume voxel spacing')
+    args.add_argument(args_descriptor._argflag('mov-mask'),
+                      dest=args_descriptor._argdest('mov_mask'),
+                      help='Moving volume mask')
+    args.add_argument(args_descriptor._argflag('mov-mask-subpath'),
+                      dest=args_descriptor._argdest('mov_mask_subpath'),
+                      help='Moving volume mask subpath')
+
+    args.add_argument(args_descriptor._argflag('output-dir'),
+                      dest=args_descriptor._argdest('output_dir'),
+                      help='Alignment output directory')
+    args.add_argument(args_descriptor._argflag('transform-name'),
+                      dest=args_descriptor._argdest('transform_name'),
+                      help='Transform name')
+    args.add_argument(args_descriptor._argflag('transform-subpath'),
+                      dest=args_descriptor._argdest('transform_subpath'),
+                      help='Transform subpath')
+    args.add_argument(args_descriptor._argflag('inv-transform-name'),
+                      dest=args_descriptor._argdest('inv_transform_name'),
+                      help='Inverse transform name')
+    args.add_argument(args_descriptor._argflag('inv-transform-subpath'),
+                      dest=args_descriptor._argdest('inv_transform_subpath'),
+                      help='Transform subpath')
+    args.add_argument(args_descriptor._argflag('align-name'),
+                      dest=args_descriptor._argdest('align_name'),
+                      help='Alignment name')
+    args.add_argument(args_descriptor._argflag('align-subpath'),
+                      dest=args_descriptor._argdest('align_subpath'),
+                      help='Alignment subpath')
+
+    args.add_argument(args_descriptor._argflag('transform-blocksize'),
+                      dest=args_descriptor._argdest('transform_blocksize'),
+                      type=_inttuple,
+                      help='Transform blocksize')
+    args.add_argument(args_descriptor._argflag('inv-transform-blocksize'),
+                      dest=args_descriptor._argdest('inv_transform_blocksize'),
+                      type=_inttuple,
+                      help='Inverse transform blocksize')
+    args.add_argument(args_descriptor._argflag('align-blocksize'),
+                      dest=args_descriptor._argdest('align_blocksize'),
+                      type=_inttuple,
+                      help='Alignment blocksize')
+
+    args.add_argument(args_descriptor._argflag('registration-steps'),
+                      dest=args_descriptor._argdest('registration_steps'),
+                      type=_stringlist,
+                      help='Registration steps')
 
 
-def _define_affine_args(affine_args, args):
-    affine_args.add_argument(args._argflag('metric'),
-                             dest=args._argdest('metric'),
-                             type=str,
-                             default='MMI',
-                             help='Metric')
-    affine_args.add_argument(args._argflag('optimizer'),
-                             dest=args._argdest('optimizer'),
-                             type=str,
-                             default='RSGD',
-                             help='Optimizer')
-    affine_args.add_argument(args._argflag('sampling'),
-                             dest=args._argdest('sampling'),
-                             type=str,
-                             default='NONE',
-                             help='Sampling')
-    affine_args.add_argument(args._argflag('interpolator'),
-                             dest=args._argdest('interpolator'),
-                             type=str,
-                             default='1',
-                             help='Interpolator')
-    affine_args.add_argument(args._argflag('shrink-factors'),
-                             dest=args._argdest('shrink_factors'),
-                             metavar='sf1,...,sfn',
-                             type=_inttuple, default=None,
-                             help='Shrink factors')
-    affine_args.add_argument(args._argflag('smooth-sigmas'),
-                             dest=args._argdest('smooth_sigmas'),
-                             metavar='s1,...,sn',
-                             type=_floattuple,
-                             help='Smoothing sigmas')
-    affine_args.add_argument(args._argflag('learning-rate'),
-                             dest=args._argdest('learning_rate'),
-                             type=float, default=0.25,
-                             help='Learning rate')
-    affine_args.add_argument(args._argflag('min-step'),
-                             dest=args._argdest('min_step'),
-                             type=float, default=0.,
-                             help='Minimum step')
-    affine_args.add_argument(args._argflag('iterations'),
-                             dest=args._argdest('iterations'),
-                             type=int, default=100,
-                             help='Number of iterations')
-    affine_args.add_argument(args._argflag('sampling-percentage'),
-                             dest=args._argdest('sampling_percentage'),
-                             type=float,
-                             help='Sampling percentage')
-    affine_args.add_argument(args._argflag('alignment-spacing'),
-                             dest=args._argdest('alignment_spacing'),
-                             type=float,
-                             help='Alignment spacing')
+def _extract_arg(args, args_descriptor, argname, args_dict):
+    args_dict[argname] = getattr(args, args_descriptor._argdest(argname))
 
 
-def _define_deform_args(deform_args, args):
-    deform_args.add_argument(args._argflag('control-point-spacing'),
-                             dest=args._argdest('control_point_spacing'),
-                             type=float, default=50.,
-                             help='Control point spacing')
-    deform_args.add_argument(args._argflag('control-point-levels'),
-                             dest=args._argdest('control_point_levels'),
-                             metavar='s1,...,sn',
-                             type=_inttuple, default=(1,),
-                             help='Control point levels')
-    # deform args are actually a superset of affine args
-    _define_affine_args(deform_args, args)
+def _extract_registration_input_args(args, args_descriptor):
+    registration_args = {}
+    _extract_arg(args, args_descriptor, 'fix', registration_args)
+    _extract_arg(args, args_descriptor, 'fix_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'fix_spacing', registration_args)
+    _extract_arg(args, args_descriptor, 'fix_mask', registration_args)
+    _extract_arg(args, args_descriptor, 'fix_mask_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'mov', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_spacing', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_mask', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_mask_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'output_dir', registration_args)
+    _extract_arg(args, args_descriptor, 'transform_name', registration_args)
+    _extract_arg(args, args_descriptor, 'transform_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'transform_blocksize', registration_args)
+    _extract_arg(args, args_descriptor, 'inv_transform_name', registration_args)
+    _extract_arg(args, args_descriptor, 'inv_transform_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'inv_transform_blocksize', registration_args)
+    _extract_arg(args, args_descriptor, 'align_name', registration_args)
+    _extract_arg(args, args_descriptor, 'align_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'align_blocksize', registration_args)
+    _extract_arg(args, args_descriptor, 'registration_steps', registration_args)
+    registration_inputs = _RegistrationInputs()
+    registration_inputs.__dict__ = registration_args
+    return registration_inputs
 
 
-# _check_attr - check attribute is present
-def _check_attr(args, argdescriptor, argname):
-    attr_value = getattr(args, argdescriptor._argdest(argname), None)
-    return attr_value is not None
+def _extract_align_pipeline(config_filename, context, steps):
+    """
+    config_filename:
+    context: 'global_align' or 'local_align'
+    """
 
-
-# _check_attr_value - check attribute is present and value is valid
-def _check_attr_value(args, argdescriptor, argname):
-    attr_value = getattr(args, argdescriptor._argdest(argname), None)
-    return attr_value
-
-
-def _extract_ransac_args(args, argdescriptor):
-    ransac_args = {
-        'fix_spot_detection_kwargs': {},
-        'mov_spot_detection_kwargs': {},
-    }
-    if _check_attr(args, argdescriptor, 'num_sigma_max'):
-        ransac_args['num_sigma_max'] = getattr(
-            args, argdescriptor._argdest('num_sigma_max'))
-    if _check_attr(args, argdescriptor, 'cc_radius'):
-        ransac_args['cc_radius'] = getattr(
-            args, argdescriptor._argdest('cc_radius'))
-    if _check_attr(args, argdescriptor, 'nspots'):
-        ransac_args['nspots'] = getattr(
-            args, argdescriptor._argdest('nspots'))
-    if _check_attr(args, argdescriptor, 'diagonal_constraint'):
-        ransac_args['diagonal_constraint'] = getattr(
-            args, argdescriptor._argdest('diagonal_constraint'))
-    if _check_attr(args, argdescriptor, 'match_threshold'):
-        ransac_args['match_threshold'] = getattr(
-            args, argdescriptor._argdest('match_threshold'))
-    if _check_attr(args, argdescriptor, 'align_threshold'):
-        ransac_args['align_threshold'] = getattr(
-            args, argdescriptor._argdest('align_threshold'))
-    if _check_attr(args, argdescriptor, 'spot_detection_method'):
-        ransac_args['fix_spot_detection_kwargs']['blob_method'] = getattr(
-            args, argdescriptor._argdest('spot_detection_method'))
-        ransac_args['mov_spot_detection_kwargs']['blob_method'] = getattr(
-            args, argdescriptor._argdest('spot_detection_method'))
-    if _check_attr(args, argdescriptor, 'fix_spot_detection_threshold'):
-        ransac_args['fix_spot_detection_kwargs']['threshold'] = getattr(
-            args, argdescriptor._argdest('fix_spot_detection_threshold'))
-    if _check_attr(args, argdescriptor, 'fix_spot_detection_threshold_rel'):
-        ransac_args['fix_spot_detection_kwargs']['threshold_rel'] = getattr(
-            args, argdescriptor._argdest('fix_spot_detection_threshold_rel'))
-    if _check_attr_value(args, argdescriptor, 'fix_spot_winsorize_limits'):
-        ransac_args['fix_spot_detection_kwargs']['winsorize_limits'] = getattr(
-            args, argdescriptor._argdest('fix_spot_winsorize_limits'))
-    if _check_attr(args, argdescriptor, 'mov_spot_detection_threshold'):
-        ransac_args['mov_spot_detection_kwargs']['threshold'] = getattr(
-            args, argdescriptor._argdest('mov_spot_detection_threshold'))
-    if _check_attr(args, argdescriptor, 'mov_spot_detection_threshold_rel'):
-        ransac_args['mov_spot_detection_kwargs']['threshold_rel'] = getattr(
-            args, argdescriptor._argdest('mov_spot_detection_threshold_rel'))
-    if _check_attr_value(args, argdescriptor, 'mov_spot_winsorize_limits'):
-        ransac_args['mov_spot_detection_kwargs']['winsorize_limits'] = getattr(
-            args, argdescriptor._argdest('mov_spot_winsorize_limits'))
-    if _check_attr(args, argdescriptor, 'blob_sizes'):
-        ransac_args['blob_sizes'] = getattr(
-            args, argdescriptor._argdest('blob_sizes'))
-    if _check_attr(args, argdescriptor, 'fix_spots_count_threshold'):
-        ransac_args['fix_spots_count_threshold'] = getattr(
-            args, argdescriptor._argdest('fix_spots_count_threshold'))
-    if _check_attr(args, argdescriptor, 'mov_spots_count_threshold'):
-        ransac_args['mov_spots_count_threshold'] = getattr(
-            args, argdescriptor._argdest('mov_spots_count_threshold'))
-    if _check_attr(args, argdescriptor, 'point_matches_threshold'):
-        ransac_args['point_matches_threshold'] = getattr(
-            args, argdescriptor._argdest('point_matches_threshold'))
-    return ransac_args
-
-
-def _extract_affine_args(args, argdescriptor):
-    affine_args = {'optimizer_args': {}}
-    _extract_affine_args_to(args, argdescriptor, affine_args)
-    return affine_args
-
-
-def _extract_affine_args_to(args, argdescriptor, affine_args):
-    if _check_attr(args, argdescriptor, 'metric'):
-        affine_args['metric'] = getattr(
-            args, argdescriptor._argdest('metric'))
-    if _check_attr(args, argdescriptor, 'optimizer'):
-        affine_args['optimizer'] = getattr(
-            args, argdescriptor._argdest('optimizer'))
-    if _check_attr(args, argdescriptor, 'sampling'):
-        affine_args['sampling'] = getattr(
-            args, argdescriptor._argdest('sampling'))
-    if _check_attr(args, argdescriptor, 'interpolator'):
-        affine_args['interpolator'] = getattr(
-            args, argdescriptor._argdest('interpolator'))
-    if _check_attr(args, argdescriptor, 'shrink_factors'):
-        affine_args['shrink_factors'] = getattr(
-            args, argdescriptor._argdest('shrink_factors'))
-    if _check_attr(args, argdescriptor, 'smooth_sigmas'):
-        affine_args['smooth_sigmas'] = getattr(
-            args, argdescriptor._argdest('smooth_sigmas'))
-    if _check_attr(args, argdescriptor, 'learning_rate'):
-        affine_args['optimizer_args']['learningRate'] = getattr(
-            args, argdescriptor._argdest('learning_rate'))
-    if _check_attr(args, argdescriptor, 'min_step'):
-        affine_args['optimizer_args']['minStep'] = getattr(
-            args, argdescriptor._argdest('min_step'))
-    if _check_attr(args, argdescriptor, 'iterations'):
-        affine_args['optimizer_args']['numberOfIterations'] = getattr(
-            args, argdescriptor._argdest('iterations'))
-    if _check_attr(args, argdescriptor, 'sampling_percentage'):
-        affine_args['sampling_percentage'] = getattr(
-            args, argdescriptor._argdest('sampling_percentage'))
-    if _check_attr(args, argdescriptor, 'alignment_spacing'):
-        affine_args['alignment_spacing'] = getattr(
-            args, argdescriptor._argdest('alignment_spacing'))
-
-
-def _extract_deform_args(args, argdescriptor):
-    deform_args = {'optimizer_args': {}}
-    _extract_affine_args_to(args, argdescriptor, deform_args)
-    if _check_attr(args, argdescriptor, 'control_point_spacing'):
-        deform_args['control_point_spacing'] = getattr(
-            args, argdescriptor._argdest('control_point_spacing'))
-    if _check_attr(args, argdescriptor, 'control_point_levels'):
-        deform_args['control_point_levels'] = getattr(
-            args, argdescriptor._argdest('control_point_levels'))
-    return deform_args
-
-
-def _extract_output_dir(args, argdescriptor):
-    return getattr(args, argdescriptor._argdest('output_dir'))
-
-
-def _run_global_alignment(args, steps, global_output_dir):
-    if global_output_dir: 
-        if args.global_transform_name:
-            global_transform_file = (global_output_dir + '/' + 
-                                    args.global_transform_name)
-        else:
-            global_transform_file = None
-        if args.global_inv_transform_name:
-            global_inv_transform_file = (global_output_dir + '/' + 
-                                         args.global_inv_transform_name)
-        else:
-            global_inv_transform_file = None
+    default_config = yaml.safe_load(default_bigstream_config_str)
+    if config_filename:
+        with open(config_filename) as f:
+            external_config = yaml.safe_load(f)
+            print(f'Read external config from {config_filename}: ',
+                  external_config, flush= True)
+            config = pu.deep_update(default_config, external_config)
+            print(f'Final config {config}')
     else:
-        global_transform_file = None
-        global_inv_transform_file = None
+        config = default_config
+    context_config = config[context]
+    align_pipeline = []
+    for step in steps:
+        alg_args = config.get(step, {})
+        context_alg_args = context_config.get(step, {})
+        print(f'Default {step} args: {alg_args}')
+        print(f'Context {step} args: {context_alg_args}')
+        step_args = pu.deep_update(alg_args, context_alg_args)
+        print(f'Final {step} args: {step_args}')
+        align_pipeline.append((step, step_args))
 
-    if (args.use_existing_global_transform and
-        global_transform_file and
-            exists(global_transform_file)):
-        print('Read global transform from', global_transform_file, flush=True)
-        global_transform = np.loadtxt(global_transform_file)
-    elif steps:
-        print('Run global registration with:', args, steps, flush=True)
-        # Read the global inputs
-        print(f'Open fix vol {args.fixed_global} {args.fixed_global_subpath}',
-              'for global registration',
-              flush=True)
-        fix_arraydata, fix_attrs = io_utility.open(
-            args.fixed_global, args.fixed_global_subpath)
-        print(f'Open moving vol {args.moving_global} {args.moving_global_subpath}',
-              'for global registration',
-              flush=True)
-        mov_arraydata, mov_attrs = io_utility.open(
-            args.moving_global, args.moving_global_subpath)
-        # get voxel spacing for fix and moving volume
-        if args.fixed_global_spacing:
-            fix_voxel_spacing = np.array(args.fixed_global_spacing)[::-1] # xyz -> zyx
-        else:
-            fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
-        if args.moving_global_spacing:
-            mov_voxel_spacing = np.array(args.moving_global_spacing)[::-1] # xyz -> zyx
-        else:
-            mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
+    return align_pipeline
 
-        print('Fixed lowres volume attributes:',
-              fix_arraydata.shape, fix_voxel_spacing, flush=True)
-        print('Moving lowres volume attributes:',
-              mov_arraydata.shape, mov_voxel_spacing, flush=True)
 
-        if args.fixed_global_mask:
-            fix_maskarray, _ = io_utility.open(
-                args.fixed_global_mask, args.fixed_global_mask_subpath
-            )
-        else:
-            fix_maskarray = None
-
-        if args.moving_global_mask:
-            mov_maskarray, _ = io_utility.open(
-                args.moving_global_mask, args.moving_global_mask_subpath
-            )
-        else:
-            mov_maskarray = None
-
-        global_transform, global_alignment = _align_global_data(
-            fix_arraydata[...],  # read image in memory
-            mov_arraydata[...],
-            fix_voxel_spacing,
-            mov_voxel_spacing,
-            steps,
-            fix_maskarray,
-            mov_maskarray)
-
-        if global_transform_file:
-            print('Save global transformation to', global_transform_file)
-            np.savetxt(global_transform_file, global_transform)
-        else:
-            print('Skip saving global transformation')
-
-        if global_inv_transform_file:
-            try:
-                global_inv_transform = np.linalg.inv(global_transform)
-                print('Save global inverse transformation to', global_inv_transform_file)
-                np.savetxt(global_inv_transform_file, global_inv_transform)
-            except Exception:
-                print('Global transformation', global_transform, 'is not invertible')
-
-        if global_output_dir and args.global_aligned_name:
-            global_aligned_file = (global_output_dir + '/' + 
-                                   args.global_aligned_name)
-            if (args.output_blocksize is not None and
-                len(args.output_blocksize) > 0):
-                output_blocksize = args.output_blocksize[::-1]
-            else:
-                # default to output_chunk_size
-                output_blocksize = (args.output_chunk_size,) * global_alignment.ndim
-            print('Save global aligned volume to', global_aligned_file,
-                  'with blocksize', output_blocksize)
-            io_utility.create_dataset(
-                global_aligned_file,
-                args.moving_global_subpath, # same dataset as the moving image
-                global_alignment.shape,
-                output_blocksize,
-                global_alignment.dtype,
-                data=global_alignment,
-                pixelResolution=mov_attrs.get('pixelResolution'),
-                downsamplingFactors=mov_attrs.get('downsamplingFactors'),
-            )
-        else:
-            print('Skip savign lowres aligned volume')
+def _run_global_alignment(args, steps):
+    print('Run global registration with:', args, steps, flush=True)
+    # Read the global inputs
+    print(f'Open fix vol {args.fix} {args.fix_subpath}',
+            'for global registration',
+            flush=True)
+    fix_arraydata, fix_attrs = io_utility.open(args.fix, args.fix_subpath)
+    print(f'Open moving vol {args.mov} {args.mov_subpath}',
+            'for global registration',
+            flush=True)
+    mov_arraydata, mov_attrs = io_utility.open(args.mov, args.mov_subpath)
+    # get voxel spacing for fix and moving volume
+    if args.fix_spacing:
+        fix_voxel_spacing = np.array(args.fix_spacing)[::-1] # xyz -> zyx
     else:
-        print('Skip global alignment because no global steps were specified.')
-        global_transform = None
+        fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
+    if args.mov_spacing:
+        mov_voxel_spacing = np.array(args.mov_spacing)[::-1] # xyz -> zyx
+    elif args.fix_spacing: # fix voxel spacing were specified - use the same for moving vol
+        mov_voxel_spacing = fix_voxel_spacing
+    else:
+        mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
 
-    return global_transform
+    print('Global alignment - fixed volume attributes:',
+          fix_arraydata.shape, fix_attrs, fix_voxel_spacing, flush=True)
+    print('Global alignment - moving volume attributes:',
+          mov_arraydata.shape, mov_attrs, mov_voxel_spacing, flush=True)
+
+    if args.fix_mask:
+        fix_maskarray, _ = io_utility.open(args.fix_mask,
+                                           args.fix_mask_subpath)
+    else:
+        fix_maskarray = None
+
+    if args.mov_mask:
+        mov_maskarray, _ = io_utility.open(args.mov_mask,
+                                           args.mov_mask_subpath)
+    else:
+        mov_maskarray = None
+
+    transform, alignment = _align_global_data(
+        fix_arraydata,
+        mov_arraydata[...],
+        fix_voxel_spacing,
+        mov_voxel_spacing,
+        steps,
+        fix_maskarray,
+        mov_maskarray)
+
+    transform_file = args.transform_path()
+    if transform_file:
+        print('Save global transformation to', transform_file)
+        np.savetxt(transform_file, transform)
+    else:
+        print('Skip saving global transformation')
+
+    inv_transform_file = args.inv_transform_path()
+    if inv_transform_file:
+        try:
+            inv_transform = np.linalg.inv(transform)
+            print('Save global inverse transformation to', inv_transform_file)
+            np.savetxt(inv_transform_file, inv_transform)
+        except Exception:
+            print('Global transformation', transform, 'is not invertible')
+
+    else:
+        print('Skip saving global inverse transformation')
+
+    align_path = args.align_path()
+    if align_path:
+        if args.align_blocksize:
+            align_blocksize = args.align_blocksize[::-1]
+        else:
+            align_blocksize = (128,) * alignment.ndim
+
+        print('Save global aligned volume to', align_path,
+              'with blocksize', align_blocksize)
+
+        io_utility.create_dataset(
+            align_path,
+            args.align_dataset(),
+            alignment.shape,
+            align_blocksize,
+            alignment.dtype,
+            data=alignment,
+            pixelResolution=list(mov_voxel_spacing),
+            downsamplingFactors=mov_attrs.get('downsamplingFactors'),
+        )
+    else:
+        print('Skip saving lowres aligned volume')
+
+    return transform
 
 
 def _align_global_data(fix_data,
@@ -703,324 +404,337 @@ def _align_global_data(fix_data,
     return affine, aligned
 
 
-def _run_local_alignment(args, steps, global_transform, output_dir):
-    if steps:
-        print('Run local registration with:', steps, flush=True)
+def _run_local_alignment(args, steps, global_transform, 
+                         default_args=_RegistrationInputs(),
+                         default_blocksize=128,
+                         processing_size=None,
+                         processing_overlap=0.5,
+                         inv_iterations=10,
+                         inv_sqrt_iterations=10,
+                         inv_order=2,
+                         dask_scheduler_address=None,
+                         dask_config_file=None,
+                         max_tasks=0,
+                         ):
+    print('Run local registration with:', args, steps, flush=True)
 
-        # Read the highres inputs - if highres is not defined default it to lowres
-        fix_local_path = args.fixed_local if args.fixed_local else args.fixed_global
-        mov_local_path = args.moving_local if args.moving_local else args.moving_global
+    # Read the highres inputs - if highres is not defined default it to lowres
+    fix_path = args.fix if args.fix else default_args.fix
+    mov_path = args.mov if args.mov else default_args.mov
 
-        print(f'Open fix vol {fix_local_path}:{args.fixed_local_subpath}',
-              'for local registration',
-              flush=True)
-        fix_highres_ldata, fix_local_attrs = io_utility.open(
-            fix_local_path, args.fixed_local_subpath)
-        if args.fixed_local_spacing:
-             # xyz -> zyx
-            fix_local_voxel_spacing = np.array(args.fixed_local_spacing)[::-1]
-        else:
-            fix_local_voxel_spacing = None
-        print(f'Open moving vol {mov_local_path} {args.moving_local_subpath}',
-              'for local registration',
-              flush=True)
-        mov_highres_ldata, mov_local_attrs = io_utility.open(
-            mov_local_path, args.moving_local_subpath)
-        if args.moving_local_spacing:
-             # xyz -> zyx
-            mov_local_voxel_spacing = np.array(args.moving_local_spacing)[::-1]
-        else:
-            mov_local_voxel_spacing = None
+    print(f'Open fix vol {fix_path}:{args.fix_subpath}',
+            'for local registration',
+            flush=True)
+    fix_arraydata, fix_attrs = io_utility.open(fix_path, args.fix_subpath)
+    print(f'Open mov vol {mov_path}:{args.mov_subpath}',
+            'for local registration',
+            flush=True)
+    mov_arraydata, mov_attrs = io_utility.open(mov_path, args.mov_subpath)
+    if mov_arraydata.ndim != fix_arraydata.ndim:
+        # only check for ndim and not shape because as it happens 
+        # the test data has different shape for fix.highres and mov.highres
+        raise Exception(f'{mov_path}:{args.mov_subpath} expected to have ',
+                        f'the same ndim as {fix_path}:{args.fix_subpath}')
 
-        if (args.dask_config):
-            import dask.config
-            with open(args.dask_config) as f:
-                dask_config = flatten(yaml.safe_load(f))
-                dask.config.set(dask_config)
-
-        if args.dask_scheduler:
-            cluster_client = Client(address=args.dask_scheduler)
-        else:
-            cluster_client = Client(LocalCluster())
-
-        blocks_overlap_factor = (0.5 if (args.blocks_overlap_factor <= 0 or
-                                    args.blocks_overlap_factor >= 1)
-                                 else
-                                    args.blocks_overlap_factor)
-
-        if (args.output_blocksize is not None and
-            len(args.output_blocksize) > 0):
-            # block chunks are define as x,y,z so I am reversing it to z,y,x
-            output_blocksize = args.output_blocksize[::-1]
-        else:
-            # default to output_chunk_size
-            output_blocksize = (args.output_chunk_size,) * fix_highres_ldata.ndim
-
-        if (args.local_transform_blocksize is not None and
-            len(args.local_transform_blocksize) > 0):
-            local_transform_blocksize = args.local_transform_blocksize[::-1]
-        else:
-            # default to output blocksize
-            local_transform_blocksize = output_blocksize
-
-        if (args.local_inv_transform_blocksize is not None and
-            len(args.local_inv_transform_blocksize) > 0):
-            local_inv_transform_blocksize = args.local_inv_transform_blocksize[::-1]
-        else:
-            # default to local transform blocksize
-            local_inv_transform_blocksize = local_transform_blocksize
-
-        if args.fixed_local_mask:
-            fix_maskarray, _ = io_utility.open(
-                args.fixed_local_mask, args.fixed_local_mask_subpath
-            )
-        else:
-            fix_maskarray = None
-
-        if args.moving_local_mask:
-            mov_maskarray, _ = io_utility.open(
-                args.moving_local_mask, args.moving_local_mask_subpath
-            )
-        else:
-            mov_maskarray = None
-
-        if args.local_transform_subpath:
-            local_transform_subpath = args.local_transform_subpath
-        else:
-            local_transform_subpath = args.moving_local_subpath
-
-        if args.local_inv_transform_subpath:
-            local_inv_transform_subpath = args.local_inv_transform_subpath
-        else:
-            local_inv_transform_subpath = local_transform_subpath
-
-        if args.local_aligned_subpath:
-            local_aligned_subpath = args.local_aligned_subpath
-        else:
-            local_aligned_subpath = args.moving_local_subpath
-
-        _align_local_data(
-            (fix_local_path, args.fixed_local_subpath,
-             fix_local_voxel_spacing, fix_local_attrs, fix_highres_ldata),
-            (mov_local_path, args.moving_local_subpath,
-             mov_local_voxel_spacing, mov_local_attrs, mov_highres_ldata),
-            steps,
-            blocks_overlap_factor,
-            fix_maskarray,
-            mov_maskarray,
-            [global_transform] if global_transform is not None else [],
-            output_dir,
-            args.local_transform_name,
-            local_transform_subpath,
-            local_transform_blocksize,
-            args.local_inv_transform_name,
-            local_inv_transform_subpath,
-            local_inv_transform_blocksize,
-            args.local_aligned_name,
-            local_aligned_subpath, # aligned subpath is identical to moving subpath
-            output_blocksize,
-            args.inv_iterations,
-            args.inv_order,
-            args.inv_sqrt_iterations,
-            cluster_client,
-            args.cluster_max_tasks,
-        )
+    # get voxel spacing for fix and moving volume
+    if args.fix_spacing:
+        fix_voxel_spacing = np.array(args.fix_spacing)[::-1] # xyz -> zyx
     else:
-        print('Skip local alignment because no local steps were specified.')
+        fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
+    if args.mov_spacing:
+        mov_voxel_spacing = np.array(args.mov_spacing)[::-1] # xyz -> zyx
+    elif args.fix_spacing: # fix voxel spacing were specified - use the same for moving vol
+        mov_voxel_spacing = fix_voxel_spacing
+    else:
+        mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
+
+    print('Local alignment - fixed volume attributes:',
+          fix_arraydata.shape, fix_attrs, fix_voxel_spacing, flush=True)
+    print('Local alignment - moving volume attributes:',
+          mov_arraydata.shape, mov_attrs, mov_voxel_spacing, flush=True)
+
+    if args.fix_mask:
+        fix_maskarray, _ = io_utility.open(args.fix_mask,
+                                           args.fix_mask_subpath)
+    else:
+        fix_maskarray = None
+
+    if args.mov_mask:
+        mov_maskarray, _ = io_utility.open(args.mov_mask,
+                                           args.mov_mask_subpath)
+    else:
+        mov_maskarray = None
+
+    if dask_config_file:
+        import dask.config
+        with open(dask_config_file) as f:
+            dask_config = flatten(yaml.safe_load(f))
+            dask.config.set(dask_config)
+
+    if dask_scheduler_address:
+        cluster_client = Client(address=dask_scheduler_address)
+    else:
+        cluster_client = Client(LocalCluster())
+
+    if processing_size:
+        # block are defined as x,y,z so I am reversing it to z,y,x
+        local_processing_size = processing_size[::-1]
+    elif args.transform_blocksize:
+        local_processing_size = args.transform_blocksize[::-1]
+    else:
+        # default
+        local_processing_size = (default_blocksize,) * fix_arraydata.ndim
+
+    local_processing_overlap_factor = (0.5 if (processing_overlap <= 0 or
+                                               processing_overlap >= 1)
+                                           else processing_overlap)
+
+    if args.transform_subpath:
+        transform_subpath = args.transform_subpath
+    else:
+        transform_subpath = args.mov_subpath
+
+    if args.transform_blocksize:
+        # block chunks are define as x,y,z so I am reversing it to z,y,x
+        transform_blocksize = args.transform_blocksize[::-1]
+    else:
+        # default to output_chunk_size
+        transform_blocksize = (default_blocksize,) * fix_arraydata.ndim
+
+    if args.inv_transform_subpath:
+        inv_transform_subpath = args.inv_transform_subpath
+    else:
+        inv_transform_subpath = transform_subpath
+
+    if args.inv_transform_blocksize:
+        # block chunks are define as x,y,z so I am reversing it to z,y,x
+        inv_transform_blocksize = args.inv_transform_blocksize[::-1]
+    else:
+        # default to output_chunk_size
+        inv_transform_blocksize = transform_blocksize
+
+    align_subpath = args.align_dataset()
+
+    if args.align_blocksize:
+        # block chunks are define as x,y,z so I am reversing it to z,y,x
+        align_blocksize = args.align_blocksize[::-1]
+    else:
+        # default to output_chunk_size
+        align_blocksize = transform_blocksize
+
+    _align_local_data(
+        fix_path, args.fix_subpath,
+        fix_arraydata, fix_attrs, fix_voxel_spacing,
+        fix_maskarray,
+        mov_path, args.mov_subpath,
+        mov_arraydata, mov_attrs, mov_voxel_spacing,
+        mov_maskarray,
+        steps,
+        local_processing_size,
+        local_processing_overlap_factor,
+        [global_transform] if global_transform is not None else [],
+        args.transform_path(),
+        transform_subpath,
+        transform_blocksize,
+        args.inv_transform_path(),
+        inv_transform_subpath,
+        inv_transform_blocksize,
+        args.align_path(),
+        align_subpath,
+        align_blocksize,
+        inv_iterations,
+        inv_sqrt_iterations,
+        inv_order,
+        cluster_client,
+        max_tasks,
+    )
 
 
-def _align_local_data(fix_input,
-                      mov_input,
-                      steps,
-                      blocks_overlap_factor,
+def _align_local_data(fix_path, fix_subpath,
+                      fix_arraydata, fix_attrs, fix_voxel_spacing,
                       fix_mask,
+                      mov_path, mov_subpath,
+                      mov_arraydata, mov_attrs, mov_voxel_spacing,
                       mov_mask,
+                      steps,
+                      processing_size,
+                      processing_overlap_factor,
                       global_transforms_list,
-                      output_dir,
-                      local_transform_name,
-                      local_transform_subpath,
-                      local_transform_blocksize,
-                      local_inv_transform_name,
-                      local_inv_transform_subpath,
-                      local_inv_transform_blocksize,
-                      local_aligned_name,
-                      local_aligned_subpath,
-                      output_blocksize,
+                      transform_path,
+                      transform_subpath,
+                      transform_blocksize,
+                      inv_transform_path,
+                      inv_transform_subpath,
+                      inv_transform_blocksize,
+                      align_path,
+                      align_subpath,
+                      align_blocksize,
                       inv_iterations,
-                      inv_order,
                       inv_sqrt_iterations,
+                      inv_order,
                       cluster_client,
                       cluster_max_tasks):
-    fix_path, fix_dataset, fix_spacing_arg, fix_attrs, fix_data = fix_input
-    mov_path, mov_dataset, mov_spacing_arg, mov_attrs, mov_data = mov_input
 
-    fix_shape = fix_data.shape
-    fix_ndim = fix_data.ndim
-    mov_shape = mov_data.shape
-    mov_ndim = mov_data.ndim
-
-    # only check for ndim and not shape because as it happens 
-    # the test data has different shape for fix.highres and mov.highres
-    if mov_ndim != fix_ndim:
-        raise Exception(f'{mov_path}:{mov_dataset} expected to have ',
-                        f'the same ndim as {fix_path}:{fix_dataset}')
-
-    print('Run local alignment:', steps, output_blocksize, flush=True)
-
-    if fix_spacing_arg:
-        fix_spacing = fix_spacing_arg
-    else:
-        fix_spacing = io_utility.get_voxel_spacing(fix_attrs)
-    if mov_spacing_arg:
-        mov_spacing = mov_spacing_arg
-    else:
-        mov_spacing = io_utility.get_voxel_spacing(mov_attrs)
+    fix_shape = fix_arraydata.shape
+    fix_ndim = fix_arraydata.ndim
+    mov_shape = mov_arraydata.shape
 
     print('Align moving data',
-          mov_path, mov_dataset, mov_shape, mov_spacing,
+          mov_path, mov_subpath, mov_shape, mov_voxel_spacing,
           'to reference',
-          fix_path, fix_dataset, fix_shape, fix_spacing,
+          fix_path, fix_subpath, fix_shape, fix_voxel_spacing,
           flush=True)
 
-    if output_dir and local_transform_name:
-        deform_path = output_dir + '/' + local_transform_name
-        local_deform = io_utility.create_dataset(
-            deform_path,
-            local_transform_subpath,
+    if transform_path:
+        transform = io_utility.create_dataset(
+            transform_path,
+            transform_subpath,
             fix_shape + (fix_ndim,),
-            local_transform_blocksize + (fix_ndim,),
+            transform_blocksize + (fix_ndim,),
             np.float32,
             # use the voxel spacing from the fix image
-            pixelResolution=fix_attrs.get('pixelResolution'),
+            pixelResolution=list(fix_voxel_spacing),
             downsamplingFactors=fix_attrs.get('downsamplingFactors'),
         )
     else:
-        deform_path = None
-        local_deform = None
-    print('Calculate transformation', deform_path, 'for local alignment of',
-          mov_path, mov_dataset,
+        transform = None
+    print('Calculate transformation', transform_path, 'for local alignment of',
+          mov_path, mov_subpath,
           'to reference',
-          fix_path, fix_dataset,
+          fix_path, fix_subpath,
           flush=True)
     deform_ok = distributed_alignment_pipeline(
-        fix_data, mov_data,
-        fix_spacing, mov_spacing,
+        fix_arraydata, mov_arraydata,
+        fix_voxel_spacing, mov_voxel_spacing,
         steps,
-        local_transform_blocksize, # parallelize on the transform block chunk size
+        processing_size, # parallelize on processing size
         cluster_client,
-        overlap_factor=blocks_overlap_factor,
+        overlap_factor=processing_overlap_factor,
         fix_mask=fix_mask,
         mov_mask=mov_mask,
         static_transform_list=global_transforms_list,
-        output_transform=local_deform,
+        output_transform=transform,
         max_tasks=cluster_max_tasks,
     )
-    if deform_ok and deform_path and local_inv_transform_name:
-        inv_deform_path = output_dir + '/' + local_inv_transform_name
-        local_inv_deform = io_utility.create_dataset(
-            inv_deform_path,
-            local_inv_transform_subpath,
+    if deform_ok and transform and inv_transform_path:
+        inv_transform = io_utility.create_dataset(
+            inv_transform_path,
+            inv_transform_subpath,
             fix_shape + (fix_ndim,),
-            local_inv_transform_blocksize + (fix_ndim,),
+            inv_transform_blocksize + (fix_ndim,),
             np.float32,
             # use the voxel spacing from the fix image
-            pixelResolution=fix_attrs.get('pixelResolution'),
+            pixelResolution=list(fix_voxel_spacing),
             downsamplingFactors=fix_attrs.get('downsamplingFactors'),
         )
         print('Calculate inverse transformation',
-              inv_deform_path, 'from', deform_path,
+              f'{inv_transform_path}:{inv_transform_subpath}',
+              'from', 
+              f'{transform_path}:{transform_subpath}',
               'for local alignment of',
-              mov_path, mov_dataset,
+              f'{mov_path}:{mov_subpath}',
               'to reference',
-              fix_path, fix_dataset,
+              f'{fix_path}:{fix_subpath}',
               flush=True)
         distributed_invert_displacement_vector_field(
-            local_deform,
-            fix_spacing,
-            local_inv_transform_blocksize, # use blocksize for partitioning
-            local_inv_deform,
+            transform,
+            fix_voxel_spacing,
+            inv_transform_blocksize, # use blocksize for partitioning the work
+            inv_transform,
             cluster_client,
-            overlap_factor=blocks_overlap_factor,
+            overlap_factor=processing_overlap_factor,
             iterations=inv_iterations,
             sqrt_order=inv_order,
             sqrt_iterations=inv_sqrt_iterations,
             max_tasks=cluster_max_tasks,
         )
 
-    if deform_ok and output_dir and local_aligned_name:
+    if deform_ok and align_path:
         # Apply local transformation only if 
         # highres aligned output name is set
-        aligned_path = output_dir + '/' + local_aligned_name
-        local_aligned = io_utility.create_dataset(
-            aligned_path,
-            local_aligned_subpath,
+        align = io_utility.create_dataset(
+            align_path,
+            align_subpath,
             fix_shape,
-            output_blocksize,
-            fix_data.dtype,
-            pixelResolution=mov_attrs.get('pixelResolution'),
+            align_blocksize,
+            fix_arraydata.dtype,
+            pixelResolution=list(mov_voxel_spacing),
             downsamplingFactors=mov_attrs.get('downsamplingFactors'),
         )
-        print('Apply', deform_path, 'to',
-              mov_path, mov_dataset, '->', aligned_path, local_aligned_subpath,
+        print('Apply', 
+              f'{transform_path}:{transform_subpath}',              
+              'to warp',
+              f'{mov_path}:{mov_subpath}',
+              '->',
+              f'{align_path}:{align_subpath}',
               flush=True)
         distributed_apply_transform(
-            fix_data, mov_data,
-            fix_spacing, mov_spacing,
-            output_blocksize, # use block chunk size for distributing work
-            global_transforms_list + [local_deform], # transform_list
+            fix_arraydata, mov_arraydata,
+            fix_voxel_spacing, mov_voxel_spacing,
+            align_blocksize, # use block chunk size for distributing work
+            global_transforms_list + [transform], # transform_list
             cluster_client,
-            overlap_factor=blocks_overlap_factor,
-            aligned_data=local_aligned,
+            overlap_factor=processing_overlap_factor,
+            aligned_data=align,
             max_tasks=cluster_max_tasks,
         )
     else:
-        local_aligned = None
+        align = None
 
-    return local_deform, local_aligned
+    return transform, align
 
 
-if __name__ == '__main__':
+def main():
     global_descriptor = _ArgsHelper('global')
     local_descriptor = _ArgsHelper('local')
     args_parser = _define_args(global_descriptor, local_descriptor)
     args = args_parser.parse_args()
     print('Invoked registration:', args, flush=True)
 
-    if args.global_registration_steps:
-        args_for_global_steps = {
-            'ransac': _extract_ransac_args(args, global_descriptor),
-            'random': _extract_affine_args(args, global_descriptor),
-            'affine': _extract_affine_args(args, global_descriptor),
-            'rigid': _extract_affine_args(args, global_descriptor),
-            'deform': _extract_deform_args(args, global_descriptor),
-        }
-        global_steps = [(s, args_for_global_steps.get(s, {}))
-                        for s in args.global_registration_steps]
-    else:
-        global_steps = []
+    global_inputs = _extract_registration_input_args(args, global_descriptor)
+    global_transform = None
 
-    global_transform = _run_global_alignment(
-        args,
-        global_steps,
-        _extract_output_dir(args, global_descriptor)
-    )
+    if args.global_use_existing_transform:
+        global_transform_file = global_inputs.transform_path()
+        if global_transform_file and exists(global_transform_file):
+            print('Read global transform from', global_transform_file, flush=True)
+            global_transform = np.loadtxt(global_transform_file)
+
+    if not global_transform:
+        if global_inputs.registration_steps:
+            global_steps = _extract_align_pipeline(args.align_config,
+                                                   'global_align',
+                                                   global_inputs.registration_steps)
+            global_transform = _run_global_alignment(
+                global_inputs,
+                global_steps,
+            )
+        else:
+            print('Skip global alignment because no global steps were specified.')
+
+    local_inputs = _extract_registration_input_args(args, local_descriptor)
 
     if args.local_registration_steps:
-        args_for_local_steps = {
-            'ransac': _extract_ransac_args(args, local_descriptor),
-            'random': _extract_affine_args(args, local_descriptor),
-            'affine': _extract_affine_args(args, local_descriptor),
-            'rigid': _extract_affine_args(args, local_descriptor),
-            'deform': _extract_deform_args(args, local_descriptor),
-        }
-        local_steps = [(s, args_for_local_steps.get(s, {}))
-                       for s in args.local_registration_steps]
+        local_steps = _extract_align_pipeline(args.align_config,
+                                              'local_align',
+                                              args.local_registration_steps)
+        _run_local_alignment(
+            local_inputs,
+            local_steps,
+            global_transform,
+            default_args=global_inputs,
+            processing_size=args.local_processing_size,
+            processing_overlap=args.local_processing_overlap_factor,
+            inv_iterations=args.inv_iterations,
+            inv_sqrt_iterations=args.inv_sqrt_iterations,
+            inv_order=args.inv_order,
+            dask_scheduler_address=args.dask_scheduler,
+            dask_config_file=args.dask_config,
+            max_tasks=args.cluster_max_tasks,
+        )
     else:
-        local_steps = []
+        print('Skip local alignment because no local steps were specified.')
 
-    _run_local_alignment(
-        args,
-        local_steps,
-        global_transform,
-        _extract_output_dir(args, local_descriptor),
-    )
+
+if __name__ == '__main__':
+    main()

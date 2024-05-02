@@ -1,4 +1,3 @@
-default_bigstream_config_str="""
 spot_detection: &spot_detection_args
   blob_method: 'log'
   threshold:
@@ -55,4 +54,3 @@ random:
 global_align: {}
 
 local_align: {}
-"""

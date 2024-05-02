@@ -696,11 +696,12 @@ def main():
 
     if args.global_use_existing_transform:
         global_transform_file = global_inputs.transform_path()
+        print('Global transform file:', global_transform_file)
         if global_transform_file and exists(global_transform_file):
             print('Read global transform from', global_transform_file, flush=True)
             global_transform = np.loadtxt(global_transform_file)
 
-    if not global_transform:
+    if global_transform is None:
         if global_inputs.registration_steps:
             global_steps = _extract_align_pipeline(args.align_config,
                                                    'global_align',

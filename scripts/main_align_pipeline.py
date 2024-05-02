@@ -276,7 +276,7 @@ def _extract_align_pipeline(config_filename, context, steps):
         alg_args = config.get(step, {})
         context_alg_args = context_config.get(step, {})
         print(f'Default {step} args: {alg_args}')
-        print(f'Context {step} args: {context_alg_args}')
+        print(f'Context {step} overriden args: {context_alg_args}')
         step_args = pu.deep_update(alg_args, context_alg_args)
         print(f'Final {step} args: {step_args}')
         align_pipeline.append((step, step_args))

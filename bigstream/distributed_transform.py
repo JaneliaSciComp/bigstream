@@ -6,17 +6,17 @@ import traceback
 import sys
 
 import bigstream.transform as bs_transform
-import bigstream.io_utility as io_utility
-import bigstream.utility as ut
 
 from itertools import product
-from bigstream.distributed_utils import throttle_method_invocations
 
 from dask.distributed import as_completed
 
+from .distributed_utils import throttle_method_invocations
+from .io_utility import read_block as io_utility_read_block
+
 
 def distributed_apply_transform(
-    fix, mov,
+    fix_image, mov_image,
     fix_spacing, mov_spacing,
     blocksize,
     transform_list,
@@ -33,10 +33,10 @@ def distributed_apply_transform(
 
     Parameters
     ----------
-    fix_zarr : zarr array
+    fix_image : ImageData
         The fixed image data
 
-    mov_zarr : zarr array
+    mov_image : ImageData
         The moving image data
 
     fix_spacing : 1d array
@@ -82,8 +82,8 @@ def distributed_apply_transform(
     """
 
     # get overlap and number of blocks
-    fix_shape = fix.shape
-    mov_shape = mov.shape
+    fix_shape = fix_image.shape
+    mov_shape = mov_image.shape
     blocksize_array = np.array(blocksize)
     nblocks = np.ceil(np.array(fix_shape) / blocksize_array).astype(int)
     overlaps = np.round(blocksize_array * overlap_factor).astype(int)
@@ -117,8 +117,14 @@ def distributed_apply_transform(
           'with partition size' ,blocksize_array,
           flush=True)
 
-    fix_block_reader = functools.partial(io_utility.read_block, image=fix)
-    mov_block_reader = functools.partial(io_utility.read_block, image=mov)
+    fix_block_reader = functools.partial(io_utility_read_block,
+                                         image=fix_image.image_ndarray,
+                                         image_path=fix_image.image_path,
+                                         image_subpath=fix_image.image_subpath)
+    mov_block_reader = functools.partial(io_utility_read_block,
+                                         image=mov_image.image_ndarray,
+                                         image_path=mov_image.image_path,
+                                         image_subpath=mov_image.image_subpath)
     transform_block = throttle_method_invocations(
         functools.partial(
             _transform_single_block,

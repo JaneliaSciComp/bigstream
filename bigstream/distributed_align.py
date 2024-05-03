@@ -1,16 +1,18 @@
 import functools
 import numpy as np
 import bigstream.utility as ut
-import bigstream.io_utility as io_utility
 import sys
 import time
 import traceback
 
-from bigstream.align import alignment_pipeline
-from bigstream.transform import apply_transform_to_coordinates
-from bigstream.distributed_utils import throttle_method_invocations
 from dask.distributed import as_completed
 from itertools import product
+
+from .align import alignment_pipeline
+from .transform import apply_transform_to_coordinates
+from .distributed_utils import throttle_method_invocations
+from .image_data import ImageData
+from .io_utility import read_block as io_utility_read_block
 
 
 def _prepare_compute_block_transform_params(block_info,
@@ -120,8 +122,11 @@ def _read_blocks_for_processing(blocks_info,
             mov_mask_block)
 
 
-def _read_block(block_coords, image):
-    return io_utility.read_block(block_coords, image=image)
+def _read_block(block_coords, image_data):
+    return io_utility_read_block(block_coords,
+                                 image=image_data.image_ndarray,
+                                 image_path=image_data.image_path,
+                                 image_subpath=image_data.image_subpath)
 
 
 # get image block corners both in voxel and physical units
@@ -331,16 +336,16 @@ def _write_block_transform(block_transform_future,
 
 
 def distributed_alignment_pipeline(
-    fix,
-    mov,
+    fix_image,
+    mov_image,
     fix_spacing,
     mov_spacing,
     steps,
     blocksize,
     cluster_client,
     overlap_factor=0.5,
-    fix_mask=None,
-    mov_mask=None,
+    fix_mask=ImageData(),
+    mov_mask=ImageData(),
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
@@ -358,10 +363,10 @@ def distributed_alignment_pipeline(
 
     Parameters
     ----------
-    fix : ndarray (zarr.Array)
+    fix_image : ImageData
         the fixed image
 
-    mov : ndarray (zarr.Array)
+    mov_image : ImageData
         the moving image; `fix.shape` must equal `mov.shape`
         I.e. typically piecewise affine alignment is done after
         a global affine alignment wherein the moving image has
@@ -396,13 +401,13 @@ def distributed_alignment_pipeline(
     overlap_factor : float in range [0, 1] (default: 0.5)
         Block overlap size as a percentage of block size
 
-    fix_mask : binary ndarray (zarr.Array) (default: None)
+    fix_mask : ImageData (default: None)
         A mask limiting metric evaluation region of the fixed image
         Assumed to have the same domain as the fixed image, though sampling
         can be different. I.e. the origin and span are the same (in physical
         units) but the number of voxels can be different.
 
-    mov_mask : binary ndarray (zarr.Array) (default: None)
+    mov_mask : ImageData (default: None)
         A mask limiting metric evaluation region of the moving image
         Assumed to have the same domain as the moving image, though sampling
         can be different. I.e. the origin and span are the same (in physical
@@ -437,8 +442,8 @@ def distributed_alignment_pipeline(
     # since they are already zarr arrays
 
     # determine fixed image slices for blocking
-    fix_shape = fix.shape
-    mov_shape = mov.shape
+    fix_shape = fix_image.shape
+    mov_shape = mov_image.shape
     block_partition_size = np.array(blocksize)
     nblocks = np.ceil(np.array(fix_shape) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
@@ -452,7 +457,7 @@ def distributed_alignment_pipeline(
         block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
-        if fix_mask is not None:
+        if fix_mask is not None and fix_mask.has_data():
             start = block_partition_size * (i, j, k)
             stop = start + block_partition_size
             ratio = np.array(fix_mask.shape) / fix_shape
@@ -481,12 +486,8 @@ def distributed_alignment_pipeline(
         mov_shape=mov_shape,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
-        fix_fullmask_shape=(fix_mask.shape if
-                            fix_mask  is not None
-                            else None),
-        mov_fullmask_shape=(mov_mask.shape if
-                            mov_mask  is not None
-                            else None),
+        fix_fullmask_shape=fix_mask.shape,
+        mov_fullmask_shape=mov_mask.shape,
         static_transform_list=static_transform_list,
     )
 
@@ -495,8 +496,8 @@ def distributed_alignment_pipeline(
     blocks_to_process = cluster_client.map(
         _read_blocks_for_processing,
         blocks,
-        fix=fix,
-        mov=mov,
+        fix=fix_image,
+        mov=mov_image,
         fix_mask=fix_mask,
         mov_mask=mov_mask,
     )

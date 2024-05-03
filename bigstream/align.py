@@ -198,7 +198,7 @@ def format_static_transform_data(
     for transform in transforms:
         spacing = fix_spacing
         if len(transform.shape) not in [1, 2]:
-            spacing = ut.relative_spacing(transform.shape, 
+            spacing = ut.relative_spacing(transform.shape,
                                           fix.shape,
                                           fix_spacing)
         spacings.append(spacing)

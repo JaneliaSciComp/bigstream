@@ -13,6 +13,7 @@ from bigstream.config import default_bigstream_config_str
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
     distributed_invert_displacement_vector_field)
+from bigstream.image_data import ImageData
 from bigstream.transform import apply_transform
 
 
@@ -425,45 +426,32 @@ def _run_local_alignment(args, steps, global_transform,
     print(f'Open fix vol {fix_path}:{args.fix_subpath}',
             'for local registration',
             flush=True)
-    fix_arraydata, fix_attrs = io_utility.open(fix_path, args.fix_subpath)
+    fix_image = ImageData(fix_path, args.fix_subpath)
     print(f'Open mov vol {mov_path}:{args.mov_subpath}',
             'for local registration',
             flush=True)
-    mov_arraydata, mov_attrs = io_utility.open(mov_path, args.mov_subpath)
-    if mov_arraydata.ndim != fix_arraydata.ndim:
+    mov_image = ImageData(mov_path, args.mov_subpath)
+    if mov_image.ndim != fix_image.ndim:
         # only check for ndim and not shape because as it happens 
         # the test data has different shape for fix.highres and mov.highres
         raise Exception(f'{mov_path}:{args.mov_subpath} expected to have ',
                         f'the same ndim as {fix_path}:{args.fix_subpath}')
 
-    # get voxel spacing for fix and moving volume
+    # update voxel spacing for fix and moving volume if the input arg is set
     if args.fix_spacing:
-        fix_voxel_spacing = np.array(args.fix_spacing)[::-1] # xyz -> zyx
-    else:
-        fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
+        fix_image.voxel_spacing = np.array(args.fix_spacing)[::-1] # xyz -> zyx
     if args.mov_spacing:
-        mov_voxel_spacing = np.array(args.mov_spacing)[::-1] # xyz -> zyx
+        mov_image.voxel_spacing = np.array(args.mov_spacing)[::-1] # xyz -> zyx
     elif args.fix_spacing: # fix voxel spacing were specified - use the same for moving vol
-        mov_voxel_spacing = fix_voxel_spacing
-    else:
-        mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
+        mov_image.voxel_spacing = fix_image.voxel_spacing
 
     print('Local alignment - fixed volume attributes:',
-          fix_arraydata.shape, fix_attrs, fix_voxel_spacing, flush=True)
+          fix_image.shape, fix_image.attrs, fix_image.voxel_spacing, flush=True)
     print('Local alignment - moving volume attributes:',
-          mov_arraydata.shape, mov_attrs, mov_voxel_spacing, flush=True)
+          mov_image.shape, mov_image.attrs, mov_image.voxel_spacing, flush=True)
 
-    if args.fix_mask:
-        fix_maskarray, _ = io_utility.open(args.fix_mask,
-                                           args.fix_mask_subpath)
-    else:
-        fix_maskarray = None
-
-    if args.mov_mask:
-        mov_maskarray, _ = io_utility.open(args.mov_mask,
-                                           args.mov_mask_subpath)
-    else:
-        mov_maskarray = None
+    fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath)
+    mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath)
 
     if dask_config_file:
         import dask.config
@@ -483,7 +471,7 @@ def _run_local_alignment(args, steps, global_transform,
         local_processing_size = args.transform_blocksize[::-1]
     else:
         # default
-        local_processing_size = (default_blocksize,) * fix_arraydata.ndim
+        local_processing_size = (default_blocksize,) * fix_image.ndim
 
     local_processing_overlap_factor = (0.5 if (processing_overlap <= 0 or
                                                processing_overlap >= 1)
@@ -499,7 +487,7 @@ def _run_local_alignment(args, steps, global_transform,
         transform_blocksize = args.transform_blocksize[::-1]
     else:
         # default to output_chunk_size
-        transform_blocksize = (default_blocksize,) * fix_arraydata.ndim
+        transform_blocksize = (default_blocksize,) * fix_image.ndim
 
     if args.inv_transform_subpath:
         inv_transform_subpath = args.inv_transform_subpath
@@ -523,12 +511,10 @@ def _run_local_alignment(args, steps, global_transform,
         align_blocksize = transform_blocksize
 
     _align_local_data(
-        fix_path, args.fix_subpath,
-        fix_arraydata, fix_attrs, fix_voxel_spacing,
-        fix_maskarray,
-        mov_path, args.mov_subpath,
-        mov_arraydata, mov_attrs, mov_voxel_spacing,
-        mov_maskarray,
+        fix_image,
+        fix_mask,
+        mov_image,
+        mov_mask,
         steps,
         local_processing_size,
         local_processing_overlap_factor,
@@ -550,11 +536,9 @@ def _run_local_alignment(args, steps, global_transform,
     )
 
 
-def _align_local_data(fix_path, fix_subpath,
-                      fix_arraydata, fix_attrs, fix_voxel_spacing,
+def _align_local_data(fix_image,
                       fix_mask,
-                      mov_path, mov_subpath,
-                      mov_arraydata, mov_attrs, mov_voxel_spacing,
+                      mov_image,
                       mov_mask,
                       steps,
                       processing_size,
@@ -575,21 +559,18 @@ def _align_local_data(fix_path, fix_subpath,
                       cluster_client,
                       cluster_max_tasks):
 
-    fix_shape = fix_arraydata.shape
-    fix_ndim = fix_arraydata.ndim
-    mov_shape = mov_arraydata.shape
+    fix_shape = fix_image.shape
+    fix_ndim = fix_image.ndim
+    mov_shape = mov_image.shape
 
-    print('Align moving data',
-          mov_path, mov_subpath, mov_shape, mov_voxel_spacing,
-          'to reference',
-          fix_path, fix_subpath, fix_shape, fix_voxel_spacing,
+    print('Align moving data', mov_image, 'to reference', fix_image,
           flush=True)
 
-    if fix_attrs.get('downsamplingFactors'):
-        transform_downsampling = list(fix_attrs.get('downsamplingFactors')) + [1]
+    if fix_image.get_attr('downsamplingFactors'):
+        transform_downsampling = list(fix_image.get_attr('downsamplingFactors')) + [1]
     else:
         transform_downsampling = None
-    transform_spacing = list(fix_voxel_spacing) + [1]
+    transform_spacing = list(fix_image.voxel_spacing) + [1]
     if transform_path:
         transform = io_utility.create_dataset(
             transform_path,
@@ -603,13 +584,11 @@ def _align_local_data(fix_path, fix_subpath,
     else:
         transform = None
     print('Calculate transformation', transform_path, 'for local alignment of',
-          mov_path, mov_subpath,
-          'to reference',
-          fix_path, fix_subpath,
+          mov_image, 'to reference', fix_image,
           flush=True)
     deform_ok = distributed_alignment_pipeline(
-        fix_arraydata, mov_arraydata,
-        fix_voxel_spacing, mov_voxel_spacing,
+        fix_image, mov_image,
+        fix_image.voxel_spacing, mov_image.voxel_spacing,
         steps,
         processing_size, # parallelize on processing size
         cluster_client,
@@ -636,13 +615,13 @@ def _align_local_data(fix_path, fix_subpath,
               'from', 
               f'{transform_path}:{transform_subpath}',
               'for local alignment of',
-              f'{mov_path}:{mov_subpath}',
+              f'{mov_image}',
               'to reference',
-              f'{fix_path}:{fix_subpath}',
+              f'{fix_image}',
               flush=True)
         distributed_invert_displacement_vector_field(
             transform,
-            fix_voxel_spacing,
+            fix_image.voxel_spacing,
             inv_transform_blocksize, # use blocksize for partitioning the work
             inv_transform,
             cluster_client,
@@ -661,20 +640,20 @@ def _align_local_data(fix_path, fix_subpath,
             align_subpath,
             fix_shape,
             align_blocksize,
-            fix_arraydata.dtype,
-            pixelResolution=list(mov_voxel_spacing),
-            downsamplingFactors=mov_attrs.get('downsamplingFactors'),
+            fix_image.dtype,
+            pixelResolution=list(mov_image.voxel_spacing),
+            downsamplingFactors=mov_image.get_attr('downsamplingFactors'),
         )
         print('Apply', 
               f'{transform_path}:{transform_subpath}',              
               'to warp',
-              f'{mov_path}:{mov_subpath}',
+              f'{mov_image}',
               '->',
               f'{align_path}:{align_subpath}',
               flush=True)
         distributed_apply_transform(
-            fix_arraydata, mov_arraydata,
-            fix_voxel_spacing, mov_voxel_spacing,
+            fix_image, mov_image,
+            fix_image.voxel_spacing, mov_image.voxel_spacing,
             align_blocksize, # use block chunk size for distributing work
             global_transforms_list + [transform], # transform_list
             cluster_client,

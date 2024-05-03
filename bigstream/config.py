@@ -32,7 +32,7 @@ affine: &affine_args
   shrink_factors: [1]
   # smooth_sigmas - list of float
   smooth_sigmas: [0]
-  alignment_spacing:
+  alignment_spacing: 1.0
   sampling_percentage:
   metric_args: {}
   optimizer_args: {}

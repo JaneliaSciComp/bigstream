@@ -47,8 +47,7 @@ def open(container_path, subpath, block_coords=None):
     elif container_ext == '.tif' or container_ext == '.tiff':
         print(f'Open tiff {container_path} ({real_container_path})',
               flush=True)
-        im = _read_tiff(real_container_path, block_coords=block_coords)
-        return im, {}
+        return _read_tiff(real_container_path, block_coords=block_coords)
     elif container_ext == '.npy':
         im = np.load(real_container_path)
         bim = im[block_coords] if block_coords is not None else im
@@ -112,6 +111,9 @@ def read_attributes(container_path, subpath):
     elif container_ext == '.zarr':
         print(f'Read Zarr attrs {container_path} ({real_container_path})', flush=True)
         return _open_zarr_attrs(real_container_path, subpath, data_store_name='zarr')
+    elif container_ext == '.tif' or container_ext == '.tiff':
+        print(f'Read TIFF attrs {container_path} ({real_container_path})', flush=True)
+        return _read_tiff_attrs(container_path)
     else:
         print('Cannot read attributes for', container_path, subpath)
         return {}
@@ -167,7 +169,6 @@ def _get_data_store(data_path, data_store_name):
         return data_path
 
 
-
 def _read_tiff(input_path, block_coords=None):
     with TiffFile(input_path) as tif:
         tif_store = tif.aszarr()
@@ -176,8 +177,22 @@ def _read_tiff(input_path, block_coords=None):
             img = tif_array
         else:
             img = tif_array[block_coords]
-        return img
+        return img, _get_tiff_attrs(tif_array)
 
+
+def _read_tiff_attrs(input_path):
+    with TiffFile(input_path) as tif:
+        tif_store = tif.aszarr()
+        tif_array = zarr.open(tif_store)
+        return _get_tiff_attrs(tif_array)
+
+def _get_tiff_attrs(tif_array):
+    dict = tif_array.attrs.asdict()
+    dict.update({
+        'dataType': tif_array.dtype,
+        'dimensions': tif_array.shape,
+    })
+    return dict
 
 def _read_nrrd(input_path, block_coords=None):
     im, dict = nrrd.read(input_path)

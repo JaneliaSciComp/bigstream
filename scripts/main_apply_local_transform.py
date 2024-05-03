@@ -63,6 +63,10 @@ def _define_args():
     args_parser.add_argument('--local-transform-subpath',
                              dest='local_transform_subpath',
                              help='Local transformation dataset to be applied')
+    args_parser.add_argument('--transform-spacing',
+                             dest='transform_spacing',
+                             type=_floattuple,
+                             help='Transform spacing')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -125,8 +129,13 @@ def _run_apply_transform(args):
         cluster_client = Client(LocalCluster())
 
     # read local deform, but ignore attributes as they are not needed
-    local_deform, _ = io_utility.open(args.local_transform,
+    local_deform, local_deform_attrs = io_utility.open(args.local_transform,
                                       args.local_transform_subpath)
+    if args.transform_spacing:
+        transform_spacing = np.array(args.transform_spacing)[::-1] # xyz -> zyx
+    else:
+        transform_spacing = io_utility.get_voxel_spacing(local_deform_attrs)
+
 
     if (args.output_blocksize is not None and
         len(args.output_blocksize) > 0):
@@ -167,6 +176,7 @@ def _run_apply_transform(args):
             cluster_client,
             overlap_factor=args.blocks_overlap_factor,
             aligned_data=output_dataarray,
+            transform_spacing=transform_spacing,
         )
         return output_dataarray
     else:

@@ -17,6 +17,13 @@ def _inttuple(arg):
         return ()
 
 
+def _floattuple(arg):
+    if arg is not None and arg.strip():
+        return tuple([float(d) for d in arg.split(',')])
+    else:
+        return ()
+
+
 def _stringlist(arg):
     if arg is not None and arg.strip():
         return list(filter(lambda x: x, [s.strip() for s in arg.split(',')]))
@@ -31,12 +38,20 @@ def _define_args():
     args_parser.add_argument('--fixed-subpath',
                              dest='fixed_subpath',
                              help='Fixed image subpath')
+    args_parser.add_argument('--fixed-spacing',
+                             dest='fixed_spacing',
+                             type=_floattuple,
+                             help='Fixed image voxel spacing')
 
     args_parser.add_argument('--moving', dest='moving',
                              help='Path to the moving image')
     args_parser.add_argument('--moving-subpath',
                              dest='moving_subpath',
                              help='Moving image subpath')
+    args_parser.add_argument('--moving-spacing',
+                             dest='moving_spacing',
+                             type=_floattuple,
+                             help='Moving image voxel spacing')
 
     args_parser.add_argument('--affine-transformations',
                              dest='affine_transformations',
@@ -90,7 +105,10 @@ def _run_apply_transform(args):
 
     fix_data = ImageData(args.fixed, fix_subpath)
     mov_data = ImageData(args.moving, mov_subpath)
-
+    if args.fixed_spacing:
+        fix_data.voxel_spacing = np.array(args.fixed_spacing)[::-1] # xyz -> zyx
+    if args.moving_spacing:
+        mov_data.voxel_spacing = np.array(args.moving_spacing)[::-1] # xyz -> zyx
 
     print(f'Fixed volume: {fix_data}', flush=True)
     print(f'Moving volume: {mov_data}', flush=True)

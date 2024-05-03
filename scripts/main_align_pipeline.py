@@ -585,6 +585,11 @@ def _align_local_data(fix_path, fix_subpath,
           fix_path, fix_subpath, fix_shape, fix_voxel_spacing,
           flush=True)
 
+    if fix_attrs.get('downsamplingFactors'):
+        transform_downsampling = list(fix_attrs.get('downsamplingFactors')) + [1]
+    else:
+        transform_downsampling = None
+    transform_spacing = list(fix_voxel_spacing) + [1]
     if transform_path:
         transform = io_utility.create_dataset(
             transform_path,
@@ -592,9 +597,8 @@ def _align_local_data(fix_path, fix_subpath,
             fix_shape + (fix_ndim,),
             transform_blocksize + (fix_ndim,),
             np.float32,
-            # use the voxel spacing from the fix image
-            pixelResolution=list(fix_voxel_spacing),
-            downsamplingFactors=fix_attrs.get('downsamplingFactors'),
+            pixelResolution=transform_spacing,
+            downsamplingFactors=transform_downsampling,
         )
     else:
         transform = None
@@ -616,6 +620,7 @@ def _align_local_data(fix_path, fix_subpath,
         output_transform=transform,
         max_tasks=cluster_max_tasks,
     )
+
     if deform_ok and transform and inv_transform_path:
         inv_transform = io_utility.create_dataset(
             inv_transform_path,
@@ -623,9 +628,8 @@ def _align_local_data(fix_path, fix_subpath,
             fix_shape + (fix_ndim,),
             inv_transform_blocksize + (fix_ndim,),
             np.float32,
-            # use the voxel spacing from the fix image
-            pixelResolution=list(fix_voxel_spacing),
-            downsamplingFactors=fix_attrs.get('downsamplingFactors'),
+            pixelResolution=transform_spacing,
+            downsamplingFactors=transform_downsampling,
         )
         print('Calculate inverse transformation',
               f'{inv_transform_path}:{inv_transform_subpath}',

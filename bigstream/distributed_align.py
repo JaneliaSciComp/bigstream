@@ -64,7 +64,7 @@ def _prepare_compute_block_transform_params(block_info,
 
     # read masks
     fix_blockmask_coords, mov_blockmask_coords = None, None
-    if fix_fullmask_shape is not None:
+    if fix_fullmask_shape:
         ratio = np.array(fix_fullmask_shape) / fix_shape
         fix_mask_start = np.round(ratio * fix_block_voxel_coords[0]).astype(int)
         fix_mask_stop = np.round(
@@ -73,7 +73,7 @@ def _prepare_compute_block_transform_params(block_info,
                                      for a, b in zip(fix_mask_start,
                                                      fix_mask_stop))
 
-    if mov_fullmask_shape is not None:
+    if mov_fullmask_shape:
         ratio = np.array(mov_fullmask_shape) / mov_shape
         mov_mask_start = np.round(ratio * mov_start).astype(int)
         mov_mask_stop = np.round(ratio * mov_stop).astype(int)
@@ -442,10 +442,10 @@ def distributed_alignment_pipeline(
     # since they are already zarr arrays
 
     # determine fixed image slices for blocking
-    fix_shape = fix_image.shape
-    mov_shape = mov_image.shape
+    fix_shape_arr = fix_image.shape_arr
+    mov_shape_arr = mov_image.shape_arr
     block_partition_size = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix_shape) / block_partition_size).astype(int)
+    nblocks = np.ceil(np.array(fix_shape_arr) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
     
     fix_blocks_infos = []
@@ -453,14 +453,14 @@ def distributed_alignment_pipeline(
         start = block_partition_size * (i, j, k) - overlaps
         stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
-        stop = np.minimum(fix_shape, stop)
+        stop = np.minimum(fix_shape_arr, stop)
         block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
         if fix_mask is not None and fix_mask.has_data():
             start = block_partition_size * (i, j, k)
             stop = start + block_partition_size
-            ratio = np.array(fix_mask.shape) / fix_shape
+            ratio = np.array(fix_mask.shape) / fix_shape_arr
             start = np.round(ratio * start).astype(int)
             stop = np.round(ratio * stop).astype(int)
             mask_crop = fix_mask[tuple(slice(a, b)
@@ -477,17 +477,17 @@ def distributed_alignment_pipeline(
 
     print(f'{time.ctime(time.time())} Prepare params for',
           len(fix_blocks_infos), 
-          f'bocks for a {fix_shape} volume',
+          f'bocks for a {fix_shape_arr} volume',
           flush=True)
 
     prepare_blocks_method = functools.partial(
         _prepare_compute_block_transform_params,
-        fix_shape=fix_shape,
-        mov_shape=mov_shape,
+        fix_shape=fix_shape_arr,
+        mov_shape=mov_shape_arr,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
-        fix_fullmask_shape=fix_mask.shape,
-        mov_fullmask_shape=mov_mask.shape,
+        fix_fullmask_shape=fix_mask.shape_arr,
+        mov_fullmask_shape=mov_mask.shape_arr,
         static_transform_list=static_transform_list,
     )
 

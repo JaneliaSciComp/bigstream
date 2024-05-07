@@ -19,7 +19,7 @@ class ImageData:
         image_path = self.image_path if self.image_path else '???'
         subpath = self.image_subpath if self.image_subpath else ''
 
-        return f'{image_path}:{subpath} ({self.shape}) {self.voxel_spacing}'
+        return f'{image_path}:{subpath} {self.shape} {self.voxel_spacing}'
 
     def has_data(self):
         return self.shape is not None and len(self.shape) > 0
@@ -55,6 +55,14 @@ class ImageData:
             return (self.image_attrs.get('dimensions')
                     if self.image_attrs else ())
     
+    @property
+    def shape_arr(self):
+        s = self.shape
+        if s:
+            return np.array(s)
+        else:
+            None
+
     @property
     def dtype(self):
         if self.image_ndarray:

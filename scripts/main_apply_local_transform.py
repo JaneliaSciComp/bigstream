@@ -65,6 +65,10 @@ def _define_args():
     args_parser.add_argument('--local-transform-subpath',
                              dest='local_transform_subpath',
                              help='Local transformation dataset to be applied')
+    args_parser.add_argument('--transform-spacing',
+                             dest='transform_spacing',
+                             type=_floattuple,
+                             help='Transform spacing')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -127,6 +131,13 @@ def _run_apply_transform(args):
         cluster_client = Client(LocalCluster())
 
     local_deform_data = ImageData(args.local_transform, args.local_transform_subpath)
+    if args.transform_spacing:
+        local_deform_data.voxel_spacing = np.array(args.transform_spacing + (1,))[::-1]
+
+    if not local_deform_data.voxel_spacing:
+        local_deform_data.voxel_spacing = np.array(tuple(fix_data.voxel_spacing[::-1]) + (1,))[::-1]
+
+    print(f'!!!!!!! LOCAL DEFORM SPACING {local_deform_data.voxel_spacing} {local_deform_data.voxel_spacing[1:]}')
     transform_spacing = ()
     if (args.output_blocksize is not None and
         len(args.output_blocksize) > 0):
@@ -161,13 +172,14 @@ def _run_apply_transform(args):
             local_deform_data.read_image()
             all_transforms = affine_transforms_list + [local_deform_data.image_array]
             applied_transforms = applied_affines + [f'{local_deform_data}']
-            transform_spacing = transform_spacing + fix_data.voxel_spacing
+            transform_spacing = transform_spacing + local_deform_data.voxel_spacing[1:]
         else:
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines
 
         print('Apply', applied_transforms, ' to ',
-              args.moving, mov_subpath, '->', args.output, output_subpath)
+              args.moving, mov_subpath, '->', args.output, output_subpath,
+              'transform spacing: ', transform_spacing)
 
         distributed_apply_transform(
             fix_data, mov_data,

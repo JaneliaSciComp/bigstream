@@ -550,6 +550,11 @@ def _align_local_data(fix_image,
     print('Align moving data', mov_image, 'to reference', fix_image,
           flush=True)
 
+    if fix_image.get_attr('downsamplingFactors'):
+        transform_downsampling = list(fix_image.get_attr('downsamplingFactors')) + [1]
+    else:
+        transform_downsampling = None
+    transform_spacing = list(fix_image.voxel_spacing) + [1]
     if transform_path:
         transform = io_utility.create_dataset(
             transform_path,
@@ -557,6 +562,8 @@ def _align_local_data(fix_image,
             fix_shape + (fix_ndim,),
             transform_blocksize + (fix_ndim,),
             np.float32,
+            pixelResolution=transform_spacing,
+            downsamplingFactors=transform_downsampling, 
         )
     else:
         transform = None
@@ -587,6 +594,8 @@ def _align_local_data(fix_image,
             fix_shape + (fix_ndim,),
             inv_transform_blocksize + (fix_ndim,),
             np.float32,
+            pixelResolution=transform_spacing,
+            downsamplingFactors=transform_downsampling,            
         )
         print('Calculate inverse transformation',
               f'{inv_transform_path}:{inv_transform_subpath}',

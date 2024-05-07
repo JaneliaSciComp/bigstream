@@ -11,10 +11,17 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                    **kwargs):
     try:
         real_container_path = os.path.realpath(container_path)
-        n5_store = zarr.N5Store(real_container_path)
+        path_comps = os.path.splitext(container_path)
+
+        container_ext = path_comps[1]
+
+        if container_ext == '.zarr':
+            store = real_container_path
+        else:
+            store = zarr.N5Store(real_container_path)
         if container_subpath:
             print('Create dataset', container_path, container_subpath)
-            container_root = zarr.open_group(store=n5_store, mode='a')
+            container_root = zarr.open_group(store=store, mode='a')
             dataset = container_root.require_dataset(
                 container_subpath,
                 shape=shape,
@@ -26,7 +33,7 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             return dataset
         else:
             print('Create root array', container_path)
-            return zarr.open(store=n5_store, mode='a',
+            return zarr.open(store=store, mode='a',
                              shape=shape, chunks=chunks)
     except Exception as e:
         print('Error creating a dataset at', container_path, container_subpath,

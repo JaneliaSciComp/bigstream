@@ -288,118 +288,103 @@ def _extract_align_pipeline(config_filename, context, steps):
 def _run_global_alignment(args, steps):
     print('Run global registration with:', args, steps, flush=True)
     # Read the global inputs
-    print(f'Open fix vol {args.fix} {args.fix_subpath}',
-            'for global registration',
+    fix = ImageData(args.fix, args.fix_subpath)
+    print(f'Open fix vol {fix} for global registration',
             flush=True)
-    fix_arraydata, fix_attrs = io_utility.open(args.fix, args.fix_subpath)
-    print(f'Open moving vol {args.mov} {args.mov_subpath}',
-            'for global registration',
+    mov = ImageData(args.mov, args.mov_subpath)
+    print(f'Open moving vol {mov} for global registration',
             flush=True)
-    mov_arraydata, mov_attrs = io_utility.open(args.mov, args.mov_subpath)
     # get voxel spacing for fix and moving volume
     if args.fix_spacing:
-        fix_voxel_spacing = np.array(args.fix_spacing)[::-1] # xyz -> zyx
-    else:
-        fix_voxel_spacing = io_utility.get_voxel_spacing(fix_attrs)
+        fix.voxel_spacing = np.array(args.fix_spacing)[::-1] # xyz -> zyx
     if args.mov_spacing:
-        mov_voxel_spacing = np.array(args.mov_spacing)[::-1] # xyz -> zyx
+        mov.voxel_spacing = np.array(args.mov_spacing)[::-1] # xyz -> zyx
     elif args.fix_spacing: # fix voxel spacing were specified - use the same for moving vol
-        mov_voxel_spacing = fix_voxel_spacing
-    else:
-        mov_voxel_spacing = io_utility.get_voxel_spacing(mov_attrs)
+        mov.voxel_spacing = fix.voxel_spacing
 
     print('Global alignment - fixed volume attributes:',
-          fix_arraydata.shape, fix_attrs, fix_voxel_spacing, flush=True)
+          fix.shape, fix.attrs, fix.voxel_spacing, flush=True)
     print('Global alignment - moving volume attributes:',
-          mov_arraydata.shape, mov_attrs, mov_voxel_spacing, flush=True)
+          mov.shape, mov.attrs, mov.voxel_spacing, flush=True)
 
-    if args.fix_mask:
-        fix_maskarray, _ = io_utility.open(args.fix_mask,
-                                           args.fix_mask_subpath)
-    else:
-        fix_maskarray = None
+    fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath)
+    mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath)
 
-    if args.mov_mask:
-        mov_maskarray, _ = io_utility.open(args.mov_mask,
-                                           args.mov_mask_subpath)
-    else:
-        mov_maskarray = None
+    if fix.has_data() and mov.has_data():
+        transform, alignment = _align_global_data(
+            fix, fix_mask,
+            mov, mov_mask,
+            steps)
 
-    transform, alignment = _align_global_data(
-        fix_arraydata,
-        mov_arraydata[...],
-        fix_voxel_spacing,
-        mov_voxel_spacing,
-        steps,
-        fix_maskarray,
-        mov_maskarray)
-
-    transform_file = args.transform_path()
-    if transform_file:
-        print('Save global transformation to', transform_file)
-        np.savetxt(transform_file, transform)
-    else:
-        print('Skip saving global transformation')
-
-    inv_transform_file = args.inv_transform_path()
-    if inv_transform_file:
-        try:
-            inv_transform = np.linalg.inv(transform)
-            print('Save global inverse transformation to', inv_transform_file)
-            np.savetxt(inv_transform_file, inv_transform)
-        except Exception:
-            print('Global transformation', transform, 'is not invertible')
-
-    else:
-        print('Skip saving global inverse transformation')
-
-    align_path = args.align_path()
-    if align_path:
-        if args.align_blocksize:
-            align_blocksize = args.align_blocksize[::-1]
+        transform_file = args.transform_path()
+        if transform_file:
+            print('Save global transformation to', transform_file)
+            np.savetxt(transform_file, transform)
         else:
-            align_blocksize = (128,) * alignment.ndim
+            print('Skip saving global transformation')
 
-        print('Save global aligned volume to', align_path,
-              'with blocksize', align_blocksize)
+        inv_transform_file = args.inv_transform_path()
+        if inv_transform_file:
+            try:
+                inv_transform = np.linalg.inv(transform)
+                print('Save global inverse transformation to', inv_transform_file)
+                np.savetxt(inv_transform_file, inv_transform)
+            except Exception:
+                print('Global transformation', transform, 'is not invertible')
 
-        io_utility.create_dataset(
-            align_path,
-            args.align_dataset(),
-            alignment.shape,
-            align_blocksize,
-            alignment.dtype,
-            data=alignment,
-            pixelResolution=list(mov_voxel_spacing),
-            downsamplingFactors=mov_attrs.get('downsamplingFactors'),
-        )
+        else:
+            print('Skip saving global inverse transformation')
+
+        align_path = args.align_path()
+        if align_path:
+            if args.align_blocksize:
+                align_blocksize = args.align_blocksize[::-1]
+            else:
+                align_blocksize = (128,) * alignment.ndim
+
+            print('Save global aligned volume to', align_path,
+                'with blocksize', align_blocksize)
+
+            io_utility.create_dataset(
+                align_path,
+                args.align_dataset(),
+                alignment.shape,
+                align_blocksize,
+                alignment.dtype,
+                data=alignment,
+                pixelResolution=list(mov.voxel_spacing),
+                downsamplingFactors=mov.get_attr('downsamplingFactors'),
+            )
+        else:
+            print('Skip saving lowres aligned volume')
+
+        return transform
     else:
-        print('Skip saving lowres aligned volume')
+        print('Skip global alignment - both fix and moving image are needed')
+        return None
 
-    return transform
 
-
-def _align_global_data(fix_data,
-                       mov_data,
-                       fix_spacing,
-                       mov_spacing,
-                       steps,
-                       fix_mask,
-                       mov_mask):
+def _align_global_data(fix_data, fix_mask_data,
+                       mov_data, mov_mask_data,
+                       steps):
     print('Run low res alignment:', steps, flush=True)
-    affine = alignment_pipeline(fix_data,
-                                mov_data,
-                                fix_spacing,
-                                mov_spacing,
+    fix_data.read_image()
+    mov_data.read_image()
+    fix_mask_data.read_image()
+    mov_mask_data.read_image()
+    affine = alignment_pipeline(fix_data.image_array,
+                                mov_data.image_array,
+                                fix_data.voxel_spacing,
+                                mov_data.voxel_spacing,
                                 steps,
-                                fix_mask=fix_mask,
-                                mov_mask=mov_mask)
+                                fix_mask=fix_mask_data.image_array,
+                                mov_mask=mov_mask_data.image_array)
     print('Apply affine transform', flush=True)
     # apply transform
-    aligned = apply_transform(fix_data,
-                              mov_data,
-                              fix_spacing,
-                              mov_spacing,
+    aligned = apply_transform(fix_data.image_array,
+                              mov_data.image_array,
+                              fix_data.voxel_spacing,
+                              mov_data.voxel_spacing,
                               transform_list=[affine,])
 
     return affine, aligned
@@ -543,7 +528,7 @@ def _align_local_data(fix_image,
                       steps,
                       processing_size,
                       processing_overlap_factor,
-                      global_transforms_list,
+                      global_affine_transforms,
                       transform_path,
                       transform_subpath,
                       transform_blocksize,
@@ -561,16 +546,10 @@ def _align_local_data(fix_image,
 
     fix_shape = fix_image.shape
     fix_ndim = fix_image.ndim
-    mov_shape = mov_image.shape
 
     print('Align moving data', mov_image, 'to reference', fix_image,
           flush=True)
 
-    if fix_image.get_attr('downsamplingFactors'):
-        transform_downsampling = list(fix_image.get_attr('downsamplingFactors')) + [1]
-    else:
-        transform_downsampling = None
-    transform_spacing = list(fix_image.voxel_spacing) + [1]
     if transform_path:
         transform = io_utility.create_dataset(
             transform_path,
@@ -578,27 +557,28 @@ def _align_local_data(fix_image,
             fix_shape + (fix_ndim,),
             transform_blocksize + (fix_ndim,),
             np.float32,
-            pixelResolution=transform_spacing,
-            downsamplingFactors=transform_downsampling,
         )
     else:
         transform = None
     print('Calculate transformation', transform_path, 'for local alignment of',
           mov_image, 'to reference', fix_image,
           flush=True)
-    deform_ok = distributed_alignment_pipeline(
-        fix_image, mov_image,
-        fix_image.voxel_spacing, mov_image.voxel_spacing,
-        steps,
-        processing_size, # parallelize on processing size
-        cluster_client,
-        overlap_factor=processing_overlap_factor,
-        fix_mask=fix_mask,
-        mov_mask=mov_mask,
-        static_transform_list=global_transforms_list,
-        output_transform=transform,
-        max_tasks=cluster_max_tasks,
-    )
+    if fix_image.has_data() and mov_image.has_data():
+        deform_ok = distributed_alignment_pipeline(
+            fix_image, mov_image,
+            fix_image.voxel_spacing, mov_image.voxel_spacing,
+            steps,
+            processing_size, # parallelize on processing size
+            cluster_client,
+            overlap_factor=processing_overlap_factor,
+            fix_mask=fix_mask,
+            mov_mask=mov_mask,
+            static_transform_list=global_affine_transforms,
+            output_transform=transform,
+            max_tasks=cluster_max_tasks,
+        )
+    else:
+        deform_ok = False
 
     if deform_ok and transform and inv_transform_path:
         inv_transform = io_utility.create_dataset(
@@ -607,8 +587,6 @@ def _align_local_data(fix_image,
             fix_shape + (fix_ndim,),
             inv_transform_blocksize + (fix_ndim,),
             np.float32,
-            pixelResolution=transform_spacing,
-            downsamplingFactors=transform_downsampling,
         )
         print('Calculate inverse transformation',
               f'{inv_transform_path}:{inv_transform_subpath}',
@@ -632,7 +610,7 @@ def _align_local_data(fix_image,
             max_tasks=cluster_max_tasks,
         )
 
-    if deform_ok and align_path:
+    if (deform_ok or global_affine_transforms) and align_path:
         # Apply local transformation only if 
         # highres aligned output name is set
         align = io_utility.create_dataset(
@@ -651,11 +629,15 @@ def _align_local_data(fix_image,
               '->',
               f'{align_path}:{align_subpath}',
               flush=True)
+        if deform_ok:
+            deform_transforms = [transform]
+        else:
+            deform_transforms = []
         distributed_apply_transform(
             fix_image, mov_image,
             fix_image.voxel_spacing, mov_image.voxel_spacing,
             align_blocksize, # use block chunk size for distributing work
-            global_transforms_list + [transform], # transform_list
+            global_affine_transforms + deform_transforms, # transform_list
             cluster_client,
             overlap_factor=processing_overlap_factor,
             aligned_data=align,

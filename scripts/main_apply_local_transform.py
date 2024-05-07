@@ -33,22 +33,24 @@ def _stringlist(arg):
 
 def _define_args():
     args_parser = argparse.ArgumentParser(description='Apply transformation')
-    args_parser.add_argument('--fixed', dest='fixed',
+    args_parser.add_argument('--fix', '--fixed',
+                             dest='fixed',
                              help='Path to the fixed image')
-    args_parser.add_argument('--fixed-subpath',
+    args_parser.add_argument('--fix-subpath', '--fixed-subpath',
                              dest='fixed_subpath',
                              help='Fixed image subpath')
-    args_parser.add_argument('--fixed-spacing',
+    args_parser.add_argument('--fix-spacing', '--fixed-spacing',
                              dest='fixed_spacing',
                              type=_floattuple,
                              help='Fixed image voxel spacing')
 
-    args_parser.add_argument('--moving', dest='moving',
+    args_parser.add_argument('--mov', '--moving',
+                             dest='moving',
                              help='Path to the moving image')
-    args_parser.add_argument('--moving-subpath',
+    args_parser.add_argument('--mov-subpath', '--moving-subpath',
                              dest='moving_subpath',
                              help='Moving image subpath')
-    args_parser.add_argument('--moving-spacing',
+    args_parser.add_argument('--mov-spacing', '--moving-spacing',
                              dest='moving_spacing',
                              type=_floattuple,
                              help='Moving image voxel spacing')
@@ -63,10 +65,6 @@ def _define_args():
     args_parser.add_argument('--local-transform-subpath',
                              dest='local_transform_subpath',
                              help='Local transformation dataset to be applied')
-    args_parser.add_argument('--transform-spacing',
-                             dest='transform_spacing',
-                             type=_floattuple,
-                             help='Transform spacing')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -128,15 +126,8 @@ def _run_apply_transform(args):
     else:
         cluster_client = Client(LocalCluster())
 
-    # read local deform, but ignore attributes as they are not needed
-    local_deform, local_deform_attrs = io_utility.open(args.local_transform,
-                                      args.local_transform_subpath)
-    if args.transform_spacing:
-        transform_spacing = np.array(args.transform_spacing)[::-1] # xyz -> zyx
-    else:
-        transform_spacing = io_utility.get_voxel_spacing(local_deform_attrs)
-
-
+    local_deform_data = ImageData(args.local_transform, args.local_transform_subpath)
+    transform_spacing = ()
     if (args.output_blocksize is not None and
         len(args.output_blocksize) > 0):
         output_blocks = args.output_blocksize[::-1] # make it zyx
@@ -158,21 +149,31 @@ def _run_apply_transform(args):
         if args.affine_transformations:
             print('Affine transformations arg:', args.affine_transformations,
                   flush=True)
+            applied_affines = [args.affine_transformations]
             affine_transforms_list = [np.loadtxt(tfile)
                                       for tfile in args.affine_transformations]
+            transform_spacing = transform_spacing + (None,)
         else:
+            applied_affines = []
             affine_transforms_list = []
 
-        all_transforms = (args.affine_transformations +
-                          [(args.local_transform, args.local_transform_subpath)])
-        print('Apply', all_transforms, ' to ',
+        if local_deform_data.has_data():
+            local_deform_data.read_image()
+            all_transforms = affine_transforms_list + [local_deform_data.image_array]
+            applied_transforms = applied_affines + [f'{local_deform_data}']
+            transform_spacing = transform_spacing + fix_data.voxel_spacing
+        else:
+            all_transforms = affine_transforms_list
+            applied_transforms = applied_affines
+
+        print('Apply', applied_transforms, ' to ',
               args.moving, mov_subpath, '->', args.output, output_subpath)
 
         distributed_apply_transform(
             fix_data, mov_data,
             fix_data.voxel_spacing, mov_data.voxel_spacing,
             output_blocks, # use block chunk size for distributing the work
-            affine_transforms_list + [local_deform], # transform_list
+            all_transforms, # transform_list
             cluster_client,
             overlap_factor=args.blocks_overlap_factor,
             aligned_data=output_dataarray,

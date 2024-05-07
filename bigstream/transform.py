@@ -96,7 +96,13 @@ def apply_transform(
 
     # set global number of threads
     ncores = ut.get_number_of_cores()
-    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(2*ncores)
+    if 'ITK_THREADS' in os.environ:
+        nthreads = int(os.environ["ITK_THREADS"])
+    elif 'NO_HYPERTHREADING' in os.environ:
+        nthreads = ncores
+    else:
+        nthreads = 2*ncores
+    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(nthreads)
 
     # format transform spacing
     fix_spacing = np.array(fix_spacing)
@@ -116,7 +122,7 @@ def apply_transform(
 
     # set up resampler object
     resampler = sitk.ResampleImageFilter()
-    resampler.SetNumberOfThreads(2*ncores)
+    resampler.SetNumberOfThreads(nthreads)
 
     # set reference data
     if isinstance(fix, tuple):

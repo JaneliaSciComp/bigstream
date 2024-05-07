@@ -1,6 +1,6 @@
 import numpy as np
 
-from .io_utility import read_attributes, get_voxel_spacing
+from .io_utility import open as img_open, read_attributes, get_voxel_spacing
 
 
 class ImageData:
@@ -22,13 +22,17 @@ class ImageData:
         return f'{image_path}:{subpath} ({self.shape}) {self.voxel_spacing}'
 
     def has_data(self):
-        return self.shape is not None
+        return self.shape is not None and len(self.shape) > 0
 
     def read_attrs(self):
         if self.image_path:
             self.image_attrs = read_attributes(self.image_path, self.image_subpath)
-        return self.image_attrs
     
+    def read_image(self):
+        if self.image_path:
+            self.image_ndarray, self.image_attrs = img_open(self.image_path,
+                                                            self.image_subpath)
+
     @property
     def attrs(self):
         return self.image_attrs
@@ -49,7 +53,7 @@ class ImageData:
             return self.image_ndarray.shape
         else:
             return (self.image_attrs.get('dimensions')
-                    if self.image_attrs else None)
+                    if self.image_attrs else ())
     
     @property
     def dtype(self):
@@ -61,7 +65,7 @@ class ImageData:
 
     @property
     def ndim(self):
-        return len(self.shape) if self.shape else None
+        return len(self.shape) if self.shape else 0
 
     @property
     def voxel_spacing(self):

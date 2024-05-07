@@ -172,7 +172,7 @@ def _run_apply_transform(args):
             local_deform_data.read_image()
             all_transforms = affine_transforms_list + [local_deform_data.image_array]
             applied_transforms = applied_affines + [f'{local_deform_data}']
-            transform_spacing = transform_spacing + local_deform_data.voxel_spacing[1:]
+            transform_spacing = transform_spacing + (local_deform_data.voxel_spacing[1:],)
         else:
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines

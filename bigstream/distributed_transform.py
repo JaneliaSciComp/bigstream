@@ -82,10 +82,10 @@ def distributed_apply_transform(
     """
 
     # get overlap and number of blocks
-    fix_shape = fix_image.shape
-    mov_shape = mov_image.shape
+    fix_shape_arr = fix_image.shape_arr
+    mov_shape_arr = mov_image.shape_arr
     blocksize_array = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix_shape) / blocksize_array).astype(int)
+    nblocks = np.ceil(np.array(fix_shape_arr) / blocksize_array).astype(int)
     overlaps = np.round(blocksize_array * overlap_factor).astype(int)
 
     # ensure there's a 1:1 correspondence between transform spacing 
@@ -109,7 +109,7 @@ def distributed_apply_transform(
         start = blocksize_array * (i, j, k) - overlaps
         stop = start + blocksize_array + 2 * overlaps
         start = np.maximum(0, start)
-        stop = np.minimum(fix_shape, stop)
+        stop = np.minimum(fix_shape_arr, stop)
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
         blocks_coords.append(block_coords)
 
@@ -130,7 +130,7 @@ def distributed_apply_transform(
             _transform_single_block,
             fix_block_reader,
             mov_block_reader,
-            full_mov_shape=mov_shape,
+            full_mov_shape=mov_shape_arr,
             fix_spacing=fix_spacing,
             mov_spacing=mov_spacing,
             blocksize=blocksize_array,

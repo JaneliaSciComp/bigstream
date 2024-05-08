@@ -115,6 +115,8 @@ def _run_apply_transform(args):
         fix_data.voxel_spacing = np.array(args.fixed_spacing)[::-1] # xyz -> zyx
     if args.moving_spacing:
         mov_data.voxel_spacing = np.array(args.moving_spacing)[::-1] # xyz -> zyx
+    elif args.fixed_spacing:
+        mov_data.voxel_spacing = fix_data.voxel_spacing
 
     print(f'Fixed volume: {fix_data}', flush=True)
     print(f'Moving volume: {mov_data}', flush=True)
@@ -178,7 +180,7 @@ def _run_apply_transform(args):
             applied_transforms = applied_affines
 
         print('Apply', applied_transforms, ' to ',
-              args.moving, mov_subpath, '->', args.output, output_subpath,
+              mov_data, '->', args.output, output_subpath,
               'transform spacing: ', transform_spacing)
 
         distributed_apply_transform(

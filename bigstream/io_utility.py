@@ -20,7 +20,7 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
         else:
             store = zarr.N5Store(real_container_path)
         if container_subpath:
-            print('Create dataset', container_path, container_subpath)
+            print('Create dataset', container_path, container_subpath, kwargs)
             container_root = zarr.open_group(store=store, mode='a')
             dataset = container_root.require_dataset(
                 container_subpath,

@@ -32,9 +32,12 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             dataset.attrs.update(**kwargs)
             return dataset
         else:
-            print('Create root array', container_path)
-            return zarr.open(store=store, mode='a',
-                             shape=shape, chunks=chunks)
+            print('Create root array', container_path, kwargs)
+            zarr_data = zarr.open(store=store, mode='a',
+                                  shape=shape, chunks=chunks)
+            # set additional attributes
+            zarr_data.attrs.update(**kwargs)
+            return zarr_data
     except Exception as e:
         print('Error creating a dataset at', container_path, container_subpath,
               e)

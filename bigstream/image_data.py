@@ -11,6 +11,7 @@ class ImageData:
         self.image_subpath = image_subpath
         self.image_ndarray = image_arraydata
         self.image_voxel_spacing = None
+        self.image_downsampling = None
         self.image_attrs = None
         if with_attrs:
             self.read_attrs()
@@ -84,6 +85,22 @@ class ImageData:
         else:
             return None
 
-    @voxel_spacing.setter    
+    @voxel_spacing.setter
     def voxel_spacing(self, value):
         self.image_voxel_spacing = value
+
+    @property
+    def downsampling(self):
+        image_downsampling = None
+        if self.image_downsampling is not None:
+            image_downsampling = self.image_downsampling
+        elif self.attrs and self.attrs.get('downsamplingFactors'):
+            image_downsampling = np.array(self.attrs.get('downsamplingFactors'))
+        if not image_downsampling:
+            image_downsampling = np.array((1,) * self.ndim)
+
+        return image_downsampling
+
+    @downsampling.setter
+    def downsampling(self, value):
+        self.image_downsampling = value

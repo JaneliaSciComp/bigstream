@@ -84,7 +84,10 @@ def get_voxel_spacing(attrs):
         voxel_spacing = (np.array(attrs['pixelResolution']) * 
                          np.array(attrs['downsamplingFactors']))
     elif attrs.get('pixelResolution'):
-        voxel_spacing = np.array(attrs['pixelResolution']['dimensions'])
+        if attrs.get('pixelResolution').get('dimensions'):
+            voxel_spacing = np.array(attrs['pixelResolution']['dimensions'])
+        else:
+            voxel_spacing = np.array(attrs['pixelResolution'])
     else:
         voxel_spacing = None
     # put in zyx order if found

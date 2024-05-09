@@ -134,12 +134,12 @@ def _run_apply_transform(args):
 
     local_deform_data = ImageData(args.local_transform, args.local_transform_subpath)
     if args.transform_spacing:
-        local_deform_data.voxel_spacing = np.array(args.transform_spacing + (1,))[::-1]
+        local_deform_data.voxel_spacing = np.array((1,) + args.transform_spacing)[::-1]
 
     if not local_deform_data.voxel_spacing:
-        local_deform_data.voxel_spacing = np.array(tuple(fix_data.voxel_spacing[::-1]) + (1,))[::-1]
+        local_deform_data.voxel_spacing = np.array((1,) + tuple(fix_data.voxel_spacing[::-1]))[::-1]
 
-    print(f'!!!!!!! LOCAL DEFORM SPACING {local_deform_data.voxel_spacing} {local_deform_data.voxel_spacing[1:]}')
+    print(f'!!!!!!! LOCAL DEFORM SPACING {local_deform_data.voxel_spacing} {local_deform_data.voxel_spacing[:local_deform_data.ndim-1]}')
     transform_spacing = ()
     if (args.output_blocksize is not None and
         len(args.output_blocksize) > 0):
@@ -174,7 +174,7 @@ def _run_apply_transform(args):
             local_deform_data.read_image()
             all_transforms = affine_transforms_list + [local_deform_data.image_array]
             applied_transforms = applied_affines + [f'{local_deform_data}']
-            transform_spacing = transform_spacing + (local_deform_data.voxel_spacing[1:],)
+            transform_spacing = transform_spacing + (local_deform_data.voxel_spacing[:local_deform_data.ndim-1],)
         else:
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines

@@ -550,8 +550,8 @@ def _align_local_data(fix_image,
     print('Align moving data', mov_image, 'to reference', fix_image,
           flush=True)
 
-    transform_downsampling = list(fix_image.downsampling) + [1]
-    transform_spacing = list(fix_image.voxel_spacing) + [1]
+    transform_downsampling = [1] + list(fix_image.downsampling)
+    transform_spacing = [1] + list(fix_image.voxel_spacing)
     if transform_path:
         transform = io_utility.create_dataset(
             transform_path,

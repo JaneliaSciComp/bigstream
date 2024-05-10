@@ -18,6 +18,23 @@ interpolator_switch = {
 }
 
 
+# default optimizer args
+default_its = 100
+default_step = 0.25
+default_optimizer_args = {
+    'A':{'simplexDelta':1., 'numberOfIterations':default_its},
+    'CGLS':{'learningRate':default_step, 'numberOfIterations':default_its},
+    'E':{'numberOfSteps':default_its},
+    'GD':{'learningRate':default_step, 'numberOfIterations':default_its},
+    'GDLS':{'learningRate':default_step, 'numberOfIterations':default_its},
+    'LBFGS2':{},
+    'LBFGSB':{},
+    'OPOE':{},
+    'P':{},
+    'RSGD':{'learningRate':default_step, 'minStep':0., 'numberOfIterations':default_its},
+}
+
+
 def configure_irm(
     metric='MMI',
     optimizer='RSGD',
@@ -182,6 +199,7 @@ def configure_irm(
         'P':irm.SetOptimizerAsPowell,
         'RSGD':irm.SetOptimizerAsRegularStepGradientDescent,
     }
+    optimizer_args = {**default_optimizer_args[optimizer], **optimizer_args}
     optimizer_switch[optimizer](**optimizer_args)
     irm.SetOptimizerScalesFromPhysicalShift()
     if optimizer == 'E':

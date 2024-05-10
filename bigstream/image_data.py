@@ -96,7 +96,7 @@ class ImageData:
             image_downsampling = self.image_downsampling
         elif self.attrs and self.attrs.get('downsamplingFactors'):
             image_downsampling = np.array(self.attrs.get('downsamplingFactors'))
-        if not image_downsampling:
+        if image_downsampling is None:
             image_downsampling = np.array((1,) * self.ndim)
 
         return image_downsampling

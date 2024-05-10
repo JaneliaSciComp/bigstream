@@ -35,6 +35,18 @@ default_optimizer_args = {
 }
 
 
+# default metric args
+# only one metric has a required parameter, so this is a bit silly
+default_metric_args = {
+    'ANC':{'radius':12},
+    'C':{},
+    'D':{},
+    'JHMI':{},
+    'MMI':{},
+    'MS':{},
+}
+
+
 def configure_irm(
     metric='MMI',
     optimizer='RSGD',
@@ -174,6 +186,7 @@ def configure_irm(
         'MMI':irm.SetMetricAsMattesMutualInformation,
         'MS':irm.SetMetricAsMeanSquares,
     }
+    metric_args = {**default_metric_args[metric], **metric_args}
     metric_switch[metric](**metric_args)
 
     # sampling switch

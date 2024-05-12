@@ -168,7 +168,8 @@ def _run_apply_transform(args):
             applied_affines = [args.affine_transformations]
             affine_transforms_list = [np.loadtxt(tfile)
                                       for tfile in args.affine_transformations]
-            transform_spacing = transform_spacing + (None,)
+            affine_spacing = (1.,) * mov_data.ndim
+            transform_spacing = transform_spacing + (affine_spacing,)
         else:
             applied_affines = []
             affine_transforms_list = []

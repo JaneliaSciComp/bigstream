@@ -460,9 +460,13 @@ def feature_point_ransac_affine_align(
           flush=True)
     if len(fix_spots) < fix_spots_count_threshold:
         print(f'{time.ctime(time.time())}',
-              'insufficient fixed spots found, returning default',
+              'insufficient fixed spots found',
               flush=True)
-        return default
+        if safeguard_exceptions:
+            raise ValueError('fix spot detection safeguard failed')
+        else:
+            print('returning default', flush=True)
+            return default
 
     # get mov spots
     print(f'{time.ctime(time.time())} computing moving spots', flush=True)
@@ -479,14 +483,17 @@ def feature_point_ransac_affine_align(
             mask=mov_mask,
             **mov_kwargs,
         )
-
     print(f'{time.ctime(time.time())} found {len(mov_spots)} moving spots',
           flush=True)
     if len(mov_spots) < mov_spots_count_threshold:
         print(f'{time.ctime(time.time())}',
-              'insufficient moving spots found, returning default',
+              'insufficient moving spots found',
               flush=True)
-        return default
+        if safeguard_exceptions:
+            raise ValueError('mov spot detection safeguard failed')
+        else:
+            print('returning default', flush=True)
+            return default
 
     # sort
     print(f'{time.ctime(time.time())} sorting spots', flush=True)
@@ -521,9 +528,13 @@ def feature_point_ransac_affine_align(
           flush=True)
     if len(fix_spots) < point_matches_threshold or len(mov_spots) < point_matches_threshold:
         print(f'{time.ctime(time.time())}',
-              'insufficient point matches found, returning default',
+              'insufficient point matches found',
               flush=True)
-        return default
+        if safeguard_exceptions:
+            raise ValueError('point matches safeguard failed')
+        else:
+            print('returning default', flush=True)
+            return default
 
     # align
     print(f'{time.ctime(time.time())}',
@@ -541,9 +552,13 @@ def feature_point_ransac_affine_align(
     # ensure affine is sensible
     if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
         print(f'{time.ctime(time.time())}',
-              'Degenerate affine produced, returning default',
+              'Degenerate affine produced',
               flush=True)
-        return default
+        if safeguard_exceptions:
+            raise ValueError('diagonal_constraint safeguard failed')
+        else:
+            print('returning default', flush=True)
+            return default
 
     # augment matrix and return
     affine = np.eye(fix.ndim + 1)

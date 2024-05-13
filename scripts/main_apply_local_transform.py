@@ -174,7 +174,7 @@ def _run_apply_transform(args):
             applied_affines = []
             affine_transforms_list = []
 
-        print(f'Check if {local_deform_data}' has data)
+        print(f'Check if {local_deform_data} has data')
         if local_deform_data.has_data():
             print(f'Read image for {local_deform_data}')
             local_deform_data.read_image()

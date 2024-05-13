@@ -104,3 +104,11 @@ class ImageData:
     @downsampling.setter
     def downsampling(self, value):
         self.image_downsampling = value
+
+    @property
+    def downsampled_voxel_resolution(self):
+        voxel_spacing = self.voxel_spacing
+        if voxel_spacing is not None:
+            return self.voxel_spacing / self.downsampling
+        else:
+            return None

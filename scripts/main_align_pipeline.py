@@ -551,7 +551,7 @@ def _align_local_data(fix_image,
           flush=True)
 
     transform_downsampling = [1] + list(fix_image.downsampling)
-    transform_spacing = [1] + list(fix_image.voxel_spacing)
+    transform_spacing = [1] + list(fix_image.downsampled_voxel_resolution)
     if transform_path:
         transform = io_utility.create_dataset(
             transform_path,

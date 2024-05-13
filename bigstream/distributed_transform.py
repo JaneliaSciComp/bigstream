@@ -195,9 +195,9 @@ def _transform_single_block(fix_block_read_method,
     """
     Block transform function
     """
-    print('Transform block: ', block_coords,
-          fix_spacing, mov_spacing,
-          blocksize, blockoverlaps,
+    print(f'Transform block: {block_coords}',
+          f'Spacing(fix/mov): {fix_spacing}/{mov_spacing}',
+          f'Blocksize: {blocksize}, overlaps: {blockoverlaps}',
           flush=True)
     # fetch fixed image slices and read fix
     fix_origin = fix_spacing * [s.start for s in block_coords]

@@ -212,6 +212,7 @@ def feature_point_ransac_affine_align(
     fix_spacing,
     mov_spacing,
     blob_sizes,
+    safeguard_exceptions=True,
     alignment_spacing=None,
     num_sigma_max=15,
     cc_radius=12,
@@ -244,16 +245,12 @@ def feature_point_ransac_affine_align(
     correlation. A ransac filter determines the affine transform that brings
     the largest number of corresponding points to the same locations.
 
-    At least 100 spots must be found in the fixed image and 100 spots
-    in the moving image, otherwise default is returned. At least 50
-    correspondence pairs must be found, otherwise default is returned.
-    These constraints are required for reasonable performance from the
-    ransac affine alignment algorithm.
-
-    If insufficient points are found modify fix_spot_detection_kwargs
-    and/or mov_spot_detection_kwargs. See bigstream.features.
-
-    If insufficient point matches are found, modify match_threshold.
+    Several safeguards are implemented to ensure degenerate or poorly behaved
+    affines won't be returned. If your alignment is returning a ValueError,
+    then likely one of the safeguards is being triggered. See the
+    safeguard_exceptions parameter description below for more information.
+    When running this function as part of the distributed pipeline,
+    safeguard_exceptions is set to False automatically.
 
     Parameters
     ----------
@@ -274,7 +271,39 @@ def feature_point_ransac_affine_align(
         Length must equal `mov.ndim`
 
     blob_sizes : list of two floats
-        The [minimum, maximum] size of feature point objects in voxel units
+        The [minimum, maximum] size of feature point objects in voxel units.
+        These are radii; so if your data contains features that are 10 voxels
+        diameter on average, a reasonable value for this parameter would be
+        [3, 7] (symmetric about a radius of 5).
+
+    safeguard_exceptions : bool (default: True)
+        When this value is True, a failed safeguard test will return a
+        ValueError and a message indicating which safeguard failed.
+        This behavior is desired when working with one image at a time.
+
+        When this value if False, a failed safeguard test will print
+        a warning message, but return the identity transform without
+        throwing an exception. This behavior is desired when working
+        with many images (or tiles/blocks) at the same time.
+
+        Feature point detection and correspondence estimation are noisy
+        algorithms. Even with ransac, it is possible that insufficient
+        point detections or poor correspondence estimation will result
+        in a poor affine. Several safeguards are on by default to prevent
+        the return of a bad affine transform. These include:
+
+            * too few spots found in fix or moving image
+            * too few correspondences are identified between fix and moving spots
+            * an affine that is too far from identity is produced
+
+        These safeguards can all be relaxed through parameters described
+        below.
+
+    alignment_spacing : float (default: None)
+        Fixed and moving images are skip sampled to a voxel spacing
+        as close as possible to this value. Many alignments can be solved
+        at far lower resolution than the collected data. This parameter
+        can significantly speed up computation.
 
     num_sigma_max : scalar int (default: 15)
         The maximum number of laplacians to use in the feature point LoG detector
@@ -289,7 +318,9 @@ def feature_point_ransac_affine_align(
 
     match_threshold : scalar float in range [0, 1] (default: 0.7)
         The minimum correlation two feature point neighborhoods must have to
-        consider them corresponding points
+        consider them corresponding points. This number can vary significantly
+        with input data quality. Consider lowering this before lowering
+        point_matches_threshold.
 
     max_spot_match_distance : scalar float (default: None)
         The maximum distance a fix and mov spot can be before alignment
@@ -297,7 +328,9 @@ def feature_point_ransac_affine_align(
         prevent false positive correspondences.
 
     point_matches_threshold : scalar int (default: 50)
-        Minimum number of matching points for a valid alignment
+        Minimum number of matching points to proceed with alignment
+        Finding fewer matching point pairs than this threshold is a
+        safeguard test failure.
 
     align_threshold : scalar float (default: 2.0)
         The maximum distance two points can be to be considered aligned
@@ -305,15 +338,22 @@ def feature_point_ransac_affine_align(
 
     diagonal_constraint : scalar float (default: 0.25)
         Diagonal entries of the affine matrix cannot be lower than
-        1 - diagonal_contraint or higher than 1 + diagonal_contraint. 
-        If this condition is violated the default transform is returned.
-        This helps prevent bad alignments.
+        1 - diagonal_contraint or higher than 1 + diagonal_contraint.
+        Failing this condition is a safeguard test failure. Raising this
+        value will allow increasingly extreme affine transforms to be
+        returned.
 
     fix_spot_detection_kwargs : dict (default {})
         Arguments passed to bigstream.features.blob_detection for fixed image
+        See docstring for that function for valid arguments.
+        You may need to modify these in order to pass the spot count threshold
+        safeguards, consider doing that before lowering fix_spots_count_threshold.
 
     mov_spot_detection_kwargs : dict (default {})
         Arguments passed to bigstream.features.blob_detection for moving image
+        See docstring for that function for valid arguments.
+        You may need to modify these in order to pass the spot count threshold
+        safeguards, consider doing that before lowering mov_spots_count_threshold.
 
     fix_spots : nd-array Nx3 (default: None)
         Skip the spot detection for the fixed image and provide your own spot coordinate

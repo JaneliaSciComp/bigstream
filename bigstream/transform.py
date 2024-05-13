@@ -222,6 +222,8 @@ def apply_transform_to_coordinates(
 
             # interpolate position field at coordinates, reformat, return
             ndims = transform.shape[-1]
+            print('!!!!!! TRANSFORM SHAPE: ', transform.shape)
+            print('!!!!!! TRANSFORM NDIMS: ', ndims)
             interp = lambda x: map_coordinates(x, coordinates, mode='nearest')
             dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()
             coordinates = coordinates.transpose() * spacing + dX

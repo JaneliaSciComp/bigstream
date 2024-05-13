@@ -307,8 +307,9 @@ def _transform_single_block(fix_block_read_method,
         # return result
         return final_block_coords, aligned_block
     except Exception as e:
-        print('Error trying to transform block',
-              e)
+        print(f'Error trying to transform block {block_coords}',
+              e, flush=True)
+        traceback.print_tb(e)
         raise e
 
 

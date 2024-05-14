@@ -6,6 +6,7 @@ from scipy.interpolate import LinearNDInterpolator
 from dask.distributed import as_completed, wait
 from ClusterWrap.decorator import cluster
 import bigstream.utility as ut
+from bigstream.align import realize_mask
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform, compose_transform_list
 from bigstream.transform import apply_transform_to_coordinates
@@ -167,11 +168,11 @@ def distributed_piecewise_alignment_pipeline(
     mov_mask_zarr_path = temporary_directory.name + '/mov_mask.zarr'
     fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
     mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
-    fix_mask_zarr = None
-    if fix_mask is not None:
+    fix_mask_zarr = fix_mask
+    if isinstance(fix_mask, np.ndarray):
         fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
-    mov_mask_zarr = None
-    if mov_mask is not None:
+    mov_mask_zarr = mov_mask
+    if isinstance(mov_mask, np.ndarray):
         mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
 
     # zarr files for initial deformations
@@ -214,7 +215,7 @@ def distributed_piecewise_alignment_pipeline(
         coords = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
-        if fix_mask is not None:
+        if isinstance(fix_mask, np.ndarray):
             start = blocksize * (i, j, k)
             stop = start + blocksize
             ratio = np.array(fix_mask.shape) / fix.shape
@@ -297,14 +298,14 @@ def distributed_piecewise_alignment_pipeline(
         ################ Read fix and moving data ########################
         fix = fix_zarr[fix_slices]
         mov = mov_zarr[mov_slices]
-        fix_mask, mov_mask = None, None
-        if fix_mask_zarr is not None:
+        fix_mask, mov_mask = fix_mask_zarr, mov_mask_zarr
+        if isinstance(fix_mask_zarr, zarr.core.Array):
             ratio = np.array(fix_mask_zarr.shape) / fix_zarr.shape
             start = np.round( ratio * fix_block_coords[0] ).astype(int)
             stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)
             fix_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
             fix_mask = fix_mask_zarr[fix_mask_slices]
-        if mov_mask_zarr is not None:
+        if isinstance(mov_mask_zarr, zarr.core.Array):
             ratio = np.array(mov_mask_zarr.shape) / mov_zarr.shape
             start = np.round( ratio * mov_start ).astype(int)
             stop = np.round( ratio * mov_stop ).astype(int)

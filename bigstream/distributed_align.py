@@ -6,8 +6,8 @@ import sys
 import time
 import traceback
 
+import bigstream.transform as bst
 from bigstream.align import alignment_pipeline
-from bigstream.transform import apply_transform_to_coordinates
 from dask.distributed import as_completed, Semaphore
 from itertools import product
 
@@ -129,11 +129,11 @@ def _get_moving_block_coords(fix_shape,
                              original_mov_block_phys_coords,
                              original_transform):
     if len(original_transform.shape) == 2:
-        mov_block_phys_coords = apply_transform_to_coordinates(
+        mov_block_phys_coords = bst.apply_transform_to_coordinates(
             original_mov_block_phys_coords,
             [original_transform,],
         )
-        block_transform = ut.change_affine_matrix_origin(
+        block_transform = bst.change_affine_matrix_origin(
             original_transform, fix_block_phys_coords[0])
     else:
         ratio = np.array(original_transform.shape[:-1]) / fix_shape
@@ -146,7 +146,7 @@ def _get_moving_block_coords(fix_shape,
                                       fix_shape,
                                       fix_spacing)
         origin = spacing * start
-        mov_block_phys_coords = apply_transform_to_coordinates(
+        mov_block_phys_coords = bst.apply_transform_to_coordinates(
             original_mov_block_phys_coords, [block_transform,], spacing, origin
         )
     return mov_block_phys_coords, block_transform
@@ -187,7 +187,7 @@ def _compute_block_transform(compute_transform_params,
     )
     # ensure transform is a vector field
     if len(transform.shape) == 2:
-        transform = ut.matrix_to_displacement_field(
+        transform = bst.matrix_to_displacement_field(
             transform, fix_block.shape, spacing=fix_spacing,
         )
 

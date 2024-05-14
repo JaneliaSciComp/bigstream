@@ -11,6 +11,36 @@ from bigstream import features
 import cv2
 
 
+def realize_mask(image, mask):
+    """
+    Ensure that mask is an ndarray
+
+    Parameters
+    ----------
+    image : nd-array
+        The image from which mask is derived
+
+    mask : None, nd-array, tuple of floats, or function
+        The mask data. If None, return None.
+        If an nd-array, threshold at zero.
+        If a tuple of floats, mask specified values.
+        If a function, apply it.
+
+    Returns
+    -------
+    A mask for image, which is either None or a binary nd-array
+    dtype is always uint8
+    """
+
+    if mask is None: return None
+    if isinstance(mask, np.ndarray):
+        return (mask > 0).astype(np.uint8)
+    if isinstance(mask, (tuple, list)):
+        return np.isin(image, mask, invert=True).astype(np.uint8)
+    if callable(mask):
+        return mask(image).astype(np.uint8)
+
+
 def apply_alignment_spacing(
     fix,
     mov,

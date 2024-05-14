@@ -444,6 +444,10 @@ def feature_point_ransac_affine_align(
     # establish default
     if default is None: default = np.eye(fix.ndim + 1)
 
+    # realize masks
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
+
     # apply static transforms
     if static_transform_list:
         mov = apply_transform(

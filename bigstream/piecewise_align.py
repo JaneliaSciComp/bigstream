@@ -49,10 +49,7 @@ def distributed_piecewise_alignment_pipeline(
         the fixed image
 
     mov : ndarray
-        the moving image; `fix.shape` must equal `mov.shape`
-        I.e. typically piecewise affine alignment is done after
-        a global affine alignment wherein the moving image has
-        been resampled onto the fixed image voxel grid.
+        the moving image
 
     fix_spacing : 1d array
         The spacing in physical units (e.g. mm or um) between voxels
@@ -299,6 +296,14 @@ def distributed_piecewise_alignment_pipeline(
             stop = np.round( ratio * mov_stop ).astype(int)
             mov_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
             mov_mask = mov_mask_zarr[mov_mask_slices]
+        ##################################################################
+
+        
+        ################ Parse steps #####################################
+        # we don't want exceptions in the distributed context
+        for step in steps:
+            if step[0] == 'ransac':
+                step[1]['safeguard_exceptions'] = False
         ##################################################################
 
 

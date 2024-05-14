@@ -313,7 +313,7 @@ def delta_motion_correct(
 
     write_path : string (default: None)
         If not None, the final array of transforms will be written to disk as a zarr
-        array at this path. If None then this array is returned in memroy. Only use
+        array at this path. If None then this array is returned in memory. Only use
         this if transforms are deformation and if the resultant set of transforms
         is too large to fit in memory. 
 
@@ -562,7 +562,7 @@ def read_transforms(path):
 @cluster
 def resample_frames(
     fix,
-    mov_zarr,
+    mov,
     fix_spacing,
     mov_spacing,
     transforms,
@@ -584,10 +584,9 @@ def resample_frames(
     fix : numpy.ndarray
         The reference image. Frames will be resampled onto this voxel grid.
 
-    mov_zarr : zarr.Array
-        The moving image frames. This should be a 4D zarr Array object that is
-        only lazy loaded, e.g. not in memory. The time axis should be the first
-        axis.
+    mov : numpy.ndarray or zarr.Array
+        The moving image frames. This should be a 3D or 4D. The time axis should be
+        the first axis.
 
     fix_spacing : 1d array
         the voxel spacing of the fixed image in micrometers
@@ -649,10 +648,15 @@ def resample_frames(
     )
     np.save(temporary_directory.name + '/fix.npy', fix)
     if mask is not None:
-        mask_sh, mov_sh = mask.shape, mov_zarr.shape[1:]
+        mask_sh, mov_sh = mask.shape, mov.shape[1:]
         if mask_sh != mov_sh:
             mask = zoom(mask, np.array(mov_sh) / mask_sh, order=0)
         np.save(temporary_directory.name + '/mask.npy', mask)
+
+    # save moving image frames as zarr array
+    zarr_blocks = (1,) + mov.shape[1:]
+    mov_zarr_path = temporary_directory.name + '/mov.zarr'
+    mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
 
     # save transforms as zarr array
     zarr_blocks = (1,) + transforms.shape[1:]

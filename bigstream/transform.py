@@ -580,3 +580,342 @@ def displacement_field_jacobian_determinant(field, spacing):
     jacobian = displacement_field_jacobian(field, spacing)
     return np.linalg.det(jacobian)
 
+
+######################## Transform type conversions ###########################
+
+def invert_matrix_axes(matrix):
+    """
+    Permute matrix entries to reflect an xyz to zyx (or vice versa) axis reordering
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The matrix to permute
+
+    Returns
+    -------
+    permuted_matrix : 4x4 array
+        The same matrix but with the axis order inverted
+    """
+
+    ndims = matrix.shape[0] - 1
+    corrected = np.eye(ndims + 1)
+    corrected[:ndims, :ndims] = matrix[:ndims, :ndims][::-1, ::-1]
+    corrected[:ndims, -1] = matrix[:ndims, -1][::-1]
+    return corrected
+
+
+def change_affine_matrix_origin(matrix, origin):
+    """
+    Affine matrix change of origin
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The matrix to rebase
+
+    origin : 1d-array
+        The new origin
+
+    Returns
+    -------
+    new_matrix : 4x4 array
+        The same affine transform but encoded with respect to the given origin
+    """
+
+    ndims = matrix.shape[0] - 1
+    tl, tr = np.eye(ndims+1), np.eye(ndims+1)
+    origin = np.array(origin)
+    tl[:ndims, -1], tr[:ndims, -1] = -origin, origin
+    return np.matmul(tl, np.matmul(matrix, tr))
+
+
+def affine_transform_to_matrix(transform):
+    """
+    Convert sitk affine transform object to a 4x4 numpy array
+
+    Parameters
+    ----------
+    transform : sitk.AffineTransform
+        The affine transform
+
+    Returns
+    -------
+    matrix : 4x4 numpy array
+        The same transform as a 4x4 matrix
+    """
+
+    ndims = transform.GetDimension()
+    matrix = np.eye(ndims+1)
+    matrix[:ndims, :ndims] = np.array(transform.GetMatrix()).reshape((ndims,ndims))
+    matrix[:ndims, -1] = np.array(transform.GetTranslation())
+    return invert_matrix_axes(matrix)
+
+
+def matrix_to_affine_transform(matrix):
+    """
+    Convert 4x4 numpy array to sitk.AffineTransform object
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The affine transform as a numpy array
+
+    Returns
+    -------
+    affine_transform : sitk.AffineTransform
+        The same affine but as a sitk.AffineTransform object
+    """
+
+    ndims = matrix.shape[0] - 1
+    matrix_sitk = invert_matrix_axes(matrix)
+    transform = sitk.AffineTransform(ndims)
+    transform.SetMatrix(matrix_sitk[:ndims, :ndims].flatten())
+    transform.SetTranslation(matrix_sitk[:ndims, -1].squeeze())
+    return transform
+
+
+def matrix_to_euler_transform(matrix):
+    """
+    Convert 4x4 numpy array to sitk.Euler3DTransform (rigid transform)
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The rigid transform as a numpy array
+
+    Returns
+    -------
+    rigid_transform : sitk.Euler3DTransform object
+        The same rigid transform but as a sitk object
+    """
+
+    ndims = matrix.shape[0] - 1
+    matrix_sitk = invert_matrix_axes(matrix)
+    transform = sitk.Euler2DTransform() if ndims == 2 else sitk.Euler3DTransform()
+    transform.SetMatrix(matrix_sitk[:ndims, :ndims].flatten())
+    transform.SetTranslation(matrix_sitk[:ndims, -1].squeeze())
+    return transform
+
+
+def euler_transform_to_parameters(transform):
+    """
+    Convert a sitk.Euler3DTransform object to a list of rigid transform
+    parameters
+
+    Parameters
+    ----------
+    transform : sitk.Euler3DTransform
+        The rigid transform object
+
+    Returns
+    -------
+    rigid_parameters : 1d-array, length 6
+        The rigid transform parameters: (rotX, rotY, rotZ, transX, transY, transZ)
+    """
+
+    if transform.GetDimension() == 2:
+        return np.array((transform.GetAngle(),) +
+                         transform.GetTranslation(),
+        )
+
+    elif transform.GetDimension() == 3:
+        return np.array((transform.GetAngleX(),
+                         transform.GetAngleY(),
+                         transform.GetAngleZ()) +
+                         transform.GetTranslation()
+        )
+
+
+def parameters_to_euler_transform(params):
+    """
+    Convert rigid transform parameters to a sitk.Euler3DTransform object
+
+    Parameters
+    ----------
+    rigid_parameters : 1d-array, length 6
+        The rigid transform parameters: (rotX, rotY, rotZ, transX, transY, transZ)
+
+    Returns
+    -------
+    transform : sitk.Euler3DTransform
+        A sitk rigid transform object
+    """
+
+    if len(params) == 3:
+        transform = sitk.Euler2DTransform()
+        transform.SetAngle(params[0])
+        transform.SetTranslation(params[1:])
+        return transform
+
+    elif len(params) == 6:
+        transform = sitk.Euler3DTransform()
+        transform.SetRotation(*params[:3])
+        transform.SetTranslation(params[3:])
+        return transform
+
+
+def physical_parameters_to_affine_matrix_3d(params, center):
+    """
+    Convert separate affine transform parameters to an affine matrix
+
+    Parameters
+    ----------
+    params : 1d-array
+        The affine transform parameters
+        (transX, transY, transZ, rotX, rotY, rotZ, scX, scY, scZ, shX, shY, shZ)
+        trans : translation
+        rot : rotation
+        sc : scale
+        sh : shear
+
+    center : 1d-array
+        The center of rotation as a coordinate
+
+    Returns
+    -------
+    matrix : 4x4 array
+        The affine matrix representing those physical transform parameters
+    """
+
+    # translation
+    aff = np.eye(4)
+    aff[:3, -1] = params[:3]
+    # rotation
+    x = np.eye(4)
+    x[:3, :3] = Rotation.from_rotvec(params[3:6]).as_matrix()
+    x = change_affine_matrix_origin(x, -center)
+    aff = np.matmul(x, aff)
+    # scale
+    x = np.diag(tuple(params[6:9]) + (1,))
+    aff = np.matmul(x, aff)
+    # shear
+    shx, shy, shz = np.eye(4), np.eye(4), np.eye(4)
+    shx[1, 0], shx[2, 0] = params[10], params[11]
+    shy[0, 1], shy[2, 1] = params[9], params[11]
+    shz[0, 2], shz[1, 2] = params[9], params[10]
+    x = np.matmul(shz, np.matmul(shy, shx))
+    return np.matmul(x, aff)
+
+
+def matrix_to_displacement_field(matrix, shape, spacing=None, centered=False):
+    """
+    Convert an affine matrix into a displacement vector field
+
+    Parameters
+    ----------
+    matrix : 4x4 array
+        The affine matrix
+
+    shape : tuple
+        The voxel grid shape for the displacement vector field
+
+    spacing : tuple (default: (1, 1, 1, ...))
+        The voxel sampling rate (spacing) for the displacement vector field
+
+    Returns
+    -------
+    displacement_vector_field : nd-array
+        Field of shape + (3,) shape and given spacing
+    """
+
+    if spacing is None: spacing = np.ones(len(shape))
+    grid = np.array(np.mgrid[tuple(slice(None, x) for x in shape)])
+    grid = np.moveaxis(grid, 0, -1) * spacing
+    if centered: grid += 0.5 * spacing
+    ndims = matrix.shape[0] - 1
+    mm, tt = matrix[:ndims, :ndims], matrix[:ndims, -1]
+    return np.einsum('...ij,...j->...i', mm, grid) + tt - grid
+
+
+def field_to_displacement_field_transform(field, spacing=None, origin=None):
+    """
+    Convert a displacement vector field numpy array to a sitk displacement field
+    transform object
+
+    Parameters
+    ----------
+    field : nd-array
+        The displacement vector field
+
+    spacing : tuple (default: (1, 1, 1, ...))
+        The voxel spacing (sampling rate) of the field
+
+    origin : tuple (default: (0, 0, 0, ...))
+        The origin (in physical units) of the field
+
+    Returns
+    -------
+    sitk_displacement_field : sitk.DisplacementFieldTransform
+        A sitk displacement field transform object
+    """
+
+    field = field.astype(np.float64)[..., ::-1]
+    transform = numpy_to_sitk(field, spacing, origin, vector=True)
+    return sitk.DisplacementFieldTransform(transform)
+
+
+def bspline_parameters_to_transform(parameters):
+    """
+    Convert 1d-array of b-spline parameters to sitk.BSplineTransform
+
+    Parameters
+    ----------
+    parameters : 1d-array
+        The control point and other parameters that fully specify a b-spline
+        transform
+
+    Returns
+    -------
+    trasnform_object : sitk.BSplineTransform
+        A sitk.BSplineTransform object
+    """
+
+    # number of fixed parameters depends on dimension, stored in parameters[0]
+    nfp = 10 if parameters[0] == 2 else 18
+    t = sitk.BSplineTransform(parameters[0], 3)
+    t.SetFixedParameters(parameters[1:nfp+1])
+    t.SetParameters(parameters[nfp+1:])
+    return t
+
+
+def bspline_to_displacement_field(
+    bspline, shape, spacing=None, origin=None, direction=None,
+):
+    """
+    Convert a sitk.BSplineTransform object to a displacement vector field
+
+    Parameters
+    ----------
+    bspline : sitk.BSplineTransform
+        A sitk.BSplineTransform object
+
+    shape : tuple
+        The shape of the resulting displacement field
+
+    spacing : tuple (default: (1, 1, 1, ...))
+        The desired spacing for the displacement field
+
+    origin : tuple (default: (0, 0, 0, ...))
+        The origin of the displacement field
+
+    direction : 4x4 matrix (default identity)
+        The directions cosine matrix for the field
+
+    Returns
+    -------
+    displacement_field : nd-array
+        The displacement vector field given by the b-spline transform
+    """
+
+    if spacing is None: spacing = np.ones(len(shape))
+    if origin is None: origin = np.zeros(len(shape))
+    if direction is None: direction = np.eye(len(shape))
+    df = sitk.TransformToDisplacementField(
+        bspline, sitk.sitkVectorFloat64,
+        shape[::-1], origin[::-1], spacing[::-1],
+        direction[::-1, ::-1].ravel(),
+    )
+    return sitk.GetArrayViewFromImage(df).astype(np.float32)[..., ::-1]
+
+

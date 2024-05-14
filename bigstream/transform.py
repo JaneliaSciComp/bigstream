@@ -6,6 +6,8 @@ import os
 from scipy.ndimage import map_coordinates
 
 
+######################### APPLYING TRANSFORMS #################################
+
 def apply_transform(
     fix, mov,
     fix_spacing, mov_spacing,
@@ -224,6 +226,8 @@ def apply_transform_to_coordinates(
     return coordinates
 
 
+######################## Composing transforms #################################
+
 def compose_displacement_vector_fields(
     first_field,
     second_field,
@@ -406,6 +410,25 @@ def compress_transform_list(transforms, spacings):
     return transforms, spacings
 
 
+######################## Inverting transforms #################################
+
+def invert_affine(affine):
+    """
+    Invert an affine transform
+
+    Parameters
+    ----------
+    affine : nd-array
+        An affine transform matrix
+
+    Returns
+    -------
+    The inverse affine transform matrix
+    """
+
+    return np.linalg.inv(affine)
+
+
 def invert_displacement_vector_field(
     field,
     spacing,
@@ -531,6 +554,8 @@ def _displacement_field_composition_square_root(
     return root
 
 
+######################## Analyzing transforms #################################
+
 def displacement_field_jacobian(field, spacing):
     """
     """
@@ -554,3 +579,4 @@ def displacement_field_jacobian_determinant(field, spacing):
 
     jacobian = displacement_field_jacobian(field, spacing)
     return np.linalg.det(jacobian)
+

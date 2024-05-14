@@ -109,55 +109,6 @@ def relative_spacing(query_shape, reference_shape, reference_spacing):
     return reference_spacing * ratio
 
 
-
-def transform_list_to_composite_transform(transform_list, spacing=None, origin=None):
-    """
-    Convert a list of transforms to a sitk.CompositeTransform object
-
-    Parameters
-    ----------
-    transform_list : list
-        A list of transforms, either 4x4 numpy arrays (affine transforms) or
-        nd-arrays (displacement vector fields)
-
-    spacing : 1d array or tuple of 1d arrays (default: None)
-        The spacing in physical units (e.g. mm or um) between voxels of any
-        deformations in transform_list. If a tuple, must be the same length
-        as transform_list. Entries for affine matrices are ignored.
-
-    origin : 1d array or tuple of 1d arrays (default: None)
-        The origin in physical units (e.g. mm or um) of any deformations
-        in transform_list. If a tuple, must be the same length as transform_list.
-        Entries for affine matrices are ignored.
-
-    Returns
-    -------
-    composite_transform : sitk.CompositeTransform object
-        All transforms in the given list compressed into a sitk.CompositTransform 
-    """
-
-    # determine dimension
-    if len(transform_list[0].shape) == 2:
-        ndims = 2 if transform_list[0].shape == (3, 3) else 3
-    elif len(transform_list[0].shape) > 2:
-        ndims = transform_list[0].ndim - 1
-    else:
-        ndims = transform_list[0][0]
-
-    transform = sitk.CompositeTransform(ndims)
-    for iii, t in enumerate(transform_list):
-        if t.shape in [(3, 3), (4, 4)]:
-            t = matrix_to_affine_transform(t)
-        elif len(t.shape) == 1:
-            t = bspline_parameters_to_transform(t)
-        else:
-            a = spacing[iii] if isinstance(spacing, tuple) else spacing
-            b = origin[iii] if isinstance(origin, tuple) else origin
-            t = field_to_displacement_field_transform(t, a, b)
-        transform.AddTransform(t)
-    return transform
-
-
 def create_zarr(
     path,
     shape,

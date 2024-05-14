@@ -371,11 +371,21 @@ def feature_point_ransac_affine_align(
         Note that many times in order to have a better alignment it is better to tweak
         threshold and/or threshold_rel in mov_spot_detection_kwargs then to lower this value
 
-    fix_mask : binary nd-array (default: None)
-        Spots from fixed image can only be found in the foreground of this mask
+    fix_mask : nd-array, tuple of floats, or function (default: None)
+        Spots from fixed image can only be found in the foreground of this mask.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : binary nd-array (default: None)
-        Spots from moving image can only be found in the foreground of this mask
+    mov_mask : nd-array (default: None)
+        Spots from moving image can only be found in the foreground of this mask.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
     fix_origin : 1d array (default: all zeros)
         The origin of the fixed image in physical units

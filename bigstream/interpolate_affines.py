@@ -1,8 +1,7 @@
 import sys
 import numpy as np
 import glob
-from itertools import product
-from os.path import dirname
+from os import path
 import warnings
 
 
@@ -22,7 +21,7 @@ def get_neighbors(tiledir, index, suffix='/*/coords.txt'):
     for tile in tiles:
         oo, ee, ii = read_coords(tile)
         key = ''.join( [str(i) for i in ii - index] )
-        if key in bin_strs: neighbors[key] = dirname(tile)
+        if key in bin_strs: neighbors[key] = path.dirname(tile)
     return neighbors
 
 
@@ -41,7 +40,7 @@ while not no_updates:
             affine = np.loadtxt(tile + '/ransac_affine.mat')
         else:
             affine = np.eye(4)[:3]
-            
+       
         if (affine == np.eye(4)[:3]).all():
             identity_count += 1
             no_updates = False

@@ -10,3 +10,8 @@ dist/
 *~
 *.swp
 
+# ignore notebook temporaries
+*.ipynb_checkpoints
+
+# ignore whatever this is
+.DS_Store

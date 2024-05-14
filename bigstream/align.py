@@ -783,6 +783,10 @@ def random_affine_search(
     static_transform_spacing = a
     static_transform_origin = b
 
+    # realize masks as arrays
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
+
     # skip sample and determine mask spacings
     X = apply_alignment_spacing(
         fix, mov,
@@ -1004,6 +1008,10 @@ def affine_align(
     static_transform_spacing = a
     static_transform_origin = b
 
+    # realize masks
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
+
     # skip sample and convert inputs to sitk images
     X = apply_alignment_spacing(
         fix, mov,
@@ -1214,6 +1222,10 @@ def deformable_align(
     )
     static_transform_spacing = a
     static_transform_origin = b
+
+    # realize masks
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
 
     # skip sample and convert inputs to sitk images
     X = apply_alignment_spacing(

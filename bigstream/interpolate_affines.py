@@ -40,7 +40,7 @@ while not no_updates:
             affine = np.loadtxt(tile + '/ransac_affine.mat')
         else:
             affine = np.eye(4)[:3]
-
+       
         if (affine == np.eye(4)[:3]).all():
             identity_count += 1
             no_updates = False

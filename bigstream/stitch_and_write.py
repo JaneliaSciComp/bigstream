@@ -27,9 +27,9 @@ def read_fields(neighbors, suffix):
             if isfile(neighbors[key] + suffix):
                 fields[key], m = nrrd.read(neighbors[key] + suffix)
             else:
-                fields[key] = np.zeros_like(fields['000'])
+                fields[key] = np.zeros_like(fields['000'] )
         else:
-            fields[key] = np.zeros_like(fields['000'])
+            fields[key] = np.zeros_like(fields['000'] )
     return fields
 
 
@@ -182,9 +182,9 @@ if __name__ == '__main__':
     offset, extent, index = read_coords(tile + '/coords.txt')
 
     # initialize updated warp fields with global affine
-    if global_affine == 'None':
+    if global_affine=='None':
         matrix = np.float32(np.eye(4)[:3])
-    else:
+    else: 
         matrix = np.float32(np.loadtxt(global_affine))
     grid = np.round(extent/vox).astype(np.uint16)
     grid = position_grid(grid) * vox + offset

@@ -11,6 +11,7 @@ ransac: &ransac_args
   blob_sizes: [6, 20]
   num_sigma_max: 15
   cc_radius: 12
+  safeguard_exceptions: true
   match_threshold: 0.7
   max_spot_match_distance:
   point_matches_threshold: 50
@@ -54,5 +55,8 @@ random:
 
 global_align: {}
 
-local_align: {}
+local_align:
+  ransac:
+    safeguard_exceptions: false
+
 """

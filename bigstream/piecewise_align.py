@@ -298,7 +298,7 @@ def distributed_piecewise_alignment_pipeline(
             mov_mask = mov_mask_zarr[mov_mask_slices]
         ##################################################################
 
-        
+
         ################ Parse steps #####################################
         # we don't want exceptions in the distributed context
         for step in steps:

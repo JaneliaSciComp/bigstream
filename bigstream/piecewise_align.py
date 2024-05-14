@@ -77,17 +77,31 @@ def distributed_piecewise_alignment_pipeline(
     overlap : float in range [0, 1] (default: 0.5)
         Block overlap size as a percentage of block size
 
-    fix_mask : binary ndarray (default: None)
+    fix_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
-        Assumed to have the same domain as the fixed image, though sampling
-        can be different. I.e. the origin and span are the same (in physical
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : binary ndarray (default: None)
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
+
+    mov_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the moving image
-        Assumed to have the same domain as the moving image, though sampling
-        can be different. I.e. the origin and span are the same (in physical
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
 
     static_transform_list : list of numpy arrays (default: [])
         Transforms applied to moving image before applying query transform

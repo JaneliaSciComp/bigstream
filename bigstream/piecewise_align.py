@@ -1,5 +1,6 @@
 import os, tempfile
 import numpy as np
+import zarr
 import time
 from itertools import product
 from scipy.interpolate import LinearNDInterpolator

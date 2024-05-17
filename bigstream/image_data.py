@@ -84,7 +84,7 @@ class ImageData:
             voxel_spacing_from_attrs = get_voxel_spacing(self.attrs)
             if voxel_spacing_from_attrs is not None:
                 # make it zyx
-                voxel_spacing_from_attrs[::-1]
+                return voxel_spacing_from_attrs[::-1]
             return voxel_spacing_from_attrs
         else:
             return None

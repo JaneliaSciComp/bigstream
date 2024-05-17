@@ -20,7 +20,7 @@ class ImageData:
         image_path = self.image_path if self.image_path else '???'
         subpath = self.image_subpath if self.image_subpath else ''
 
-        return f'{image_path}:{subpath} {self.shape} {self.voxel_spacing}'
+        return f'{image_path}:{subpath} {self.shape} {self.voxel_spacing} {self.downsampling}'
 
     def has_data(self):
         return self.shape is not None and len(self.shape) > 0
@@ -81,7 +81,11 @@ class ImageData:
         if self.image_voxel_spacing is not None:
             return self.image_voxel_spacing
         elif self.attrs:
-            return get_voxel_spacing(self.attrs)
+            voxel_spacing_from_attrs = get_voxel_spacing(self.attrs)
+            if voxel_spacing_from_attrs is not None:
+                # make it zyx
+                voxel_spacing_from_attrs[::-1]
+            return voxel_spacing_from_attrs
         else:
             return None
 
@@ -95,7 +99,8 @@ class ImageData:
         if self.image_downsampling is not None:
             image_downsampling = self.image_downsampling
         elif self.attrs and self.attrs.get('downsamplingFactors'):
-            image_downsampling = np.array(self.attrs.get('downsamplingFactors'))
+            # cenvert the downsampling factors to zyx
+            image_downsampling = np.array(self.attrs.get('downsamplingFactors'))[::-1]
         if image_downsampling is None:
             image_downsampling = np.array((1,) * self.ndim)
 
@@ -105,10 +110,10 @@ class ImageData:
     def downsampling(self, value):
         self.image_downsampling = value
 
-    @property
-    def downsampled_voxel_resolution(self):
+    def get_downsampled_voxel_resolution(self, to_xyz=True):
         voxel_spacing = self.voxel_spacing
         if voxel_spacing is not None:
-            return self.voxel_spacing / self.downsampling
+            downsampled_spacing = self.voxel_spacing / self.downsampling
+            return downsampled_spacing[::-1] if to_xyz else downsampled_spacing
         else:
             return None

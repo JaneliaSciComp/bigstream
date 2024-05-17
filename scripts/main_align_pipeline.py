@@ -352,8 +352,8 @@ def _run_global_alignment(args, steps):
                 align_blocksize,
                 alignment.dtype,
                 data=alignment,
-                pixelResolution=list(mov.voxel_spacing),
-                downsamplingFactors=list(mov.downsampling),
+                pixelResolution=mov.get_attr('pixelResolution'),
+                downsamplingFactors=mov.get_attr('downsamplingFactors'),
             )
         else:
             print('Skip saving lowres aligned volume')
@@ -550,8 +550,8 @@ def _align_local_data(fix_image,
     print('Align moving data', mov_image, 'to reference', fix_image,
           flush=True)
 
-    transform_downsampling = [1] + list(fix_image.downsampling)
-    transform_spacing = [1] + list(fix_image.downsampled_voxel_resolution)
+    transform_downsampling = [1] + list(fix_image.downsampling[::-1])
+    transform_spacing = [1] + list(fix_image.get_downsampled_voxel_resolution())
     if transform_path:
         transform = io_utility.create_dataset(
             transform_path,

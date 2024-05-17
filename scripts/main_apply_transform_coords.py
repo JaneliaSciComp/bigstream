@@ -86,8 +86,8 @@ def _define_args():
     return args_parser
 
 
-def _get_voxel_spacing(pixel_resolution, downsampling_factors,
-                       input_volume_path, input_dataset):
+def _get_coords_spacing(pixel_resolution, downsampling_factors,
+                        input_volume_path, input_dataset):
     if (pixel_resolution is not None and
         downsampling_factors is not None):
         voxel_spacing = (np.array(pixel_resolution) * 
@@ -98,9 +98,10 @@ def _get_voxel_spacing(pixel_resolution, downsampling_factors,
         return voxel_spacing[::-1] # zyx order
 
     if input_volume_path is not None:
-        _, volume_attrs = io_utility.open(
+        volume_attrs = io_utility.read_attributes(
             input_volume_path, input_dataset)
-        return io_utility.get_voxel_spacing(volume_attrs)
+        voxel_spacing = io_utility.get_voxel_spacing(volume_attrs)
+        return voxel_spacing[::-1] if voxel_spacing is not None else None
     else:
         print('Not enough information to get voxel spacing')
         return None
@@ -148,10 +149,10 @@ def _run_apply_transform(args):
         else:
             affine_transforms_list = []
 
-        voxel_spacing = _get_voxel_spacing(args.pixel_resolution,
-                                           args.downsampling,
-                                           args.input_volume,
-                                           args.input_dataset)
+        voxel_spacing = _get_coords_spacing(args.pixel_resolution,
+                                            args.downsampling,
+                                            args.input_volume,
+                                            args.input_dataset)
         print('Voxel spacing for transform coords:', voxel_spacing)
         warped_zyx_coords = distributed_apply_transform_to_coordinates(
             zyx_coords,

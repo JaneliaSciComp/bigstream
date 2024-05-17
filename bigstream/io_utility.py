@@ -93,23 +93,7 @@ def get_voxel_spacing(attrs):
                 voxel_spacing = np.array(pr['dimensions'])
     else:
         voxel_spacing = None
-    # put in zyx order if found
-    return voxel_spacing[::-1] if voxel_spacing is not None else None
-
-
-def get_dimensions(attrs):
-    if (attrs.get('dimensions')):
-        shape = tuple(attrs['dimensions']) 
-        return shape, len(shape)
-    else:
-        raise Exception(f'Do not know how to read shape from {attrs}')
-
-
-def get_dtype(attrs):
-    if (attrs.get('dataType')):
-        return attrs['dataType']
-    else:
-        raise Exception(f'Do not know how to read data type from {attrs}')
+    return voxel_spacing
 
 
 def read_attributes(container_path, subpath):
@@ -172,6 +156,7 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         a = data_container[data_subpath] if data_subpath else data_container
         dict = a.attrs.asdict()
         dict.update({'dataType': a.dtype, 'dimensions': a.shape})
+        print(f'{data_path}:{data_subpath} attrs: {dict}', flush=True)
         return dict
     except Exception as e:
         print(f'Error opening {data_path} : {data_subpath}', e, flush=True)

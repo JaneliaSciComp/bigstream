@@ -138,6 +138,7 @@ def _run_apply_transform(args):
 
     if local_deform_data.voxel_spacing is None:
         local_deform_data.voxel_spacing = np.array((1,) + tuple(fix_data.voxel_spacing[::-1]))[::-1]
+    # deform spacing axes are: v,x,y,z in reverse so z,y,x,v
 
     print(f'Local transform spacing for {local_deform_data} -> ',
           f'{local_deform_data.voxel_spacing[:local_deform_data.ndim-1]}',

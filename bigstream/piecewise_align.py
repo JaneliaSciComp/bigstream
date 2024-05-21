@@ -1,11 +1,13 @@
 import os, tempfile
 import numpy as np
+import zarr
 import time
 from itertools import product
 from scipy.interpolate import LinearNDInterpolator
 from dask.distributed import as_completed, wait
 from ClusterWrap.decorator import cluster
 import bigstream.utility as ut
+from bigstream.align import realize_mask
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform, compose_transform_list
 from bigstream.transform import apply_transform_to_coordinates
@@ -77,17 +79,31 @@ def distributed_piecewise_alignment_pipeline(
     overlap : float in range [0, 1] (default: 0.5)
         Block overlap size as a percentage of block size
 
-    fix_mask : binary ndarray (default: None)
+    fix_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
-        Assumed to have the same domain as the fixed image, though sampling
-        can be different. I.e. the origin and span are the same (in physical
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : binary ndarray (default: None)
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
+
+    mov_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the moving image
-        Assumed to have the same domain as the moving image, though sampling
-        can be different. I.e. the origin and span are the same (in physical
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
 
     static_transform_list : list of numpy arrays (default: [])
         Transforms applied to moving image before applying query transform
@@ -153,11 +169,11 @@ def distributed_piecewise_alignment_pipeline(
     mov_mask_zarr_path = temporary_directory.name + '/mov_mask.zarr'
     fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
     mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
-    fix_mask_zarr = None
-    if fix_mask is not None:
+    fix_mask_zarr = fix_mask
+    if isinstance(fix_mask, np.ndarray):
         fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
-    mov_mask_zarr = None
-    if mov_mask is not None:
+    mov_mask_zarr = mov_mask
+    if isinstance(mov_mask, np.ndarray):
         mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
 
     # zarr files for initial deformations
@@ -200,7 +216,7 @@ def distributed_piecewise_alignment_pipeline(
         coords = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
-        if fix_mask is not None:
+        if isinstance(fix_mask, np.ndarray):
             start = blocksize * (i, j, k)
             stop = start + blocksize
             ratio = np.array(fix_mask.shape) / fix.shape
@@ -283,14 +299,14 @@ def distributed_piecewise_alignment_pipeline(
         ################ Read fix and moving data ########################
         fix = fix_zarr[fix_slices]
         mov = mov_zarr[mov_slices]
-        fix_mask, mov_mask = None, None
-        if fix_mask_zarr is not None:
+        fix_mask, mov_mask = fix_mask_zarr, mov_mask_zarr
+        if isinstance(fix_mask_zarr, zarr.core.Array):
             ratio = np.array(fix_mask_zarr.shape) / fix_zarr.shape
             start = np.round( ratio * fix_block_coords[0] ).astype(int)
             stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)
             fix_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
             fix_mask = fix_mask_zarr[fix_mask_slices]
-        if mov_mask_zarr is not None:
+        if isinstance(mov_mask_zarr, zarr.core.Array):
             ratio = np.array(mov_mask_zarr.shape) / mov_zarr.shape
             start = np.round( ratio * mov_start ).astype(int)
             stop = np.round( ratio * mov_stop ).astype(int)

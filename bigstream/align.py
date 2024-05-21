@@ -11,6 +11,36 @@ from bigstream import features
 import cv2
 
 
+def realize_mask(image, mask):
+    """
+    Ensure that mask is an ndarray
+
+    Parameters
+    ----------
+    image : nd-array
+        The image from which mask is derived
+
+    mask : None, nd-array, tuple of floats, or function
+        The mask data. If None, return None.
+        If an nd-array, threshold at zero.
+        If a tuple of floats, mask specified values.
+        If a function, apply it.
+
+    Returns
+    -------
+    A mask for image, which is either None or a binary nd-array
+    dtype is always uint8
+    """
+
+    if mask is None: return None
+    if isinstance(mask, np.ndarray):
+        return (mask > 0).astype(np.uint8)
+    if isinstance(mask, (tuple, list)):
+        return np.isin(image, mask, invert=True).astype(np.uint8)
+    if callable(mask):
+        return mask(image).astype(np.uint8)
+
+
 def apply_alignment_spacing(
     fix,
     mov,
@@ -371,11 +401,21 @@ def feature_point_ransac_affine_align(
         Note that many times in order to have a better alignment it is better to tweak
         threshold and/or threshold_rel in mov_spot_detection_kwargs then to lower this value
 
-    fix_mask : binary nd-array (default: None)
-        Spots from fixed image can only be found in the foreground of this mask
+    fix_mask : nd-array, tuple of floats, or function (default: None)
+        Spots from fixed image can only be found in the foreground of this mask.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : binary nd-array (default: None)
-        Spots from moving image can only be found in the foreground of this mask
+    mov_mask : nd-array (default: None)
+        Spots from moving image can only be found in the foreground of this mask.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
     fix_origin : 1d array (default: all zeros)
         The origin of the fixed image in physical units
@@ -403,6 +443,10 @@ def feature_point_ransac_affine_align(
 
     # establish default
     if default is None: default = np.eye(fix.ndim + 1)
+
+    # realize masks
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
 
     # apply static transforms
     if static_transform_list:
@@ -640,17 +684,31 @@ def random_affine_search(
         as close as possible to this value. Intended for very fast
         simple alignments (e.g. low amplitude motion correction)
 
-    fix_mask : binary ndarray (default: None)
+    fix_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
-        Assumed to have the same domain as the fixed image, though sampling
-        can be different. I.e. the origin and span are the same (in phyiscal
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : binary ndarray (default: None)
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
+
+    mov_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the moving image
-        Assumed to have the same domain as the moving image, though sampling
-        can be different. I.e. the origin and span are the same (in phyiscal
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
 
     fix_origin : 1d array (default: None)
         Origin of the fixed image.
@@ -724,6 +782,10 @@ def random_affine_search(
     )
     static_transform_spacing = a
     static_transform_origin = b
+
+    # realize masks as arrays
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
 
     # skip sample and determine mask spacings
     X = apply_alignment_spacing(
@@ -879,17 +941,31 @@ def affine_align(
         as close as possible to this value. Intended for very fast
         simple alignments (e.g. low amplitude motion correction)
 
-    fix_mask : binary ndarray (default: None)
+    fix_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
-        Assumed to have the same domain as the fixed image, though sampling
-        can be different. I.e. the origin and span are the same (in phyiscal
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : binary ndarray (default: None)
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
+
+    mov_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the moving image
-        Assumed to have the same domain as the moving image, though sampling
-        can be different. I.e. the origin and span are the same (in phyiscal
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
 
     fix_origin : 1d array (default: None)
         Origin of the fixed image.
@@ -931,6 +1007,10 @@ def affine_align(
     )
     static_transform_spacing = a
     static_transform_origin = b
+
+    # realize masks
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
 
     # skip sample and convert inputs to sitk images
     X = apply_alignment_spacing(
@@ -1072,17 +1152,31 @@ def deformable_align(
         as close as possible to this value. Intended for very fast
         simple alignments (e.g. low amplitude motion correction)
 
-    fix_mask : binary ndarray (default: None)
+    fix_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
-        Assumed to have the same domain as the fixed image, though sampling
-        can be different. I.e. the origin and span are the same (in phyiscal
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : binary ndarray (default: None)
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
+
+    mov_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the moving image
-        Assumed to have the same domain as the moving image, though sampling
-        can be different. I.e. the origin and span are the same (in phyiscal
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
 
     fix_origin : 1d array (default: None)
         Origin of the fixed image.
@@ -1130,6 +1224,10 @@ def deformable_align(
     )
     static_transform_spacing = a
     static_transform_origin = b
+
+    # realize masks
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
 
     # skip sample and convert inputs to sitk images
     X = apply_alignment_spacing(
@@ -1262,17 +1360,31 @@ def alignment_pipeline(
         Arguments specified here override any global arguments given through kwargs
         for their specific step only.
 
-    fix_mask : binary ndarray (default: None)
+    fix_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
-        Assumed to have the same domain as the fixed image, though sampling
-        can be different. I.e. the origin and span are the same (in phyiscal
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : binary ndarray (default: None)
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
+
+    mov_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the moving image
-        Assumed to have the same domain as the moving image, though sampling
-        can be different. I.e. the origin and span are the same (in phyiscal
-        units) but the number of voxels can be different.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+        If an nd-array, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
 
     fix_origin : 1d array (default: None)
         Origin of the fixed image.

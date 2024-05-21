@@ -1,4 +1,5 @@
 import numpy as np
+import zarr
 
 from .io_utility import open as img_open, read_attributes, get_voxel_spacing
 
@@ -6,14 +7,15 @@ from .io_utility import open as img_open, read_attributes, get_voxel_spacing
 class ImageData:
 
     def __init__(self, image_path=None, image_subpath=None,
-                 image_arraydata=None, with_attrs=True):
+                 image_arraydata=None, image_attrs=None,
+                 read_attrs=True):
         self.image_path = image_path
         self.image_subpath = image_subpath
         self.image_ndarray = image_arraydata
         self.image_voxel_spacing = None
         self.image_downsampling = None
-        self.image_attrs = None
-        if with_attrs:
+        self.image_attrs = image_attrs
+        if image_attrs is None and read_attrs:
             self.read_attrs()
 
     def __str__(self):
@@ -21,6 +23,12 @@ class ImageData:
         subpath = self.image_subpath if self.image_subpath else ''
 
         return f'{image_path}:{subpath} {self.shape} {self.voxel_spacing} {self.downsampling}'
+
+    def __getitem__(self, key):
+        if self.image_ndarray is not None:
+            return self.image_ndarray[key]
+        else:
+            return 0
 
     def has_data(self):
         return self.shape is not None and len(self.shape) > 0
@@ -117,3 +125,15 @@ class ImageData:
             return downsampled_spacing[::-1] if to_xyz else downsampled_spacing
         else:
             return None
+
+
+def as_image_data(image_data):
+    if isinstance(image_data, ImageData):
+        return image_data
+    elif isinstance(image_data, np.ndarray):
+        return ImageData(image_arraydata=image_data, read_attrs=False)
+    elif isinstance(image_data, zarr.core.Array):
+        return ImageData(image_arraydata=image_data,
+                         image_attrs=image_data.attrs)
+    else:
+        return None

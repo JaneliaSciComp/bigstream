@@ -164,6 +164,10 @@ def _define_registration_input_args(args, args_descriptor):
     args.add_argument(args_descriptor._argflag('fix-mask-subpath'),
                       dest=args_descriptor._argdest('fix_mask_subpath'),
                       help='Fixed volume mask subpath')
+    args.add_argument(args_descriptor._argflag('fix-mask-descriptor'),
+                      dest=args_descriptor._argdest('fix_mask_descriptor'),
+                      type=_inttuple,
+                      help='Fixed volume mask descriptor')
 
     args.add_argument(args_descriptor._argflag('mov'),
                       dest=args_descriptor._argdest('mov'),
@@ -181,6 +185,10 @@ def _define_registration_input_args(args, args_descriptor):
     args.add_argument(args_descriptor._argflag('mov-mask-subpath'),
                       dest=args_descriptor._argdest('mov_mask_subpath'),
                       help='Moving volume mask subpath')
+    args.add_argument(args_descriptor._argflag('mov-mask-descriptor'),
+                      dest=args_descriptor._argdest('mov_mask_descriptor'),
+                      type=_inttuple,
+                      help='Moving volume mask descriptor')
 
     args.add_argument(args_descriptor._argflag('output-dir'),
                       dest=args_descriptor._argdest('output_dir'),
@@ -234,11 +242,13 @@ def _extract_registration_input_args(args, args_descriptor):
     _extract_arg(args, args_descriptor, 'fix_spacing', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'fix_mask_descriptor', registration_args)
     _extract_arg(args, args_descriptor, 'mov', registration_args)
     _extract_arg(args, args_descriptor, 'mov_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'mov_spacing', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_mask_descriptor', registration_args)
     _extract_arg(args, args_descriptor, 'output_dir', registration_args)
     _extract_arg(args, args_descriptor, 'transform_name', registration_args)
     _extract_arg(args, args_descriptor, 'transform_subpath', registration_args)
@@ -307,8 +317,18 @@ def _run_global_alignment(args, steps):
     print('Global alignment - moving volume attributes:',
           mov.shape, mov.attrs, mov.voxel_spacing, flush=True)
 
-    fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath)
-    mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath)
+    if args.fix_mask:
+        fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath)
+    elif args.fix_mask_descriptor:
+        fix_mask = args.fix_mask_descriptor
+    else:
+        fix_mask = None
+    if args.mov_mask:
+        mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath)
+    elif args.mov_mask_descriptor:
+        mov_mask = args.mov_mask_descriptor
+    else:
+        mov_mask = None
 
     if fix.has_data() and mov.has_data():
         transform, alignment = _align_global_data(
@@ -370,15 +390,23 @@ def _align_global_data(fix_data, fix_mask_data,
     print('Run low res alignment:', steps, flush=True)
     fix_data.read_image()
     mov_data.read_image()
-    fix_mask_data.read_image()
-    mov_mask_data.read_image()
+    if isinstance(fix_mask_data, ImageData):
+        fix_mask_data.read_image()
+        fix_mask = fix_mask_data.image_array
+    else:
+        fix_mask = fix_mask_data
+    if isinstance(mov_mask_data, ImageData):
+        mov_mask_data.read_image()
+        mov_mask = mov_mask_data.image_array
+    else:
+        mov_mask = mov_mask_data
     affine = alignment_pipeline(fix_data.image_array,
                                 mov_data.image_array,
                                 fix_data.voxel_spacing,
                                 mov_data.voxel_spacing,
                                 steps,
-                                fix_mask=fix_mask_data.image_array,
-                                mov_mask=mov_mask_data.image_array)
+                                fix_mask=fix_mask,
+                                mov_mask=mov_mask)
     print('Apply affine transform', flush=True)
     # apply transform
     aligned = apply_transform(fix_data.image_array,
@@ -435,8 +463,18 @@ def _run_local_alignment(args, steps, global_transform,
     print('Local alignment - moving volume attributes:',
           mov_image.shape, mov_image.attrs, mov_image.voxel_spacing, flush=True)
 
-    fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath)
-    mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath)
+    if args.fix_mask:
+        fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath)
+    elif args.fix_mask_descriptor:
+        fix_mask = args.fix_mask_descriptor
+    else:
+        fix_mask = None
+    if args.mov_mask:
+        mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath)
+    elif args.mov_mask_descriptor:
+        mov_mask = args.mov_mask_descriptor
+    else:
+        mov_mask = None
 
     if dask_config_file:
         import dask.config

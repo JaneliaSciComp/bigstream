@@ -11,7 +11,7 @@ from itertools import product
 from .align import alignment_pipeline
 from .transform import apply_transform_to_coordinates
 from .distributed_utils import throttle_method_invocations
-from .image_data import ImageData
+from .image_data import ImageData, as_image_data
 from .io_utility import read_block as io_utility_read_block
 
 
@@ -64,7 +64,7 @@ def _prepare_compute_block_transform_params(block_info,
 
     # read masks
     fix_blockmask_coords, mov_blockmask_coords = None, None
-    if fix_fullmask_shape:
+    if fix_fullmask_shape is not None:
         ratio = np.array(fix_fullmask_shape) / fix_shape
         fix_mask_start = np.round(ratio * fix_block_voxel_coords[0]).astype(int)
         fix_mask_stop = np.round(
@@ -73,7 +73,7 @@ def _prepare_compute_block_transform_params(block_info,
                                      for a, b in zip(fix_mask_start,
                                                      fix_mask_stop))
 
-    if mov_fullmask_shape:
+    if mov_fullmask_shape is not None:
         ratio = np.array(mov_fullmask_shape) / mov_shape
         mov_mask_start = np.round(ratio * mov_start).astype(int)
         mov_mask_stop = np.round(ratio * mov_stop).astype(int)
@@ -123,10 +123,12 @@ def _read_blocks_for_processing(blocks_info,
 
 
 def _read_block(block_coords, image_data):
-    return io_utility_read_block(block_coords,
-                                 image=image_data.image_ndarray,
-                                 image_path=image_data.image_path,
-                                 image_subpath=image_data.image_subpath)
+    image_repr = as_image_data(image_data)
+    if image_repr is not None:
+        return io_utility_read_block(block_coords,
+                                     image=image_repr.image_array,
+                                     image_path=image_repr.image_path,
+                                     image_subpath=image_repr.image_subpath)
 
 
 # get image block corners both in voxel and physical units
@@ -190,8 +192,8 @@ def _compute_block_transform(compute_transform_params,
      ),
      fix_block,
      mov_block,
-     fix_mask_block,
-     mov_mask_block,
+     fix_mask_block, # this can be a mask descriptor
+     mov_mask_block, # this can be a mask descriptor
      ) = compute_transform_params
     print(f'{time.ctime(start_time)} Compute block transform',
           f'{block_index}: {block_coords}',
@@ -344,8 +346,8 @@ def distributed_alignment_pipeline(
     blocksize,
     cluster_client,
     overlap_factor=0.5,
-    fix_mask=ImageData(),
-    mov_mask=ImageData(),
+    fix_mask=None,
+    mov_mask=None,
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
@@ -401,17 +403,31 @@ def distributed_alignment_pipeline(
     overlap_factor : float in range [0, 1] (default: 0.5)
         Block overlap size as a percentage of block size
 
-    fix_mask : ImageData (default: None)
+    fix_mask : ImageData, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
-        Assumed to have the same domain as the fixed image, though sampling
-        can be different. I.e. the origin and span are the same (in physical
-        units) but the number of voxels can be different.
+        If an ImageData, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : ImageData (default: None)
+        If an ImageData, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
+
+    mov_mask : ImageData, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the moving image
-        Assumed to have the same domain as the moving image, though sampling
-        can be different. I.e. the origin and span are the same (in physical
-        units) but the number of voxels can be different.
+        If an ImageData, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+        If an ImageData, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
 
     static_transform_list : list of numpy arrays (default: [])
         Transforms applied to moving image before applying query transform
@@ -444,6 +460,17 @@ def distributed_alignment_pipeline(
     # determine fixed image slices for blocking
     fix_shape_arr = fix_image.shape_arr
     mov_shape_arr = mov_image.shape_arr
+    # fix/mov mask shape gets set only the corresponding masks
+    # refer to an image array (either ImageData or ndarray)
+    fix_mask_image = as_image_data(fix_mask)
+    mov_mask_image = as_image_data(mov_mask)
+    fix_mask_shape_arr = (fix_mask_image.shape_arr
+                          if fix_mask_image is not None
+                          else None)
+    mov_mask_shape_arr = (mov_mask_image.shape_arr
+                          if mov_mask_image is not None
+                          else None)
+
     block_partition_size = np.array(blocksize)
     nblocks = np.ceil(np.array(fix_shape_arr) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
@@ -457,15 +484,16 @@ def distributed_alignment_pipeline(
         block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
-        if fix_mask is not None and fix_mask.has_data():
+        if fix_mask_image is not None:
             start = block_partition_size * (i, j, k)
             stop = start + block_partition_size
-            ratio = np.array(fix_mask.shape) / fix_shape_arr
+            ratio = fix_mask_shape_arr / fix_shape_arr
             start = np.round(ratio * start).astype(int)
             stop = np.round(ratio * stop).astype(int)
-            mask_crop = fix_mask[tuple(slice(a, b)
-                                       for a, b in zip(start, stop))]
-            if (np.sum(mask_crop) / np.prod(mask_crop.shape) <
+            fix_mask_block_coords = tuple(slice(a, b)
+                                                for a, b in zip(start, stop))
+            fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
+            if (np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape) <
                 foreground_percentage):
                 foreground = False
 
@@ -486,8 +514,8 @@ def distributed_alignment_pipeline(
         mov_shape=mov_shape_arr,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
-        fix_fullmask_shape=fix_mask.shape_arr,
-        mov_fullmask_shape=mov_mask.shape_arr,
+        fix_fullmask_shape=fix_mask_shape_arr,
+        mov_fullmask_shape=mov_mask_shape_arr,
         static_transform_list=static_transform_list,
     )
 

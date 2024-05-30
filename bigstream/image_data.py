@@ -87,6 +87,8 @@ class ImageData:
     @property
     def voxel_spacing(self):
         if self.image_voxel_spacing is not None:
+            # no rotation or scaling here
+            # the caller should have set them as needed
             return self.image_voxel_spacing
         elif self.attrs:
             voxel_spacing_from_attrs = get_voxel_spacing(self.attrs)

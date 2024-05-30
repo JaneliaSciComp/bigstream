@@ -663,8 +663,8 @@ def _align_local_data(fix_image,
             fix_shape,
             align_blocksize,
             fix_image.dtype,
-            pixelResolution=list(mov_image.voxel_spacing),
-            downsamplingFactors=list(mov_image.downsampling),
+            pixelResolution=mov_image.get_attr('pixelResolution'),
+            downsamplingFactors=mov_image.get_attr('downsamplingFactors'),
         )
         print('Apply', 
               f'{transform_path}:{transform_subpath}',              
@@ -677,6 +677,8 @@ def _align_local_data(fix_image,
             deform_transforms = [transform]
         else:
             deform_transforms = []
+        affine_spacing = (1.,) * mov_image.ndim
+        transform_spacing = affine_spacing + fix_image.voxel_spacing
         distributed_apply_transform(
             fix_image, mov_image,
             fix_image.voxel_spacing, mov_image.voxel_spacing,
@@ -685,6 +687,7 @@ def _align_local_data(fix_image,
             cluster_client,
             overlap_factor=processing_overlap_factor,
             aligned_data=align,
+            transform_spacing=transform_spacing,
             max_tasks=cluster_max_tasks,
         )
     else:

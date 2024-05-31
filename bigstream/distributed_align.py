@@ -266,8 +266,7 @@ def _get_transform_weights(block_index,
     # create the standard weights array
     core = tuple(x - 2*y + 2 for x, y in zip(block_size, block_overlaps))
     pad = tuple((2*y - 1, 2*y - 1) for y in block_overlaps)
-    weights = np.pad(np.ones(core, dtype=np.float64),
-                        pad, mode='linear_ramp')
+    weights = np.pad(np.ones(core, dtype=np.float64), pad, mode='linear_ramp')
 
     # rebalance if any neighbors are missing
     if not np.all(list(block_neighbors.values())):
@@ -290,21 +289,22 @@ def _get_transform_weights(block_index,
                 missing_weights[region] += weights[neighbor_region]
 
         # rebalance the weights
-        weights_adjustment = 1 - missing_weights
-        weights = np.divide(weights, weights_adjustment,
-                            out=np.zeros_like(weights),
-                            where=weights_adjustment != 0).astype(np.float32)
+        weights = weights / (1 - missing_weights)
+        weights[np.isnan(weights)] = 0.  # edges of blocks are 0/0
+        weights = weights.astype(np.float32)
 
     # crop weights if block is on edge of domain
     block_dim = len(block_index)
-    region = [slice(None),]*block_dim
     for i in range(block_dim):
+        region = [slice(None),]*block_dim
         if block_index[i] == 0:
             region[i] = slice(block_overlaps[i], None)
+            weights = weights[tuple(region)]
         elif block_index[i] == nblocks[i] - 1:
             region[i] = slice(None, -block_overlaps[i])
+            weights = weights[tuple(region)]
 
-    return weights[tuple(region)]
+    return weights
 
 
 def _write_block_transform(block_transform_future,
@@ -318,12 +318,9 @@ def _write_block_transform(block_transform_future,
           flush=True)
 
     if output_transform is not None:
-        # read existing block
-        block_to_write = output_transform[block_slice_coords]
-        # update the block
-        block_to_write += block_transform
-        # write it back
-        output_transform[block_slice_coords] = block_to_write
+        # write result
+        output_transform[block_slice_coords] = (output_transform[block_slice_coords] +
+                                                block_transform)
         print(f'{time.ctime(time.time())} Updated vector field for block: ',
                 block_index,
                 'at', block_slice_coords,

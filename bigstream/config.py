@@ -53,9 +53,13 @@ random:
   use_patch_mutual_information: false
   print_running_improvements: false
 
-global_align: {}
+global_align:
+  steps: [] # no default global steps
 
 local_align:
+  steps: [] # no default local steps
+  block_size: [128, 128, 128]
+  block_overlap: 0.5
   ransac:
     safeguard_exceptions: false
 

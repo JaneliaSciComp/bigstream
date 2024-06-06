@@ -101,7 +101,7 @@ class ImageData:
 
     @voxel_spacing.setter
     def voxel_spacing(self, value):
-        self.image_voxel_spacing = value
+        self.image_voxel_spacing = np.array(value)
 
     @property
     def downsampling(self):

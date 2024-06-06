@@ -244,7 +244,7 @@ def distributed_piecewise_alignment_pipeline(
 
     #################### The function to run on each block ###############
     def align_single_block(indices, static_transform_list):
-
+        start_time = time.time()
         # parse input, log index and slices
         block_index, fix_slices, neighbor_flags = indices
         print("Block index: ", block_index, "\nSlices: ", fix_slices, flush=True)
@@ -293,8 +293,14 @@ def distributed_piecewise_alignment_pipeline(
 
         # get moving crop origin relative to fixed crop
         mov_origin = mov_start * mov_spacing - fix_block_coords_phys[0]
-        ##################################################################
 
+        print(f'{time.ctime(time.time())} Block {block_index} :'
+            f'fix voxel coords {fix_block_coords},',
+            f'fix phys coords {fix_block_coords_phys} -> ',
+            f'mov coords {mov_slices},',
+            f'mov phys coords {mov_block_coords_phys} -> ',
+            flush=True)
+        ##################################################################
 
         ################ Read fix and moving data ########################
         fix = fix_zarr[fix_slices]
@@ -325,6 +331,11 @@ def distributed_piecewise_alignment_pipeline(
 
         ############################ Align ###############################
         # run alignment pipeline
+        print(f'{time.ctime(start_time)} Compute block transform',
+            f'{block_index}: {fix_slices}, {mov_origin}',
+            f'fix shape: {fix.shape}, mov_shape: {mov.shape}',
+            static_transform_list,
+            flush=True)
         transform = alignment_pipeline(
             fix, mov, fix_spacing, mov_spacing, steps,
             fix_mask=fix_mask, mov_mask=mov_mask,
@@ -383,6 +394,12 @@ def distributed_piecewise_alignment_pipeline(
 
         # apply weights
         transform = transform * weights[..., None]
+        end_time = time.time()
+
+        print(f'{time.ctime(end_time)} Finished computing {transform.shape}',
+              f'block  transform in {end_time-start_time}s',
+              block_index,
+              flush=True)
         ##################################################################
 
 

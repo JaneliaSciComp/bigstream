@@ -1,6 +1,7 @@
 import os
 import SimpleITK as sitk
 import bigstream.utility as ut
+import time
 
 
 # interpolator switch
@@ -222,6 +223,13 @@ def configure_irm(
     irm.SetShrinkFactorsPerLevel(shrink_factors)
     irm.SetSmoothingSigmasPerLevel(smooth_sigmas)
     irm.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+
+    print(f'{time.ctime(time.time())} Configure IRM', 
+          f'Metric: {metric} -> {metric_args}',
+          f'Optimizer: {optimizer} -> {optimizer_args}',
+          f'Shrink factors: {shrink_factors}',
+          f'Smooth sigmas: {smooth_sigmas}',
+          flush=True)
 
     # set callback function
     if callback is None:

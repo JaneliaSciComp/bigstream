@@ -62,6 +62,13 @@ def _prepare_compute_block_transform_params(block_info,
     # get moving image origin
     new_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
 
+    print(f'{time.ctime(time.time())} Block {block_index} :'
+          f'fix voxel coords {fix_block_voxel_coords},',
+          f'fix phys coords {fix_block_phys_coords} -> ',
+          f'mov coords {mov_slices},',
+          f'mov phys coords {mov_block_phys_coords} -> ',
+          flush=True)
+
     # read masks
     fix_blockmask_coords, mov_blockmask_coords = None, None
     if fix_fullmask_shape is not None:
@@ -196,7 +203,8 @@ def _compute_block_transform(compute_transform_params,
      mov_mask_block, # this can be a mask descriptor
      ) = compute_transform_params
     print(f'{time.ctime(start_time)} Compute block transform',
-          f'{block_index}: {block_coords}',
+          f'{block_index}: {block_coords}, {new_origin_phys}',
+          f'fix shape: {fix_block.shape}, mov_shape: {mov_block.shape}',
           static_block_transform_list,
           flush=True)
     # run alignment pipeline
@@ -204,10 +212,7 @@ def _compute_block_transform(compute_transform_params,
     # which is not supported yet by dask arrays
     # so in order to avoid the problem we materialize the fix and moving blocks
     transform = alignment_pipeline(
-        fix_block,
-        mov_block,
-        fix_spacing, mov_spacing,
-        align_steps,
+        fix_block, mov_block, fix_spacing, mov_spacing, align_steps,
         fix_mask=fix_mask_block,
         mov_mask=mov_mask_block,
         mov_origin=new_origin_phys,
@@ -241,10 +246,10 @@ def _compute_block_transform(compute_transform_params,
 
     end_time = time.time()
 
-    print(f'{time.ctime(end_time)} Finished computing block transform',
-          f'in {end_time-start_time}s',
-          block_index,
-          flush=True)
+    print(f'{time.ctime(end_time)} Finished computing {transform.shape}',
+            f'block  transform in {end_time-start_time}s',
+            block_index,
+            flush=True)
 
     return block_index, block_coords, transform
 
@@ -517,6 +522,9 @@ def distributed_alignment_pipeline(
     )
 
     blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
+    # blocks = (block_index, fix_block_coords, mov_slices,
+    #           fix_blockmask_coords, mov_blockmask_coords,
+    #           new_origin, block_transform_list)
 
     blocks_to_process = cluster_client.map(
         _read_blocks_for_processing,

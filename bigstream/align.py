@@ -995,6 +995,8 @@ def affine_align(
         The affine or rigid transform matrix matching moving to fixed
     """
 
+    print(f'{time.ctime(time.time())} Affine align -> {kwargs}',
+          flush=True)
     # determine the correct default
     if default is None: default = np.eye(fix.ndim + 1)
     initial_transform_given = isinstance(initial_condition, np.ndarray)
@@ -1441,9 +1443,11 @@ def alignment_pipeline(
     # loop over steps
     new_transforms = []
     for alignment, arguments in steps:
-        print(f'{time.ctime(time.time())} Run', alignment, arguments,
+        print(f'{time.ctime(time.time())} Run {alignment} -> {arguments}',
               flush=True)
         arguments = {**kwargs, **arguments}
+        print(f'{time.ctime(time.time())} All {alignment} args: {arguments}',
+              flush=True)
         arguments['static_transform_list'] = static_transform_list + new_transforms
         new_transforms.append(align[alignment](**arguments))
         print(f'{time.ctime(time.time())} Completed', alignment, arguments,

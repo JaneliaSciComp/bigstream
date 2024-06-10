@@ -486,18 +486,29 @@ def distributed_alignment_pipeline(
         block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
-        if fix_mask_image is not None:
-            start = block_partition_size * (i, j, k)
-            stop = start + block_partition_size
+        if fix_mask is not None:
+            mask_start = block_partition_size * (i, j, k)
+            mask_stop = mask_start + block_partition_size
             ratio = fix_mask_shape_arr / fix_shape_arr
-            start = np.round(ratio * start).astype(int)
-            stop = np.round(ratio * stop).astype(int)
+            mask_start = np.round(ratio * mask_start).astype(int)
+            mask_stop = np.round(ratio * mask_stop).astype(int)
             fix_mask_block_coords = tuple(slice(a, b)
-                                                for a, b in zip(start, stop))
-            fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
-            if (np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape) <
-                foreground_percentage):
-                foreground = False
+                                                for a, b in zip(mask_start, mask_stop))
+            if fix_mask_image is not None:
+                # mask is provided as an image
+                fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
+                if (np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape) <
+                    foreground_percentage):
+                    print(f'Ignore ndarray masked block {(i, j, k)}', flush=True)
+                    foreground = False
+            elif isinstance(fix_mask, (tuple, list)):
+                # mask is provided as a tuple
+                fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
+                fix_mask_crop = np.isin(fix_mask_crop, fix_mask, invert=True).astype(np.uint8)
+                if (np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape) <
+                    foreground_percentage):
+                    print(f'Ignore tuple masked block {(i, j, k)}', flush=True)
+                    foreground = False
 
         if foreground:
             fix_blocks_infos.append(((i, j, k,), block_slice))

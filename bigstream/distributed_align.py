@@ -500,7 +500,7 @@ def distributed_alignment_pipeline(
             if fix_mask_image is not None:
                 # mask is provided as an image
                 fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
-                foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape
+                foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
                 print(f'Block {(i, j, k)} fg ratio: {foreground_ratio}',
                       flush=True)
                 if foreground_ratio < foreground_percentage:
@@ -510,7 +510,7 @@ def distributed_alignment_pipeline(
                 # mask is provided as a tuple
                 fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
                 fix_mask_crop = np.isin(fix_mask_crop, fix_mask, invert=True).astype(np.uint8)
-                foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape
+                foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
                 print(f'Block {(i, j, k)} fg ratio: {foreground_ratio}',
                       flush=True)
                 if foreground_ratio < foreground_percentage:

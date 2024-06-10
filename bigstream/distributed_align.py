@@ -489,7 +489,10 @@ def distributed_alignment_pipeline(
         if fix_mask is not None:
             mask_start = block_partition_size * (i, j, k)
             mask_stop = mask_start + block_partition_size
-            ratio = fix_mask_shape_arr / fix_shape_arr
+            if fix_mask_image is not None:
+                ratio = fix_mask_shape_arr / fix_shape_arr
+            else:
+                ratio = 1
             mask_start = np.round(ratio * mask_start).astype(int)
             mask_stop = np.round(ratio * mask_stop).astype(int)
             fix_mask_block_coords = tuple(slice(a, b)

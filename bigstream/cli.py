@@ -48,20 +48,24 @@ class CliArgsHelper:
 class RegistrationInputs:
 
     def transform_path(self):
-        if self.output_dir and self.transform_name:
-            return f'{self.output_dir}/{self.transform_name}'
+        output_dir = (self.transform_dir if self.transform_dir
+                                         else self.default_output_dir)
+        if output_dir and self.transform_name:
+            return f'{output_dir}/{self.transform_name}'
         else:
             return None
 
     def inv_transform_path(self):
-        if self.output_dir and self.inv_transform_name:
-            return f'{self.output_dir}/{self.inv_transform_name}'
+        output_dir = (self.transform_dir if self.transform_dir
+                                         else self.default_output_dir)
+        if output_dir and self.inv_transform_name:
+            return f'{output_dir}/{self.inv_transform_name}'
         else:
             return None
 
     def align_path(self):
-        output_dir = (self.align_output_dir if self.align_output_dir
-                                            else self.output_dir)
+        output_dir = (self.align_dir if self.align_dir
+                                     else self.default_output_dir)
         if output_dir and self.align_name:
             return f'{output_dir}/{self.align_name}'
         else:
@@ -118,8 +122,11 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       help='Moving volume mask descriptor')
 
     args.add_argument(args_descriptor.argflag('output-dir'),
-                      dest=args_descriptor.argdest('output_dir'),
+                      dest=args_descriptor.argdest('default_output_dir'),
                       help='Default output directory')
+    args.add_argument(args_descriptor.argflag('transform-dir'),
+                      dest=args_descriptor.argdest('transform_dir'),
+                      help='Transform output directory')
     args.add_argument(args_descriptor.argflag('transform-name'),
                       dest=args_descriptor.argdest('transform_name'),
                       help='Transform name')
@@ -132,8 +139,8 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('inv-transform-subpath'),
                       dest=args_descriptor.argdest('inv_transform_subpath'),
                       help='Transform subpath')
-    args.add_argument(args_descriptor.argflag('align-output-dir'),
-                      dest=args_descriptor.argdest('align_output_dir'),
+    args.add_argument(args_descriptor.argflag('align-dir'),
+                      dest=args_descriptor.argdest('align_dir'),
                       help='Alignment output directory')
     args.add_argument(args_descriptor.argflag('align-name'),
                       dest=args_descriptor.argdest('align_name'),
@@ -210,14 +217,15 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'mov_mask', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask_descriptor', registration_args)
-    _extract_arg(args, args_descriptor, 'output_dir', registration_args)
+    _extract_arg(args, args_descriptor, 'default_output_dir', registration_args)
+    _extract_arg(args, args_descriptor, 'transform_dir', registration_args)
     _extract_arg(args, args_descriptor, 'transform_name', registration_args)
     _extract_arg(args, args_descriptor, 'transform_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'transform_blocksize', registration_args)
     _extract_arg(args, args_descriptor, 'inv_transform_name', registration_args)
     _extract_arg(args, args_descriptor, 'inv_transform_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'inv_transform_blocksize', registration_args)
-    _extract_arg(args, args_descriptor, 'align_output_dir', registration_args)
+    _extract_arg(args, args_descriptor, 'align_dir', registration_args)
     _extract_arg(args, args_descriptor, 'align_name', registration_args)
     _extract_arg(args, args_descriptor, 'align_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'align_blocksize', registration_args)

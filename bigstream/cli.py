@@ -243,9 +243,9 @@ def _extract_arg(args: RegistrationInputs, args_descriptor: CliArgsHelper,
 def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
     # Read the global inputs
     fix = ImageData(args.fix, args.fix_subpath)
-    print(f'Open fix vol {fix} for global registration', flush=True)
+    print(f'Open fix vol {fix} for registration', flush=True)
     mov = ImageData(args.mov, args.mov_subpath)
-    print(f'Open moving vol {mov} for global registration', flush=True)
+    print(f'Open moving vol {mov} for registration', flush=True)
     # get voxel spacing for fix and moving volume
     if args.fix_spacing:
         fix.voxel_spacing = args.fix_spacing[::-1] # xyz -> zyx

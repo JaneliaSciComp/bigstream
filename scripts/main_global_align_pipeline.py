@@ -185,7 +185,7 @@ def main():
         _run_global_align(reg_inputs, args.align_config)
     else:
         # global transform found -> just apply it
-        _apply_global_transform(args, global_transform)
+        _apply_global_transform(reg_inputs, global_transform)
 
 
 if __name__ == '__main__':

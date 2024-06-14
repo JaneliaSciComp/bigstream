@@ -31,6 +31,7 @@ def _prepare_compute_block_transform_params(block_info,
     (fix_block_voxel_coords,
      fix_block_phys_coords) = _get_block_corner_coords(fix_block_coords,
                                                        fix_spacing)
+    print(f'Block index: {block_index} - physical coords: {fix_block_phys_coords}')
 
     # parse initial transforms
     # recenter affines, read deforms, apply transforms to crop coordinates
@@ -89,7 +90,7 @@ def _prepare_compute_block_transform_params(block_info,
                                                     mov_mask_stop))
 
     print(f'{time.ctime(time.time())} Return blocks data',
-          block_index, fix_block_coords,
+          block_index, fix_block_coords, new_origin,
           flush=True)
 
     return (block_index,

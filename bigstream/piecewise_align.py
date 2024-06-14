@@ -259,6 +259,7 @@ def distributed_piecewise_alignment_pipeline(
             fix_block_coords.append(a)
         fix_block_coords = np.array(fix_block_coords)
         fix_block_coords_phys = fix_block_coords * fix_spacing
+        print(f'Block index: {block_index} - physical coords: {fix_block_coords_phys}')
 
         # read static transforms: recenter affines, apply to crop coordinates
         new_list = []

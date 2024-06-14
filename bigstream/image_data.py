@@ -95,9 +95,8 @@ class ImageData:
             if voxel_spacing_from_attrs is not None:
                 # make it zyx
                 return voxel_spacing_from_attrs[::-1]
-            return voxel_spacing_from_attrs
-        else:
-            return None
+
+        return np.ones(self.shape) # default voxel_spacing to 1
 
     @voxel_spacing.setter
     def voxel_spacing(self, value):

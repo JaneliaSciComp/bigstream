@@ -80,20 +80,24 @@ def open(container_path, subpath, block_coords=None):
 
 
 def get_voxel_spacing(attrs):
-    if (attrs.get('downsamplingFactors') and attrs.get('pixelResolution')):
-        voxel_spacing = (np.array(attrs['pixelResolution']) * 
-                         np.array(attrs['downsamplingFactors']))
-    elif attrs.get('pixelResolution'):
-        pr = attrs.get('pixelResolution')
-        voxel_spacing = None
-        if type(pr) == list:
-            voxel_spacing = np.array(pr)
-        elif type(pr) == dict:
-            if pr.get('dimensions'):
-                voxel_spacing = np.array(pr['dimensions'])
+    pr = None
+    if attrs.get('pixelResolution'):
+        pr_attr = attrs.get('pixelResolution')
+        if type(pr_attr) == list:
+            pr = np.array(pr_attr)
+        elif type(pr_attr) == dict:
+            if pr_attr.get('dimensions'):
+                pr = np.array(pr['dimensions'])
+
+    if pr is not None:
+        if attrs.get('downsamplingFactors'):
+            ds = np.array(attrs['downsamplingFactors'])
+        else:
+            ds = 1
+
+        return pr * ds
     else:
-        voxel_spacing = None
-    return voxel_spacing
+        return None
 
 
 def read_attributes(container_path, subpath):

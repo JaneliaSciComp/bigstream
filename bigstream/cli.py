@@ -186,7 +186,7 @@ def extract_align_pipeline(config_filename, context, steps):
         config = default_config
     context_config = config[context]
     align_pipeline = []
-    if len(steps) > 0:
+    if steps and len(steps) > 0:
         # the steps are defined
         pipeline_steps = steps
     else:

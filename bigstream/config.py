@@ -11,7 +11,8 @@ ransac: &ransac_args
   blob_sizes: [6, 20]
   num_sigma_max: 15
   cc_radius: 12
-  safeguard_exceptions: true
+  # default safeguard_exceptions to false
+  safeguard_exceptions: false
   match_threshold: 0.7
   max_spot_match_distance:
   point_matches_threshold: 50
@@ -27,17 +28,13 @@ ransac: &ransac_args
 affine: &affine_args
   optimizer: RSGD # see configure_irm for default RSGD args
   metric: MMI
-  sampling: 'NONE'
-  interpolator: '1'
   # shrink_factors - list of int
   shrink_factors: [1]
   # smooth_sigmas - list of float
   smooth_sigmas: [0]
   alignment_spacing: 1.0
-  sampling_percentage:
   metric_args: {}
   optimizer_args: {}
-  exhaustive_step_sizes:
 
 deform: &deform_args
   <<: *affine_args

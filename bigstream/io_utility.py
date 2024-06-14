@@ -87,7 +87,7 @@ def get_voxel_spacing(attrs):
             pr = np.array(pr_attr)
         elif type(pr_attr) == dict:
             if pr_attr.get('dimensions'):
-                pr = np.array(pr['dimensions'])
+                pr = np.array(pr_attr['dimensions'])
 
     if pr is not None:
         if attrs.get('downsamplingFactors'):

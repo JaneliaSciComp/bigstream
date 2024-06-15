@@ -243,6 +243,10 @@ def _compute_block_transform(compute_transform_params,
         weights = weights[crop]
 
     # apply weights
+    print(f'{time.ctime(time.time())} Block {block_index} :'
+        f'Apply weights {weights.shape},',
+        f'to transform {transform.shape}',
+        flush=True)
     transform = transform * weights[..., None]
 
     end_time = time.time()

@@ -394,6 +394,10 @@ def distributed_piecewise_alignment_pipeline(
             weights = weights[tuple(slice(0, s) for s in transform.shape[:-1])]
 
         # apply weights
+        print(f'{time.ctime(time.time())} Block {block_index} :'
+            f'Apply weights {weights.shape},',
+            f'to transform {transform.shape}',
+            flush=True)
         transform = transform * weights[..., None]
         end_time = time.time()
 
@@ -419,9 +423,9 @@ def distributed_piecewise_alignment_pipeline(
             lock.acquire()
 
             # write result to disk
-            print(f'WRITING BLOCK {block_index} at {time.ctime(time.time())}', flush=True)
+            print(f'{time.ctime(time.time())} WRITING BLOCK {block_index} at {fix_slices}', flush=True)
             output_transform[fix_slices] = output_transform[fix_slices] + transform
-            print(f'FINISHED WRITING BLOCK {block_index} at {time.ctime(time.time())}', flush=True)
+            print(f'{time.ctime(time.time())} FINISHED WRITING BLOCK {block_index}', flush=True)
 
             # release the lock
             lock.release()

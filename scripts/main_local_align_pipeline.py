@@ -337,22 +337,19 @@ def main():
 
     reg_inputs = extract_registration_input_args(args, local_descriptor)
 
-    if args.local_registration_steps:
-        _run_local_alignment(
-            reg_inputs,
-            args.align_config,
-            global_affine,
-            processing_size=args.local_processing_size,
-            processing_overlap=args.local_processing_overlap_factor,
-            inv_iterations=args.inv_iterations,
-            inv_sqrt_iterations=args.inv_sqrt_iterations,
-            inv_order=args.inv_order,
-            dask_scheduler_address=args.dask_scheduler,
-            dask_config_file=args.dask_config,
-            max_tasks=args.cluster_max_tasks,
-        )
-    else:
-        print('Skip local alignment because no local steps were specified.')
+    _run_local_alignment(
+        reg_inputs,
+        args.align_config,
+        global_affine,
+        processing_size=args.local_processing_size,
+        processing_overlap=args.local_processing_overlap_factor,
+        inv_iterations=args.inv_iterations,
+        inv_sqrt_iterations=args.inv_sqrt_iterations,
+        inv_order=args.inv_order,
+        dask_scheduler_address=args.dask_scheduler,
+        dask_config_file=args.dask_config,
+        max_tasks=args.cluster_max_tasks,
+    )
 
 
 if __name__ == '__main__':

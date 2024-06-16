@@ -22,13 +22,22 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
         if container_subpath:
             print('Create dataset', container_path, container_subpath, kwargs)
             container_root = zarr.open_group(store=store, mode='a')
-            dataset = container_root.require_dataset(
-                container_subpath,
-                shape=shape,
-                chunks=chunks,
-                dtype=dtype,
-                overwrite=overwrite,
-                data=data)
+            if data is None and overwrite:
+                dataset = container_root.create_dataset(
+                    container_subpath,
+                    shape=shape,
+                    chunks=chunks,
+                    dtype=dtype,
+                    overwrite=overwrite,
+                    data=data)
+            else:
+                dataset = container_root.require_dataset(
+                    container_subpath,
+                    shape=shape,
+                    chunks=chunks,
+                    dtype=dtype,
+                    overwrite=overwrite,
+                    data=data)
             # set additional attributes
             dataset.attrs.update((k, v) for k,v in kwargs.items() if v)
             return dataset

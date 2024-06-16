@@ -293,6 +293,7 @@ def _align_local_data(fix_image,
             fix_shape,
             align_blocksize,
             fix_image.dtype,
+            overwrite=True,
             pixelResolution=mov_image.get_attr('pixelResolution'),
             downsamplingFactors=mov_image.get_attr('downsamplingFactors'),
         )

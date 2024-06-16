@@ -135,6 +135,11 @@ def distributed_apply_transform(
         fix_slices = coords.item()
         fix = fix_zarr[fix_slices]
         fix_origin = fix_spacing * [s.start for s in fix_slices]
+        print('Block coords:', fix_slices,
+            'Block origin:', fix_origin,
+            'Block size:', blocksize,
+            'Overlap:', overlap,
+            flush=True)
 
         # read relevant region of transforms
         new_list = []
@@ -144,11 +149,25 @@ def distributed_apply_transform(
                 start = np.floor(fix_origin / kwargs['transform_spacing'][iii]).astype(int)
                 stop = [s.stop for s in fix_slices] * fix_spacing / kwargs['transform_spacing'][iii]
                 stop = np.ceil(stop).astype(int)
-                transform = transform[tuple(slice(a, b) for a, b in zip(start, stop))]
+                transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
+                print(f'Transform slice for block at {fix_slices}:',
+                    transform_slice,
+                    flush=True)
+                transform = transform[transform_slice]
                 transform_origin[iii] = start * kwargs['transform_spacing'][iii]
+
+            if fix_slices[0].start == 0 and fix_slices[1].start == 96 and fix_slices[2].start == 96:
+                print(f'!!!!!! transform {iii}: ',
+                      transform_origin[iii],
+                      transform.shape,
+                      transform,
+                      flush=True)
             new_list.append(transform)
         transform_list = new_list
         transform_origin = tuple(transform_origin)
+        print(f'Transform origin for block at {fix_slices}:',
+            transform_origin,
+            flush=True)
 
         # transform fixed block corners, read moving data
         fix_block_coords = []
@@ -159,6 +178,9 @@ def distributed_apply_transform(
         mov_block_coords = bs_transform.apply_transform_to_coordinates(
             fix_block_coords, transform_list, kwargs['transform_spacing'], transform_origin,
         )
+        print('Transformed moving block coords:', fix_slices, 
+            fix_block_coords, '->', mov_block_coords,
+            flush=True)
         mov_block_coords = np.round(mov_block_coords / mov_spacing).astype(int)
         mov_block_coords = np.maximum(0, mov_block_coords)
         mov_block_coords = np.minimum(mov_zarr.shape, mov_block_coords)
@@ -167,8 +189,20 @@ def distributed_apply_transform(
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
         mov = mov_zarr[mov_slices]
         mov_origin = mov_spacing * [s.start for s in mov_slices]
+        if fix_slices[0].start == 0 and fix_slices[1].start == 96 and fix_slices[2].start == 96:
+            print('!!!!!! MOV: ', mov_block_coords,
+                  mov_slices, mov_origin, mov,
+                  flush=True)
+
+        print(f'Moving block {fix_slices} origin:', fix_origin, '->',
+              mov_origin, flush=True)
+        print(f'Moving block {fix_slices} coords: -> {mov_slices}',
+            flush=True)
 
         # resample
+        print(f'Apply {len(transform_list)} transforms to {fix_slices}',
+              f'fix origin: {fix_origin}, mov origin: {mov_origin}',
+              flush=True)
         aligned = bs_transform.apply_transform(
             fix, mov, fix_spacing, mov_spacing,
             transform_list=transform_list,
@@ -177,6 +211,11 @@ def distributed_apply_transform(
             mov_origin=mov_origin,
             **kwargs,
         )
+        if fix_slices[0].start == 0 and fix_slices[1].start == 96 and fix_slices[2].start == 96:
+            print('!!!!!! ALIGNED: ', fix_origin,
+                  mov_origin, transform_origin, 
+                  aligned.shape, aligned,
+                  flush=True)
 
         # crop out overlap
         for axis in range(aligned.ndim):
@@ -185,11 +224,16 @@ def distributed_apply_transform(
             slc = [slice(None),]*aligned.ndim
             if fix_slices[axis].start != 0:
                 slc[axis] = slice(overlap[axis], None)
+                print('Crop axis', axis, 'left', 
+                    fix_slices,'->',slc,
+                    flush=True)
                 aligned = aligned[tuple(slc)]
 
             # right side
             slc = [slice(None),]*aligned.ndim
             if aligned.shape[axis] > blocksize[axis]:
+                print('Crop axis', axis, 'right', fix_slices,'->',slc,
+                    flush=True)
                 slc[axis] = slice(None, blocksize[axis])
                 aligned = aligned[tuple(slc)]
 

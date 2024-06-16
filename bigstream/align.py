@@ -629,6 +629,7 @@ def random_affine_search(
     static_transform_list=[],
     use_patch_mutual_information=False,
     print_running_improvements=False,
+    context='',
     **kwargs,
 ):
     """
@@ -847,7 +848,7 @@ def random_affine_search(
         # construct irm, set images, masks, transforms
         kwargs['optimizer'] = 'LBFGS2'    # optimizer is not used, just a dummy value
         kwargs['optimizer_args'] = {}
-        irm = configure_irm(**kwargs)
+        irm = configure_irm(context=context, **kwargs)
         fix, mov, fix_mask, mov_mask = images_to_sitk(
             fix, mov, fix_mask, mov_mask,
             fix_spacing, mov_spacing,
@@ -902,6 +903,7 @@ def affine_align(
     mov_origin=None,
     static_transform_list=[],
     default=None,
+    context='',
     **kwargs,
 ):
     """
@@ -994,8 +996,7 @@ def affine_align(
     transform : 4x4 array
         The affine or rigid transform matrix matching moving to fixed
     """
-
-    print(f'{time.ctime(time.time())} Affine align -> {kwargs}',
+    print(f'{time.ctime(time.time())} Affine align {context} -> {kwargs}',
           flush=True)
     # determine the correct default
     if default is None: default = np.eye(fix.ndim + 1)
@@ -1030,9 +1031,9 @@ def affine_align(
     mov_mask_spacing = X[7]
 
     # set up registration object
-    print(f'{time.ctime(time.time())} Configure IRM args: {kwargs}',
+    print(f'{time.ctime(time.time())} Configure {context} IRM args: {kwargs}',
           flush=True)
-    irm = configure_irm(**kwargs)
+    irm = configure_irm(context=context, **kwargs)
     # set initial static transforms
     if static_transform_list:
         T = ut.transform_list_to_composite_transform(
@@ -1076,25 +1077,25 @@ def affine_align(
         final_metric_value = irm.MetricEvaluate(fix, mov)
     except Exception as e:
         print(f'{time.ctime(time.time())}',
-              'Registration failed due to ITK exception:\n', e,
+              f'{context} Registration failed due to ITK exception:\n', e,
               flush=True)
-        print(f'{time.ctime(time.time())} Returning default',
+        print(f'{time.ctime(time.time())} {context} Returning default',
               flush=True)
         return default
 
     # if registration improved metric return result
     # otherwise return default
     if final_metric_value < initial_metric_value:
-        print(f'{time.ctime(time.time())} Registration succeeded',
+        print(f'{time.ctime(time.time())} {context} Registration succeeded',
               flush=True)
         return ut.affine_transform_to_matrix(transform)
     else:
-        print(f'{time.ctime(time.time())} Optimization failed to improve metric',
+        print(f'{time.ctime(time.time())} {context} Optimization failed to improve metric',
               flush=True)
         print(f'{time.ctime(time.time())}',
-              f'METRIC VALUES initial: {initial_metric_value} final: {final_metric_value}',
+              f'METRIC VALUES initial: {context} {initial_metric_value} final: {final_metric_value}',
               flush=True)
-        print(f'{time.ctime(time.time())} Returning default',
+        print(f'{time.ctime(time.time())} {context} Returning default',
               flush=True)
         return default
 
@@ -1113,6 +1114,7 @@ def deformable_align(
     mov_origin=None,
     static_transform_list=[],
     default=None,
+    context='',
     **kwargs,
 ):
     """
@@ -1247,7 +1249,7 @@ def deformable_align(
     mov_mask_spacing = X[7]
 
     # set up registration object
-    irm = configure_irm(**kwargs)
+    irm = configure_irm(context=context, **kwargs)
 
     # initial control point grid
     z = control_point_spacing * control_point_levels[0]
@@ -1288,9 +1290,9 @@ def deformable_align(
         final_metric_value = irm.MetricEvaluate(fix, mov)
     except Exception as e:
         print(f'{time.ctime(time.time())}',
-              'Registration failed due to ITK exception:\n', e,
+              f'{context} Registration failed due to ITK exception:\n', e,
               flush=True)
-        print(f'{time.ctime(time.time())} Returning default',
+        print(f'{time.ctime(time.time())} {context} Returning default',
               flush=True)
         return default
 
@@ -1303,16 +1305,18 @@ def deformable_align(
             spacing=initial_fix_spacing, origin=fix_origin,
             direction=np.eye(fix.GetDimension()),
         )
-        print(f'{time.ctime(time.time())} Registration succeeded',
+        print(f'{time.ctime(time.time())} {context} Registration succeeded',
               flush=True)
         return params, field
     else:
-        print(f'{time.ctime(time.time())} Optimization failed to improve metric',
+        print(f'{time.ctime(time.time())} {context} Optimization failed ',
+              'to improve metric',
               flush=True)
         print(f'{time.ctime(time.time())}',
-              f'METRIC VALUES initial: {initial_metric_value} final: {final_metric_value}',
+              f'{context} METRIC VALUES initial: {initial_metric_value} ',
+              f'final: {final_metric_value}',
               flush=True)
-        print(f'{time.ctime(time.time())} Returning default',
+        print(f'{time.ctime(time.time())} {context} Returning default',
               flush=True)
         return default
 
@@ -1329,6 +1333,7 @@ def alignment_pipeline(
     mov_origin=None,
     static_transform_list=[],
     return_format='flatten',
+    context='',
     **kwargs,
 ):
     """
@@ -1443,15 +1448,18 @@ def alignment_pipeline(
     # loop over steps
     new_transforms = []
     for alignment, arguments in steps:
-        print(f'{time.ctime(time.time())} Run {alignment} -> {arguments}',
+        print(f'{time.ctime(time.time())} Run {context}',
+              alignment, arguments,
               flush=True)
         arguments = {**kwargs, **arguments}
         print(f'{time.ctime(time.time())} All {alignment} args: {arguments}',
               flush=True)
         arguments['static_transform_list'] = static_transform_list + new_transforms
-        new_transforms.append(align[alignment](**arguments))
-        print(f'{time.ctime(time.time())} Completed', alignment, arguments,
+        alignment_result = align[alignment](context=context, **arguments)
+        print(f'{time.ctime(time.time())} Completed {context}',
+              alignment, arguments,
               flush=True)
+        new_transforms.append(alignment_result)
 
     # return in the requested format
     if return_format == 'independent':
@@ -1460,4 +1468,3 @@ def alignment_pipeline(
         return compress_transform_list(new_transforms, [fix_spacing,]*len(new_transforms))
     elif return_format == 'flatten':
         return compose_transform_list(new_transforms, fix_spacing)
-

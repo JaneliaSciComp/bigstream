@@ -7,7 +7,7 @@ from tifffile import TiffFile
 
 
 def create_dataset(container_path, container_subpath, shape, chunks, dtype,
-                   data=None,
+                   data=None, overwrite=False,
                    **kwargs):
     try:
         real_container_path = os.path.realpath(container_path)
@@ -27,6 +27,7 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                 shape=shape,
                 chunks=chunks,
                 dtype=dtype,
+                overwrite=overwrite,
                 data=data)
             # set additional attributes
             dataset.attrs.update((k, v) for k,v in kwargs.items() if v)

@@ -201,12 +201,14 @@ def distributed_piecewise_alignment_pipeline(
     steps = [(a, {**kwargs, **b}) for a, b in steps]
     ######################################################################
 
-
     #################### Determine block structure #######################
     # determine fixed image slices for blocking
     blocksize = np.array(blocksize)
     nblocks = np.ceil(fix.shape / blocksize).astype(int)
     overlaps = np.round(blocksize * overlap).astype(int)
+    print(f'Partition {fix.shape} into {nblocks} using',
+          f'{blocksize} and {overlaps}',
+          flush=True)
     indices, slices = [], []
     for (i, j, k) in np.ndindex(*nblocks):
         start = blocksize * (i, j, k) - overlaps
@@ -247,7 +249,8 @@ def distributed_piecewise_alignment_pipeline(
         start_time = time.time()
         # parse input, log index and slices
         block_index, fix_slices, neighbor_flags = indices
-        print("Block index: ", block_index, "\nSlices: ", fix_slices, flush=True)
+        print("Block index: ", block_index, "\nSlices: ", fix_slices,
+              flush=True)
 
 
         ########## Map fix block corners onto mov coordinates ############
@@ -259,7 +262,8 @@ def distributed_piecewise_alignment_pipeline(
             fix_block_coords.append(a)
         fix_block_coords = np.array(fix_block_coords)
         fix_block_coords_phys = fix_block_coords * fix_spacing
-        print(f'Block index: {block_index} - physical coords: {fix_block_coords_phys}')
+        print(f'Block index: {block_index} - corner physical coords: {fix_block_coords_phys}',
+              flush=True)
 
         # read static transforms: recenter affines, apply to crop coordinates
         new_list = []
@@ -342,13 +346,16 @@ def distributed_piecewise_alignment_pipeline(
             fix_mask=fix_mask, mov_mask=mov_mask,
             mov_origin=mov_origin,
             static_transform_list=static_transform_list,
+            context=f'{block_index}',
         )
-
         # ensure transform is a vector field
         if len(transform.shape) == 2:
             transform = ut.matrix_to_displacement_field(
                 transform, fix.shape, spacing=fix_spacing,
             )
+            print(f'Block {block_index} - transform -> vector field',
+                transform.shape,
+                flush=True)
         ##################################################################
 
 
@@ -360,7 +367,9 @@ def distributed_piecewise_alignment_pipeline(
 
         # rebalance if any neighbors are missing
         if rebalance_for_missing_neighbors and not np.all(list(neighbor_flags.values())):
-
+            print(f'{time.ctime(time.time())} Rebalance transform weights',
+                block_index,
+                flush=True)
             # define overlap slices
             slices = {}
             slices[-1] = tuple(slice(0, 2*y) for y in overlaps)
@@ -423,9 +432,12 @@ def distributed_piecewise_alignment_pipeline(
             lock.acquire()
 
             # write result to disk
-            print(f'{time.ctime(time.time())} WRITING BLOCK {block_index} at {fix_slices}', flush=True)
-            output_transform[fix_slices] = output_transform[fix_slices] + transform
-            print(f'{time.ctime(time.time())} FINISHED WRITING BLOCK {block_index}', flush=True)
+            print(f'{time.ctime(time.time())} Writing block {block_index} at {fix_slices}',
+                  flush=True)
+            output_block = output_transform[fix_slices] + transform
+            output_transform[fix_slices] = output_block
+            print(f'{time.ctime(time.time())} Finished writing block {block_index} at {fix_slices}',
+                  flush=True)
 
             # release the lock
             lock.release()

@@ -104,6 +104,9 @@ def distributed_apply_transform(
         transform_spacing_list = transform_spacing
 
     # prepare block coordinates
+    print(f'Apply distributed transform to {fix_image.shape}',
+          f'partitioned in {nblocks} blocks using {blocksize_array}',
+          flush=True)
     blocks_coords = []
     for (i, j, k) in np.ndindex(*nblocks):
         start = blocksize_array * (i, j, k) - overlaps
@@ -125,6 +128,8 @@ def distributed_apply_transform(
                                          image=mov_image.image_ndarray,
                                          image_path=mov_image.image_path,
                                          image_subpath=mov_image.image_subpath)
+    print(f'!!!! TRANSFORM SPACING: {len(transform_spacing_list)}',
+          transform_spacing_list, flush=True)
     transform_block = throttle_method_invocations(
         functools.partial(
             _transform_single_block,
@@ -160,7 +165,7 @@ def distributed_apply_transform(
 
         finished_block_coords, aligned_block = f.result()
 
-        print('Transformed block:',
+        print('Completed to transform block:',
                 finished_block_coords,
                 flush=True)
 
@@ -196,12 +201,13 @@ def _transform_single_block(fix_block_read_method,
     Block transform function
     """
     print(f'Transform block: {block_coords}',
+          f'using {len(transform_list)} transforms',
           f'Spacing(fix/mov): {fix_spacing}/{mov_spacing}',
           f'Blocksize: {blocksize}, overlaps: {blockoverlaps}',
           flush=True)
     # fetch fixed image slices and read fix
     fix_origin = fix_spacing * [s.start for s in block_coords]
-    print('Block coords:',block_coords , 
+    print('Block coords:', block_coords,
           'Block origin:', fix_origin,
           'Block size:', blocksize,
           'Overlap:', blockoverlaps,
@@ -222,17 +228,26 @@ def _transform_single_block(fix_block_read_method,
                   transform_slice, flush=True)
             transform = transform[transform_slice]
             transform_origin[iii] = start * transform_spacing_list[iii]
-        applied_transform_list.append(transform)
-    transform_origin = tuple(transform_origin)
 
-    # transform fixed block corners, read moving data
-    fix_block_coords = []
-    for corner in list(product([0, 1], repeat=3)):
-        a = [x.stop-1 if y else x.start for x, y in zip(block_coords, corner)]
-        fix_block_coords.append(a)
-    fix_block_coords = np.array(fix_block_coords) * fix_spacing
+        if block_coords[0].start == 0 and block_coords[1].start == 96 and block_coords[2].start == 96:
+            print(f'!!!!!! transform {iii}: ', 
+                transform_origin[iii],
+                transform.shape,
+                transform,
+                flush=True)
+        applied_transform_list.append(transform)
+
+    transform_origin = tuple(transform_origin)
+    print(f'Transform origin for block at {block_coords}: {transform_origin}',
+          flush=True)
 
     try:
+        # transform fixed block corners, read moving data
+        fix_block_coords = []
+        for corner in list(product([0, 1], repeat=len(block_coords))):
+            a = [x.stop-1 if y else x.start for x, y in zip(block_coords, corner)]
+            fix_block_coords.append(a)
+        fix_block_coords = np.array(fix_block_coords) * fix_spacing
         mov_block_coords = bs_transform.apply_transform_to_coordinates(
             fix_block_coords,
             applied_transform_list,
@@ -253,15 +268,22 @@ def _transform_single_block(fix_block_read_method,
         mov_stop = np.max(mov_block_coords, axis=0)
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
         mov_origin = mov_spacing * [s.start for s in mov_slices]
-        print('Moving block origin:', fix_origin, '->', mov_origin,
-            flush=True)
-        print('Moving block coords:', block_coords, '->', mov_slices,
+        print(f'Moving block {block_coords} origin:', fix_origin, '->',
+              mov_origin, flush=True)
+        print(f'Moving block {block_coords} coords: -> mov_slices',
             flush=True)
 
         print(f'Read moving block from {mov_slices}', flush=True)
         mov_block = mov_block_read_method(mov_slices)
+        if block_coords[0].start == 0 and block_coords[1].start == 96 and block_coords[2].start == 96:
+            print('!!!!!! MOV: ', mov_block_coords,
+                  mov_slices, mov_origin, mov_block,
+                  flush=True)
 
         # resample
+        print(f'Apply {len(transform_list)} transforms to {block_coords}',
+              f'fix origin: {fix_origin}, mov origin: {mov_origin}',
+              flush=True)
         aligned_block = bs_transform.apply_transform(
             fix_block, mov_block,
             fix_spacing, mov_spacing,
@@ -275,6 +297,11 @@ def _transform_single_block(fix_block_read_method,
             block_coords, '->', mov_slices,
             'shape:', aligned_block.shape,
             flush=True)
+        if block_coords[0].start == 0 and block_coords[1].start == 96 and block_coords[2].start == 96:
+            print('!!!!!! ALIGNED: ', fix_origin,
+                  mov_origin, transform_origin, 
+                  aligned_block.shape, aligned_block,
+                  flush=True)
 
         # crop out overlap
         final_block_coords_list = []

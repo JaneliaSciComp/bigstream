@@ -225,6 +225,7 @@ def _align_local_data(fix_image,
             fix_shape + (fix_ndim,),
             tuple(transform_blocksize) + (fix_ndim,),
             np.float32,
+            overwrite=True,
             pixelResolution=transform_spacing,
             downsamplingFactors=transform_downsampling, 
         )
@@ -257,6 +258,7 @@ def _align_local_data(fix_image,
             fix_shape + (fix_ndim,),
             tuple(inv_transform_blocksize) + (fix_ndim,),
             np.float32,
+            overwrite=True,
             pixelResolution=transform_spacing,
             downsamplingFactors=transform_downsampling,            
         )
@@ -282,7 +284,7 @@ def _align_local_data(fix_image,
             max_tasks=cluster_max_tasks,
         )
 
-    if (deform_ok or global_affine_transforms) and align_path:
+    if (deform_ok or len(global_affine_transforms) > 0) and align_path:
         # Apply local transformation only if 
         # highres aligned output name is set
         align = io_utility.create_dataset(
@@ -294,8 +296,8 @@ def _align_local_data(fix_image,
             pixelResolution=mov_image.get_attr('pixelResolution'),
             downsamplingFactors=mov_image.get_attr('downsamplingFactors'),
         )
-        print('Apply', 
-              f'{transform_path}:{transform_subpath}',              
+        print(f'Apply global transform {global_affine_transforms}',
+              f'and local transform {transform_path}:{transform_subpath}',
               'to warp',
               f'{mov_image}',
               '->',
@@ -305,8 +307,8 @@ def _align_local_data(fix_image,
             deform_transforms = [transform]
         else:
             deform_transforms = []
-        affine_spacing = (1.,) * mov_image.ndim
-        transform_spacing = affine_spacing + fix_image.voxel_spacing
+        affine_spacings = [(1.,) * mov_image.ndim for i in range(len(global_affine_transforms))]
+        transform_spacing = tuple(affine_spacings + [fix_image.voxel_spacing])
         distributed_apply_transform(
             fix_image, mov_image,
             fix_image.voxel_spacing, mov_image.voxel_spacing,

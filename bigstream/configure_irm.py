@@ -59,6 +59,7 @@ def configure_irm(
     optimizer_args={},
     sampling_percentage=None,
     exhaustive_step_sizes=None,
+    context='',
     callback=None,
 ):
     """
@@ -224,7 +225,7 @@ def configure_irm(
     irm.SetSmoothingSigmasPerLevel(smooth_sigmas)
     irm.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
 
-    print(f'{time.ctime(time.time())} Configure IRM', 
+    print(f'{time.ctime(time.time())} {context} Configure IRM',
           f'Metric: {metric} -> {metric_args}',
           f'Optimizer: {optimizer} -> {optimizer_args}',
           f'Shrink factors: {shrink_factors}',
@@ -237,7 +238,8 @@ def configure_irm(
             level = irm.GetCurrentLevel()
             iteration = irm.GetOptimizerIteration()
             metric = irm.GetMetricValue()
-            print("LEVEL: ", level, " ITERATION: ", iteration, " METRIC: ", metric, flush=True)
+            print(f'{context} LEVEL: {level} ITERATION: {iteration} ',
+                  f'METRIC: {metric}', flush=True)
     irm.AddCommand(sitk.sitkIterationEvent, lambda: callback(irm))
 
     # return configured irm

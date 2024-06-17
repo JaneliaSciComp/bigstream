@@ -33,6 +33,14 @@ def _define_args(args_descriptor):
                              action='store_true',
                              help='If set and the transform exists do not recompute it')
 
+    args_parser.add_argument('--logging-config', dest='logging_config',
+                             type=str,
+                             help='Logging configuration')
+    args_parser.add_argument('--verbose',
+                             dest='verbose',
+                             action='store_true',
+                             help='Set logging level to verbose')
+
     return args_parser
 
 

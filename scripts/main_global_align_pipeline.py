@@ -8,7 +8,7 @@ from bigstream.cli import (CliArgsHelper, define_registration_input_args,
                            extract_align_pipeline,
                            extract_registration_input_args,
                            get_input_images)
-from bigstream import configure_logging
+from bigstream.configure_logging import configure_logging
 from bigstream.image_data import ImageData
 from bigstream.transform import apply_transform
 

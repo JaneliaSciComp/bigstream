@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import time
 
@@ -5,6 +6,9 @@ from fishspot.filter import white_tophat, apply_foreground_mask
 from scipy.spatial import cKDTree
 from scipy.stats.mstats import winsorize
 from skimage.feature import blob_dog, blob_log
+
+
+logger = logging.getLogger(__name__)
 
 
 def blob_detection(
@@ -71,33 +75,25 @@ def blob_detection(
         kwargs['threshold'] = None
         kwargs['threshold_rel'] = 0.1
 
-    print(f'{time.ctime(time.time())}',
-          f'Start spot detection ({min_blob_radius}, {max_blob_radius})',
-          kwargs,
-          flush=True)
+    logger.debug(f'Start spot detection ({min_blob_radius}, {max_blob_radius}) ' +
+                 f'{kwargs}')
     if winsorize_limits:
         processed_image = winsorize(processed_image, limits=winsorize_limits,
                                     inplace=True)
         done_winsorize_time = time.time()
-        print(f'{time.ctime(time.time())}',
-              f'Winsorization completed in {done_winsorize_time-start_time}s',
-              flush=True)
+        logger.debug(f'Winsorization completed in {done_winsorize_time-start_time}s')
     if background_subtract:
         processed_image = white_tophat(processed_image, max_blob_radius)
         done_tophat_time = time.time()
-        print(f'{time.ctime(time.time())}',
-              f'White top hat completed in {done_tophat_time-start_time}s',
-              flush=True)
+        logger.debug(f'White top hat completed in {done_tophat_time-start_time}s')
 
     spots = blob_detect_method(
         processed_image,
         **kwargs,
     ).astype(int)
     done_spots_time = time.time()
-    print(f'{time.ctime(time.time())}',
-          f'Spot detection ({min_blob_radius}, {max_blob_radius})',
-          f'found {len(spots)} spots in {done_spots_time-start_time}s',
-          flush=True)
+    logger.debug(f'Spot detection ({min_blob_radius}, {max_blob_radius})' +
+                 f'found {len(spots)} spots in {done_spots_time-start_time}s')
     if mask is not None: spots = apply_foreground_mask(spots, mask)
 
     intensities = image[ tuple(spots[:, iii] for iii in range(image.ndim)) ]
@@ -144,10 +140,8 @@ def _stats(arr):
         stddevs = np.sqrt( sqr_means - np.square(means) )
         return means, stddevs
     except Exception as e:
-        print(f'{time.ctime(time.time())}',
-              'Stats exception for array of shape',
-              arr.shape, e,
-              flush=True)
+        logger.error(f'Stats exception for array of shape {arr.shape}',
+                     e)
         raise e
 
 

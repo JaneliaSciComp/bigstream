@@ -1,4 +1,5 @@
 import logging
+import sys
 
 from logging.config import fileConfig
 
@@ -14,7 +15,8 @@ def configure_logging(config_file, verbose):
                             datefmt='%Y-%m-%d %H:%M:%S',
                             handlers=[
                                 logging.StreamHandler()
-                            ])
+                            ],
+                            stream=sys.stdout)
     logger = logging.getLogger()
     logger.setLevel(log_level)
     return logger

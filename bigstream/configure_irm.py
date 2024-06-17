@@ -1,8 +1,10 @@
 import os
 import SimpleITK as sitk
 import bigstream.utility as ut
+import logging
 
-from bigstream.configure_logging import get_bigstream_logger
+
+logger = logging.getLogger(__name__)
 
 
 # interpolator switch
@@ -162,8 +164,6 @@ def configure_irm(
         The configured ImageRegistrationMethod object. Simply needs
         images and a transform type to be ready for optimization.
     """
-    logger = get_bigstream_logger(__name__)
-
     # identify number of physical cores available
     ncores = ut.get_number_of_cores()
     if 'ITK_THREADS' in os.environ:

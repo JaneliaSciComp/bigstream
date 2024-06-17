@@ -2,12 +2,15 @@ import cv2
 import numpy as np
 import SimpleITK as sitk
 import bigstream.utility as ut
+import logging
 
-from bigstream.configure_logging import get_bigstream_logger
 from bigstream.configure_irm import configure_irm
 from bigstream.transform import apply_transform, compose_transform_list, compress_transform_list
 from bigstream.metrics import patch_mutual_information
 from bigstream import features
+
+
+logger = logging.getLogger(__name__)
 
 
 def realize_mask(image, mask):
@@ -439,7 +442,6 @@ def feature_point_ransac_affine_align(
     affine_matrix : 2d array 4x4
         An affine matrix matching the moving image to the fixed image
     """
-    logger = get_bigstream_logger(__name__)
     # establish default
     if default is None: default = np.eye(fix.ndim + 1)
 
@@ -730,8 +732,6 @@ def random_affine_search(
             param += (null_value,)
         return param
 
-    logger = get_bigstream_logger(__name__)
-
     # TODO: consider moving to native 2D
     # generalize 2d inputs to 3d
     if fix.ndim == 2:
@@ -976,7 +976,6 @@ def affine_align(
     transform : 4x4 array
         The affine or rigid transform matrix matching moving to fixed
     """
-    logger = get_bigstream_logger(__name__)
     logger.info(f'Affine align {context} -> {kwargs}')
     # determine the correct default
     if default is None: default = np.eye(fix.ndim + 1)
@@ -1190,8 +1189,6 @@ def deformable_align(
         The displacement field parameterized by the bspline control
         points
     """
-
-    logger = get_bigstream_logger(__name__)
     # store initial fixed image shape
     initial_fix_shape = fix.shape
     initial_fix_spacing = fix_spacing
@@ -1400,8 +1397,6 @@ def alignment_pipeline(
         deformable align: a tuple with the bspline parameters and the
         vector field with shape equal to fix.shape + (3,)
     """
-
-    logger = get_bigstream_logger(__name__)
     # define how to run alignment functions
     a = (fix, mov, fix_spacing, mov_spacing)
     b = {'fix_mask':fix_mask, 'mov_mask':mov_mask,

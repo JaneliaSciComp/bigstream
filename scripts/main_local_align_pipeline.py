@@ -3,7 +3,8 @@ import numpy as np
 import bigstream.io_utility as io_utility
 import yaml
 
-from dask.distributed import (Client, LocalCluster)
+from dask.distributed import (Client, LocalCluster, Worker)
+from distributed.diagnostics.plugin import WorkerPlugin
 from flatten_json import flatten
 from os.path import exists
 from bigstream.cli import (CliArgsHelper, RegistrationInputs,
@@ -11,7 +12,7 @@ from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            extract_align_pipeline,
                            extract_registration_input_args,
                            inttuple, get_input_images)
-from bigstream.configure_logging import configure_logging
+from bigstream.configure_logging import (configure_logging)
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
@@ -19,6 +20,25 @@ from bigstream.image_data import ImageData
 
 
 logger = None # initialized in main as a result of calling configure_logging
+
+
+class ConfigureWorkerLoggingPlugin(WorkerPlugin):
+
+    def __init__(self, logging_config, verbose):
+        self.logging_config = logging_config
+        self.verbose = verbose
+
+    def setup(self, worker: Worker):
+        self.logger = configure_logging(self.logging_config, self.verbose)
+
+    def teardown(self, worker: Worker):
+        pass
+
+    def transition(self, key: str, start: str, finish: str, **kwargs):
+        pass
+
+    def release_key(self, key: str, state: str, cause: str | None, reason: None, report: bool):
+        pass
 
 
 def _define_args(local_descriptor):
@@ -99,6 +119,8 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
                          dask_config_file=None,
                          aggregate_blockfield_writing=False,
                          max_tasks=0,
+                         logging_config=None,
+                         verbose=False,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
                                                        'local_align',
@@ -127,7 +149,8 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
     else:
         cluster_client = Client(LocalCluster())
 
-    cluster_client.forward_logging()
+    cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(logging_config,
+                                                                verbose))
 
     if processing_size:
         # block are defined as x,y,z so I am reversing it to z,y,x
@@ -371,6 +394,8 @@ def main():
         dask_config_file=args.dask_config,
         aggregate_blockfield_writing=args.aggregate_blockfield_writing,
         max_tasks=args.cluster_max_tasks,
+        logging_config=args.logging_config,
+        verbose=args.verbose,
     )
 
 

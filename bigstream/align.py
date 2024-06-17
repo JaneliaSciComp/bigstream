@@ -1,14 +1,13 @@
-import sys
+import cv2
 import numpy as np
 import SimpleITK as sitk
 import bigstream.utility as ut
-import time
 
+from bigstream.configure_logging import get_bigstream_logger
 from bigstream.configure_irm import configure_irm
 from bigstream.transform import apply_transform, compose_transform_list, compress_transform_list
 from bigstream.metrics import patch_mutual_information
 from bigstream import features
-import cv2
 
 
 def realize_mask(image, mask):
@@ -440,7 +439,7 @@ def feature_point_ransac_affine_align(
     affine_matrix : 2d array 4x4
         An affine matrix matching the moving image to the fixed image
     """
-
+    logger = get_bigstream_logger(__name__)
     # establish default
     if default is None: default = np.eye(fix.ndim + 1)
 
@@ -486,74 +485,66 @@ def feature_point_ransac_affine_align(
     # get fix spots
     num_sigma = int(min(blob_sizes[1] - blob_sizes[0], num_sigma_max))
     assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
-    print(f'{time.ctime(time.time())} computing fixed spots', flush=True)
+
+    logger.info('computing fixed spots')
     if fix_spots is None:
         fix_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
         }
         fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
-        print(f'{time.ctime(time.time())} fixed spots detection using',
-              fix_kwargs, flush=True)
+        logger.debug(f'fixed spots detection using {fix_kwargs}')
         fix_spots = features.blob_detection(
             fix, blob_sizes[0], blob_sizes[1],
             mask=fix_mask,
             **fix_kwargs,
         )
-    print(f'{time.ctime(time.time())} found {len(fix_spots)} fixed spots',
-          flush=True)
+    logger.info(f'found {len(fix_spots)} fixed spots')
     if len(fix_spots) < fix_spots_count_threshold:
-        print(f'{time.ctime(time.time())}',
-              'insufficient fixed spots found',
-              flush=True)
+        logger.info('insufficient fixed spots found')
         if safeguard_exceptions:
             raise ValueError('fix spot detection safeguard failed')
         else:
-            print('returning default', flush=True)
+            logger.info('returning default')
             return default
 
     # get mov spots
-    print(f'{time.ctime(time.time())} computing moving spots', flush=True)
+    logger.info('computing moving spots')
     if mov_spots is None:
         mov_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
         }
         mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
-        print(f'{time.ctime(time.time())} moving spots detection using',
-              mov_kwargs, flush=True)
+        logger.debug(f'moving spots detection using {mov_kwargs}')
         mov_spots = features.blob_detection(
             mov, blob_sizes[0], blob_sizes[1],
             mask=mov_mask,
             **mov_kwargs,
         )
-    print(f'{time.ctime(time.time())} found {len(mov_spots)} moving spots',
-          flush=True)
+    logger.info(f'found {len(mov_spots)} moving spots')
     if len(mov_spots) < mov_spots_count_threshold:
-        print(f'{time.ctime(time.time())}',
-              'insufficient moving spots found',
-              flush=True)
+        logger.info('insufficient moving spots found')
         if safeguard_exceptions:
             raise ValueError('mov spot detection safeguard failed')
         else:
-            print('returning default', flush=True)
+            logger.info('returning default')
             return default
 
     # sort
-    print(f'{time.ctime(time.time())} sorting spots', flush=True)
+    logger.info(f'sorting spots')
     sort_idx = np.argsort(fix_spots[:, 3])[::-1]
     fix_spots = fix_spots[sort_idx, :3][:nspots]
     sort_idx = np.argsort(mov_spots[:, 3])[::-1]
     mov_spots = mov_spots[sort_idx, :3][:nspots]
 
     # get contexts
-    print(f'{time.ctime(time.time())} extracting contexts', flush=True)
+    logger.info('extracting contexts')
     fix_spot_contexts = features.get_contexts(fix, fix_spots, cc_radius)
     mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
 
     # get pairwise correlations
-    print(f'{time.ctime(time.time())} computing pairwise correlations',
-          flush=True)
+    logger.info('computing pairwise correlations')
     correlations = features.pairwise_correlation(
         fix_spot_contexts, mov_spot_contexts,
     )
@@ -568,24 +559,19 @@ def feature_point_ransac_affine_align(
         correlations, match_threshold,
         max_distance=max_spot_match_distance,
     )
-    print(f'{time.ctime(time.time())} {len(fix_spots)} - {len(mov_spots)} matched spots',
-          flush=True)
+    logger.info(f'{len(fix_spots)} - {len(mov_spots)} matched spots')
     if len(fix_spots) < point_matches_threshold or len(mov_spots) < point_matches_threshold:
-        print(f'{time.ctime(time.time())}',
-              'insufficient point matches found',
-              flush=True)
+        logger.info('insufficient point matches found')
         if safeguard_exceptions:
             raise ValueError('point matches safeguard failed')
         else:
-            print('returning default', flush=True)
+            logger.info('returning default')
             return default
 
     # align
-    print(f'{time.ctime(time.time())}',
-          'Found enough spots to estimate the affine',
-          'fix:', len(fix_spots), ',',
-          'moving:', len(mov_spots),
-          flush=True)
+    logger.debug('Found enough spots to estimate the affine',
+                 'fix:', len(fix_spots), ',',
+                 'moving:', len(mov_spots))
     _, Aff, _ = cv2.estimateAffine3D(
         fix_spots, mov_spots,
         ransacThreshold=align_threshold,
@@ -595,13 +581,11 @@ def feature_point_ransac_affine_align(
 
     # ensure affine is sensible
     if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
-        print(f'{time.ctime(time.time())}',
-              'Degenerate affine produced',
-              flush=True)
+        logger.info('Degenerate affine produced')
         if safeguard_exceptions:
             raise ValueError('diagonal_constraint safeguard failed')
         else:
-            print('returning default', flush=True)
+            logger.info('returning default')
             return default
 
     # augment matrix and return
@@ -628,7 +612,6 @@ def random_affine_search(
     mov_origin=None,
     static_transform_list=[],
     use_patch_mutual_information=False,
-    print_running_improvements=False,
     context='',
     **kwargs,
 ):
@@ -728,10 +711,6 @@ def random_affine_search(
     use_patch_mutual_information : bool (default: False)
         Uses a custom metric function in bigstream.metrics
 
-    print_running_improvements : bool (default: False)
-        If True, whenever a better transform is found print the
-        iteration, score, and parameters
-
     **kwargs : any additional arguments
         Passed to `configure_irm` This is how you customize the metric.
         If `use_path_mutual_information` is True this is passed to
@@ -750,6 +729,8 @@ def random_affine_search(
         if isinstance(param, tuple):
             param += (null_value,)
         return param
+
+    logger = get_bigstream_logger(__name__)
 
     # TODO: consider moving to native 2D
     # generalize 2d inputs to 3d
@@ -878,10 +859,9 @@ def random_affine_search(
     scores = np.empty(random_iterations + 1, dtype=np.float64)
     for iii, ppp in enumerate(params):
         scores[iii] = score_affine(ut.physical_parameters_to_affine_matrix_3d(ppp, center))
-        if print_running_improvements and scores[iii] < current_best_score:
-                current_best_score = scores[iii]
-                print(f'{time.ctime(time.time())}',iii, ': ', current_best_score, '\n', ppp)
-    sys.stdout.flush()
+        if scores[iii] < current_best_score:
+            current_best_score = scores[iii]
+            logger.debug('Best score found {iii} : {current_best_score}')
 
     # return top results
     partition_indx = np.argpartition(scores, nreturn)[:nreturn]
@@ -996,8 +976,8 @@ def affine_align(
     transform : 4x4 array
         The affine or rigid transform matrix matching moving to fixed
     """
-    print(f'{time.ctime(time.time())} Affine align {context} -> {kwargs}',
-          flush=True)
+    logger = get_bigstream_logger(__name__)
+    logger.info(f'Affine align {context} -> {kwargs}')
     # determine the correct default
     if default is None: default = np.eye(fix.ndim + 1)
     initial_transform_given = isinstance(initial_condition, np.ndarray)
@@ -1031,8 +1011,7 @@ def affine_align(
     mov_mask_spacing = X[7]
 
     # set up registration object
-    print(f'{time.ctime(time.time())} Configure {context} IRM args: {kwargs}',
-          flush=True)
+    logger.debug(f'Configure {context} IRM args: {kwargs}')
     irm = configure_irm(context=context, **kwargs)
     # set initial static transforms
     if static_transform_list:
@@ -1076,27 +1055,21 @@ def affine_align(
         irm.Execute(fix, mov)
         final_metric_value = irm.MetricEvaluate(fix, mov)
     except Exception as e:
-        print(f'{time.ctime(time.time())}',
-              f'{context} Registration failed due to ITK exception:\n', e,
-              flush=True)
-        print(f'{time.ctime(time.time())} {context} Returning default',
-              flush=True)
+        logger.error(f'{context} Registration failed due to ITK exception:\n',
+                     e)
+        logger.info(f'{context} Returning default')
         return default
 
     # if registration improved metric return result
     # otherwise return default
     if final_metric_value < initial_metric_value:
-        print(f'{time.ctime(time.time())} {context} Registration succeeded',
-              flush=True)
+        logger.info(f'{context} Registration succeeded')
         return ut.affine_transform_to_matrix(transform)
     else:
-        print(f'{time.ctime(time.time())} {context} Optimization failed to improve metric',
-              flush=True)
-        print(f'{time.ctime(time.time())}',
-              f'METRIC VALUES initial: {context} {initial_metric_value} final: {final_metric_value}',
-              flush=True)
-        print(f'{time.ctime(time.time())} {context} Returning default',
-              flush=True)
+        logger.warn(f'{context} Optimization failed to improve metric')
+        logger.info(f'METRIC VALUES initial: {context} ',
+                    f'{initial_metric_value} final: {final_metric_value}')
+        logger.info(f'{context} Returning default')
         return default
 
 
@@ -1218,6 +1191,7 @@ def deformable_align(
         points
     """
 
+    logger = get_bigstream_logger(__name__)
     # store initial fixed image shape
     initial_fix_shape = fix.shape
     initial_fix_spacing = fix_spacing
@@ -1289,11 +1263,9 @@ def deformable_align(
         irm.Execute(fix, mov)
         final_metric_value = irm.MetricEvaluate(fix, mov)
     except Exception as e:
-        print(f'{time.ctime(time.time())}',
-              f'{context} Registration failed due to ITK exception:\n', e,
-              flush=True)
-        print(f'{time.ctime(time.time())} {context} Returning default',
-              flush=True)
+        logger.error(f'{context} Registration failed due to ITK exception:\n',
+                     e)
+        logger.info(f'{context} Returning default')
         return default
 
     # if registration improved metric return result
@@ -1305,19 +1277,13 @@ def deformable_align(
             spacing=initial_fix_spacing, origin=fix_origin,
             direction=np.eye(fix.GetDimension()),
         )
-        print(f'{time.ctime(time.time())} {context} Registration succeeded',
-              flush=True)
+        logger.info(f'{context} Registration succeeded')
         return params, field
     else:
-        print(f'{time.ctime(time.time())} {context} Optimization failed ',
-              'to improve metric',
-              flush=True)
-        print(f'{time.ctime(time.time())}',
-              f'{context} METRIC VALUES initial: {initial_metric_value} ',
-              f'final: {final_metric_value}',
-              flush=True)
-        print(f'{time.ctime(time.time())} {context} Returning default',
-              flush=True)
+        logger.warn(f'{context} Optimization failed to improve metric')
+        logger.info(f'{context} METRIC VALUES initial: {initial_metric_value} ',
+                    f'final: {final_metric_value}')
+        logger.info(f'{context} Returning default')
         return default
 
 
@@ -1435,6 +1401,7 @@ def alignment_pipeline(
         vector field with shape equal to fix.shape + (3,)
     """
 
+    logger = get_bigstream_logger(__name__)
     # define how to run alignment functions
     a = (fix, mov, fix_spacing, mov_spacing)
     b = {'fix_mask':fix_mask, 'mov_mask':mov_mask,
@@ -1448,17 +1415,12 @@ def alignment_pipeline(
     # loop over steps
     new_transforms = []
     for alignment, arguments in steps:
-        print(f'{time.ctime(time.time())} Run {context}',
-              alignment, arguments,
-              flush=True)
+        logger.info(f'Run {context} {alignment} {arguments}')
         arguments = {**kwargs, **arguments}
-        print(f'{time.ctime(time.time())} All {alignment} args: {arguments}',
-              flush=True)
+        logger.debug(f'All {alignment} args: {arguments}')
         arguments['static_transform_list'] = static_transform_list + new_transforms
         alignment_result = align[alignment](context=context, **arguments)
-        print(f'{time.ctime(time.time())} Completed {context}',
-              alignment, arguments,
-              flush=True)
+        logger.info(f'Completed {context} {alignment} {arguments}')
         new_transforms.append(alignment_result)
 
     # return in the requested format

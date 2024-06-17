@@ -1,9 +1,13 @@
-import os
+import logging
 import nrrd
 import numpy as np
+import os
 import zarr
 
 from tifffile import TiffFile
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_dataset(container_path, container_subpath, shape, chunks, dtype,
@@ -20,7 +24,8 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
         else:
             store = zarr.N5Store(real_container_path)
         if container_subpath:
-            print('Create dataset', container_path, container_subpath, kwargs)
+            logger.info(f'Create dataset {container_path}:{container_subpath} ' +
+                        f'{kwargs}')
             container_root = zarr.open_group(store=store, mode='a')
             if data is None and overwrite:
                 dataset = container_root.create_dataset(
@@ -42,15 +47,15 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             dataset.attrs.update((k, v) for k,v in kwargs.items() if v)
             return dataset
         else:
-            print('Create root array', container_path, kwargs)
+            logger.info(f'Create root array {container_path} {kwargs}')
             zarr_data = zarr.open(store=store, mode='a',
                                   shape=shape, chunks=chunks)
             # set additional attributes
             zarr_data.attrs.update((k, v) for k,v in kwargs.items() if v)
             return zarr_data
     except Exception as e:
-        print('Error creating a dataset at', container_path, container_subpath,
-              e)
+        logger.error(f'Error creating a dataset at {container_path}:{container_subpath}',
+                     e)
         raise e
 
 
@@ -61,12 +66,10 @@ def open(container_path, subpath, block_coords=None):
     container_ext = path_comps[1]
 
     if container_ext == '.nrrd':
-        print(f'Open nrrd {container_path} ({real_container_path})',
-              flush=True)
+        logger.info(f'Open nrrd {container_path} ({real_container_path})')
         return _read_nrrd(real_container_path, block_coords=block_coords)
     elif container_ext == '.tif' or container_ext == '.tiff':
-        print(f'Open tiff {container_path} ({real_container_path})',
-              flush=True)
+        logger.info(f'Open tiff {container_path} ({real_container_path})')
         return _read_tiff(real_container_path, block_coords=block_coords)
     elif container_ext == '.npy':
         im = np.load(real_container_path)
@@ -74,18 +77,16 @@ def open(container_path, subpath, block_coords=None):
         return bim, {}
     elif (container_ext == '.n5'
           or os.path.exists(f'{real_container_path}/attributes.json')):
-        print(f'Open N5 {container_path} ({real_container_path})',
-              flush=True)
+        logger.info(f'Open N5 {container_path} ({real_container_path})')
         return _open_zarr(real_container_path, subpath, data_store_name='n5',
                           block_coords=block_coords)
     elif container_ext == '.zarr':
-        print(f'Open Zarr {container_path} ({real_container_path})',
-              flush=True)
+        logger.info(f'Open Zarr {container_path} ({real_container_path})')
         return _open_zarr(real_container_path, subpath, data_store_name='zarr',
                           block_coords=block_coords)
     else:
-        print('Cannot handle', f'{container_path} ({real_container_path})',
-              subpath)
+        logger.error(f'Cannot handle {container_path} ' +
+                     f'({real_container_path}) {subpath}')
         return None, {}
 
 
@@ -117,19 +118,19 @@ def read_attributes(container_path, subpath):
     container_ext = path_comps[1]
 
     if container_ext == '.nrrd':
-        print(f'Read nrrd attrs {container_path} ({real_container_path})', flush=True)
+        logger.info(f'Read nrrd attrs {container_path} ({real_container_path})')
         return _read_nrrd_attrs(container_path)
     elif container_ext == '.n5' or os.path.exists(f'{container_path}/attributes.json'):
-        print(f'Read N5 attrs {container_path} ({real_container_path})', flush=True)
+        logger.info(f'Read N5 attrs {container_path} ({real_container_path})')
         return _open_zarr_attrs(real_container_path, subpath, data_store_name='n5')
     elif container_ext == '.zarr':
-        print(f'Read Zarr attrs {container_path} ({real_container_path})', flush=True)
+        logger.info(f'Read Zarr attrs {container_path} ({real_container_path})')
         return _open_zarr_attrs(real_container_path, subpath, data_store_name='zarr')
     elif container_ext == '.tif' or container_ext == '.tiff':
-        print(f'Read TIFF attrs {container_path} ({real_container_path})', flush=True)
+        logger.info(f'Read TIFF attrs {container_path} ({real_container_path})')
         return _read_tiff_attrs(container_path)
     else:
-        print('Cannot read attributes for', container_path, subpath)
+        logger.error(f'Cannot read attributes for {container_path}:{subpath}')
         return {}
 
 
@@ -158,7 +159,7 @@ def _open_zarr(data_path, data_subpath, data_store_name=None, block_coords=None)
         ba = a[block_coords] if block_coords is not None else a
         return ba, a.attrs.asdict()
     except Exception as e:
-        print(f'Error opening {data_path} : {data_subpath}', e, flush=True)
+        logger.error(f'Error opening {data_path} : {data_subpath}', e)
         raise e
 
 
@@ -170,10 +171,10 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         a = data_container[data_subpath] if data_subpath else data_container
         dict = a.attrs.asdict()
         dict.update({'dataType': a.dtype, 'dimensions': a.shape})
-        print(f'{data_path}:{data_subpath} attrs: {dict}', flush=True)
+        logger.info(f'{data_path}:{data_subpath} attrs: {dict}')
         return dict
     except Exception as e:
-        print(f'Error opening {data_path} : {data_subpath}', e, flush=True)
+        logger.error(f'Error opening {data_path} : {data_subpath}', e)
         raise e
 
 

@@ -1,7 +1,8 @@
 import os
 import SimpleITK as sitk
 import bigstream.utility as ut
-import time
+
+from bigstream.configure_logging import get_bigstream_logger
 
 
 # interpolator switch
@@ -161,6 +162,7 @@ def configure_irm(
         The configured ImageRegistrationMethod object. Simply needs
         images and a transform type to be ready for optimization.
     """
+    logger = get_bigstream_logger(__name__)
 
     # identify number of physical cores available
     ncores = ut.get_number_of_cores()
@@ -225,12 +227,11 @@ def configure_irm(
     irm.SetSmoothingSigmasPerLevel(smooth_sigmas)
     irm.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
 
-    print(f'{time.ctime(time.time())} {context} Configure IRM',
-          f'Metric: {metric} -> {metric_args}',
-          f'Optimizer: {optimizer} -> {optimizer_args}',
-          f'Shrink factors: {shrink_factors}',
-          f'Smooth sigmas: {smooth_sigmas}',
-          flush=True)
+    logger.debug(f'Configure {context} IRM' +
+                 f'Metric: {metric} -> {metric_args}' +
+                 f'Optimizer: {optimizer} -> {optimizer_args}' +
+                 f'Shrink factors: {shrink_factors}' +
+                 f'Smooth sigmas: {smooth_sigmas}')
 
     # set callback function
     if callback is None:
@@ -238,8 +239,9 @@ def configure_irm(
             level = irm.GetCurrentLevel()
             iteration = irm.GetOptimizerIteration()
             metric = irm.GetMetricValue()
-            print(f'{context} LEVEL: {level} ITERATION: {iteration} ',
-                  f'METRIC: {metric}', flush=True)
+            logger.debug(f'{context} LEVEL: {level} ' +
+                         f'ITERATION: {iteration} ' +
+                         f'METRIC: {metric}')
     irm.AddCommand(sitk.sitkIterationEvent, lambda: callback(irm))
 
     # return configured irm

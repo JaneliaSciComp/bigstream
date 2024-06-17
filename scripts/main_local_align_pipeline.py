@@ -3,19 +3,19 @@ import numpy as np
 import bigstream.io_utility as io_utility
 import yaml
 
-from os.path import exists
 from dask.distributed import (Client, LocalCluster)
 from flatten_json import flatten
+from os.path import exists
 from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            define_registration_input_args,
                            extract_align_pipeline,
                            extract_registration_input_args,
                            inttuple, get_input_images)
+from bigstream.configure_logging import (configure_logging)
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
 from bigstream.image_data import ImageData
-from bigstream.transform import apply_transform
 
 
 def _define_args(local_descriptor):
@@ -64,14 +64,22 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--dask-config', dest='dask_config',
                              type=str, default=None,
                              help='YAML file containing dask configuration')
-    args_parser.add_argument('--write-results-incrementally',
-                             dest='write_res_incrementally',
+    args_parser.add_argument('--aggregate-blockfield-writing',
+                             dest='aggregate_blockfield_writing',
                              action='store_true',
-                             help='Write block displacement vector ' +
-                                  'where it was computed')
+                             help='Collect all block displacement vectors ' +
+                                  'before writing')
     args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
                              type=int, default=0,
                              help='Maximum number of parallel cluster tasks if >= 0')
+
+    args_parser.add_argument('--logging-config', dest='logging_config',
+                             type=str,
+                             help='Logging configuration')
+    args_parser.add_argument('--verbose',
+                             dest='verbose',
+                             action='store_true',
+                             help='Set logging level to verbose')
 
     return args_parser
 
@@ -86,17 +94,17 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
                          inv_order=2,
                          dask_scheduler_address=None,
                          dask_config_file=None,
-                         write_res_incrementally=False,
+                         aggregate_blockfield_writing=False,
                          max_tasks=0,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
                                                        'local_align',
                                                        args.registration_steps)
     if len(local_steps) == 0:
-        print('Skip local alignment because no local steps were specified.')
+        logger.info('Skip local alignment because no local steps were specified.')
         return None
 
-    print('Run local registration with:', args, local_steps, flush=True)
+    logger.info(f'Run local registration with: {args}, {local_steps}')
 
     (fix_image, fix_mask, mov_image, mov_mask) = get_input_images(args)
     if mov_image.ndim != fix_image.ndim:
@@ -115,6 +123,8 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
         cluster_client = Client(address=dask_scheduler_address)
     else:
         cluster_client = Client(LocalCluster())
+
+    cluster_client.forward_logging()
 
     if processing_size:
         # block are defined as x,y,z so I am reversing it to z,y,x
@@ -190,7 +200,7 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
         inv_sqrt_iterations,
         inv_order,
         cluster_client,
-        write_res_incrementally,
+        aggregate_blockfield_writing,
         max_tasks,
     )
 
@@ -216,14 +226,13 @@ def _align_local_data(fix_image: ImageData,
                       inv_sqrt_iterations,
                       inv_order,
                       cluster_client,
-                      write_res_incrementally,
+                      aggregate_blockfield_writing,
                       cluster_max_tasks):
 
     fix_shape = fix_image.shape
     fix_ndim = fix_image.ndim
 
-    print('Align moving data', mov_image, 'to reference', fix_image,
-          flush=True)
+    logger.info(f'Align moving data {mov_image} to reference {fix_image}')
 
     transform_downsampling = (list(fix_image.downsampling) + [1])[::-1]
     transform_spacing = (list(fix_image.get_downsampled_voxel_resolution(False)) + [1])[::-1]
@@ -240,9 +249,9 @@ def _align_local_data(fix_image: ImageData,
         )
     else:
         transform = None
-    print('Calculate transformation', transform_path, 'for local alignment of',
-          mov_image, 'to reference', fix_image,
-          flush=True)
+    logger.info(f'Calculate transformation {transform_path}' +
+                f'for local alignment of {mov_image}' +
+                f'to reference {fix_image}')
     if fix_image.has_data() and mov_image.has_data():
         deform_ok = distributed_alignment_pipeline(
             fix_image, mov_image,
@@ -255,7 +264,7 @@ def _align_local_data(fix_image: ImageData,
             mov_mask=mov_mask,
             static_transform_list=global_affine_transforms,
             output_transform=transform,
-            incremental_writing=write_res_incrementally,
+            aggregate_writing=aggregate_blockfield_writing,
             max_tasks=cluster_max_tasks,
         )
     else:
@@ -272,15 +281,11 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=transform_spacing,
             downsamplingFactors=transform_downsampling,            
         )
-        print('Calculate inverse transformation',
-              f'{inv_transform_path}:{inv_transform_subpath}',
-              'from', 
-              f'{transform_path}:{transform_subpath}',
-              'for local alignment of',
-              f'{mov_image}',
-              'to reference',
-              f'{fix_image}',
-              flush=True)
+        logger.info('Calculate inverse transformation' +
+                    f'{inv_transform_path}:{inv_transform_subpath}' +
+                    f'from {transform_path}:{transform_subpath}' +
+                    f'for local alignment of {mov_image}' +
+                    f'to reference {fix_image}')
         distributed_invert_displacement_vector_field(
             transform,
             fix_image.voxel_spacing,
@@ -307,13 +312,9 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=mov_image.get_attr('pixelResolution'),
             downsamplingFactors=mov_image.get_attr('downsamplingFactors'),
         )
-        print(f'Apply global transform {global_affine_transforms}',
-              f'and local transform {transform_path}:{transform_subpath}',
-              'to warp',
-              f'{mov_image}',
-              '->',
-              f'{align_path}:{align_subpath}',
-              flush=True)
+        logger.info(f'Apply affine transform {global_affine_transforms}' +
+                    f'and local transform {transform_path}:{transform_subpath}' +
+                    f'to warp {mov_image} -> {align_path}:{align_subpath}')
         if deform_ok:
             deform_transforms = [transform]
         else:
@@ -341,11 +342,15 @@ def main():
     local_descriptor = CliArgsHelper('local')
     args_parser = _define_args(local_descriptor)
     args = args_parser.parse_args()
-    print('Local registration:', args, flush=True)
+    # prepare logging
+    global logger
+    logger = configure_logging(args.logging_config, args.verbose)
+
+    logger.info(f'Local registration: {args}')
 
     global_affine = None
     if args.global_affine and exists(args.global_affine):
-        print('Read global affine from', args.global_affine, flush=True)
+        logger.info(f'Read global affine from {args.global_affine}')
         global_affine = np.loadtxt(args.global_affine)
 
     reg_inputs = extract_registration_input_args(args, local_descriptor)
@@ -361,7 +366,7 @@ def main():
         inv_order=args.inv_order,
         dask_scheduler_address=args.dask_scheduler,
         dask_config_file=args.dask_config,
-        write_res_incrementally=args.write_res_incrementally,
+        aggregate_blockfield_writing=args.aggregate_blockfield_writing,
         max_tasks=args.cluster_max_tasks,
     )
 

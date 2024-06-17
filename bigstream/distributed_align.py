@@ -285,8 +285,11 @@ def _compute_block_transform(compute_transform_params,
               flush=True)
         # release the lock
         lock.release()
+        returned_block = None
+    else:
+        returned_block = transform
 
-    return block_index, block_coords
+    return block_index, block_coords, returned_block
 
 
 def _get_transform_weights(block_index,
@@ -343,8 +346,7 @@ def _get_transform_weights(block_index,
     return weights
 
 
-def _write_block_transform(block_transform_future,
-                           output_transform=None):
+def _write_block_transform(block_transform_future, output):
     start_time = time.time()
     (block_index,
      block_slice_coords,
@@ -353,10 +355,10 @@ def _write_block_transform(block_transform_future,
           block_index,
           flush=True)
 
-    if output_transform is not None:
+    if output is not None and block_transform is not None:
         # write result
-        output_transform[block_slice_coords] = (output_transform[block_slice_coords] +
-                                                block_transform)
+        output[block_slice_coords] = (output[block_slice_coords] +
+                                      block_transform)
         print(f'{time.ctime(time.time())} Updated vector field for block: ',
                 block_index,
                 'at', block_slice_coords,
@@ -385,6 +387,7 @@ def distributed_alignment_pipeline(
     static_transform_list=[],
     output_transform=None,
     max_tasks=0,
+    incremental_writing=False,
     **kwargs,
 ):
     """
@@ -474,6 +477,11 @@ def distributed_alignment_pipeline(
     write_group_interval : float (default: 30.)
         The time each of the 27 mutually exclusive write block groups have
         each round to write finished data.
+
+    incremental_writing: bool (default: False)
+        If set results are written as soon as the deformation vector
+        is computed, i.e. in the same worker, otherwise the results
+        are sent back to the driver and written as a reduce operation
 
     kwargs : any additional arguments
         Arguments that will apply to all alignment steps. These are overruled by
@@ -610,6 +618,9 @@ def distributed_alignment_pipeline(
 
     print(f'{time.ctime(time.time())} Submit {block_align_steps} for',
           len(blocks), 'blocks', flush=True)
+    # if incremental_writing is set write the result immediately
+    # after it was computed, otherwise collect it at the end
+    compute_output = output_transform if incremental_writing else None
     block_transform_res = cluster_client.map(compute_block_transform,
                                              blocks_to_process,
                                              fix_spacing=fix_spacing,
@@ -618,17 +629,17 @@ def distributed_alignment_pipeline(
                                              block_overlaps=overlaps,
                                              nblocks=nblocks,
                                              align_steps=block_align_steps,
-                                             output_transform=output_transform)
+                                             output_transform=compute_output)
     print(f'{time.ctime(time.time())} Collect compute transform results for',
           len(block_transform_res), 'blocks', flush=True)
 
-    res = _collect_results(block_transform_res)
+    res = _collect_results(block_transform_res, output=output_transform)
     print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
             flush=True)
     return res
 
 
-def _collect_results(futures):
+def _collect_results(futures, output):
     res = True
 
     for f in as_completed(futures):
@@ -639,5 +650,7 @@ def _collect_results(futures):
             tb = f.traceback()
             traceback.print_tb(tb)
             res = False
+        else:
+            _write_block_transform(f, output)
 
     return res

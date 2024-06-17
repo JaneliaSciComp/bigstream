@@ -6,7 +6,8 @@ import yaml
 from os.path import exists
 from dask.distributed import (Client, LocalCluster)
 from flatten_json import flatten
-from bigstream.cli import (CliArgsHelper, define_registration_input_args,
+from bigstream.cli import (CliArgsHelper, RegistrationInputs,
+                           define_registration_input_args,
                            extract_align_pipeline,
                            extract_registration_input_args,
                            inttuple, get_input_images)
@@ -63,6 +64,11 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--dask-config', dest='dask_config',
                              type=str, default=None,
                              help='YAML file containing dask configuration')
+    args_parser.add_argument('--write-results-incrementally',
+                             dest='write_res_incrementally',
+                             action='store_true',
+                             help='Write block displacement vector ' +
+                                  'where it was computed')
     args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
                              type=int, default=0,
                              help='Maximum number of parallel cluster tasks if >= 0')
@@ -70,7 +76,7 @@ def _define_args(local_descriptor):
     return args_parser
 
 
-def _run_local_alignment(args, align_config, global_affine,
+def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
                          processing_size=None,
                          processing_overlap=None,
                          default_blocksize=128,
@@ -80,6 +86,7 @@ def _run_local_alignment(args, align_config, global_affine,
                          inv_order=2,
                          dask_scheduler_address=None,
                          dask_config_file=None,
+                         write_res_incrementally=False,
                          max_tasks=0,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
@@ -183,14 +190,15 @@ def _run_local_alignment(args, align_config, global_affine,
         inv_sqrt_iterations,
         inv_order,
         cluster_client,
+        write_res_incrementally,
         max_tasks,
     )
 
 
-def _align_local_data(fix_image,
-                      fix_mask,
-                      mov_image,
-                      mov_mask,
+def _align_local_data(fix_image: ImageData,
+                      fix_mask: ImageData,
+                      mov_image: ImageData,
+                      mov_mask: ImageData,
                       steps,
                       processing_size,
                       processing_overlap_factor,
@@ -208,6 +216,7 @@ def _align_local_data(fix_image,
                       inv_sqrt_iterations,
                       inv_order,
                       cluster_client,
+                      write_res_incrementally,
                       cluster_max_tasks):
 
     fix_shape = fix_image.shape
@@ -246,6 +255,7 @@ def _align_local_data(fix_image,
             mov_mask=mov_mask,
             static_transform_list=global_affine_transforms,
             output_transform=transform,
+            incremental_writing=write_res_incrementally,
             max_tasks=cluster_max_tasks,
         )
     else:
@@ -351,6 +361,7 @@ def main():
         inv_order=args.inv_order,
         dask_scheduler_address=args.dask_scheduler,
         dask_config_file=args.dask_config,
+        write_res_incrementally=args.write_res_incrementally,
         max_tasks=args.cluster_max_tasks,
     )
 

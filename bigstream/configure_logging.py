@@ -14,9 +14,8 @@ def configure_logging(config_file, verbose):
                             format=log_format,
                             datefmt='%Y-%m-%d %H:%M:%S',
                             handlers=[
-                                logging.StreamHandler()
-                            ],
-                            stream=sys.stdout)
+                                logging.StreamHandler(stream=sys.stdout)
+                            ])
     logger = logging.getLogger()
     logger.setLevel(log_level)
     return logger

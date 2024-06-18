@@ -48,7 +48,6 @@ rigid:
 random:
   <<: *affine_args
   use_patch_mutual_information: false
-  print_running_improvements: false
 
 global_align:
   steps: [] # no default global steps

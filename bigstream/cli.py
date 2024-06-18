@@ -1,8 +1,12 @@
+import logging
 import pydantic.v1.utils as pu
 import yaml
 
 from .config import default_bigstream_config_str
 from .image_data import ImageData
+
+
+logger = logging.getLogger(__name__)
 
 
 def inttuple(arg):
@@ -178,10 +182,10 @@ def extract_align_pipeline(config_filename, context, steps):
     if config_filename:
         with open(config_filename) as f:
             external_config = yaml.safe_load(f)
-            print(f'Read external config from {config_filename}: ',
-                  external_config, flush= True)
+            logger.info('Read external config from ' +
+                        f'{config_filename}: {external_config}')
             config = pu.deep_update(default_config, external_config)
-            print(f'Final config {config}')
+            logger.info(f'Final config {config}')
     else:
         config = default_config
     context_config = config[context]
@@ -194,10 +198,10 @@ def extract_align_pipeline(config_filename, context, steps):
     for step in pipeline_steps:
         alg_args = config.get(step, {})
         context_alg_args = context_config.get(step, {})
-        print(f'Default {step} args: {alg_args}')
-        print(f'Context {step} overriden args: {context_alg_args}')
+        logger.info(f'Default {step} args: {alg_args}')
+        logger.info(f'Context {step} overriden args: {context_alg_args}')
         step_args = pu.deep_update(alg_args, context_alg_args)
-        print(f'Final {step} args: {step_args}')
+        logger.info(f'Final {step} args: {step_args}')
         align_pipeline.append((step, step_args))
 
     return align_pipeline, context_config
@@ -243,21 +247,19 @@ def _extract_arg(args: RegistrationInputs, args_descriptor: CliArgsHelper,
 def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
     # Read the global inputs
     fix = ImageData(args.fix, args.fix_subpath)
-    print(f'Open fix vol {fix} for registration', flush=True)
+    logger.info(f'Open fix vol {fix} for registration')
     mov = ImageData(args.mov, args.mov_subpath)
-    print(f'Open moving vol {mov} for registration', flush=True)
+    logger.info(f'Open moving vol {mov} for registration')
     # get voxel spacing for fix and moving volume
     if args.fix_spacing:
         fix.voxel_spacing = args.fix_spacing[::-1] # xyz -> zyx
-    print('Fix volume attributes:', fix.shape, fix.attrs, fix.voxel_spacing,
-          flush=True)
+    logger.info(f'Fix volume attributes: {fix.shape} {fix.attrs} {fix.voxel_spacing}')
 
     if args.mov_spacing:
         mov.voxel_spacing = args.mov_spacing[::-1] # xyz -> zyx
     elif args.fix_spacing: # fix voxel spacing were specified - use the same for moving vol
         mov.voxel_spacing = fix.voxel_spacing
-    print('Mov volume attributes:',
-          mov.shape, mov.attrs, mov.voxel_spacing, flush=True)
+    logger.info(f'Mov volume attributes: {mov.shape} {mov.attrs} {mov.voxel_spacing}')
 
     if args.fix_mask:
         fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath)

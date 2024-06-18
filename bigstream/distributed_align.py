@@ -66,7 +66,7 @@ def _prepare_compute_block_transform_params(block_info,
     # get moving image origin
     new_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
 
-    logger.debug(f'!!!!!!!!!!!!Block {block_index} :' +
+    logger.debug(f'Block {block_index} :' +
                  f'fix voxel coords {fix_block_voxel_coords},' +
                  f'fix phys coords {fix_block_phys_coords} -> ' +
                  f'mov coords {mov_slices},' +

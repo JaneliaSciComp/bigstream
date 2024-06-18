@@ -1,7 +1,9 @@
+import logging
 import os, tempfile
 import numpy as np
 import zarr
 import time
+
 from itertools import product
 from scipy.interpolate import LinearNDInterpolator
 from dask.distributed import as_completed, wait
@@ -13,6 +15,9 @@ from bigstream.transform import apply_transform, compose_transform_list
 from bigstream.transform import apply_transform_to_coordinates
 from bigstream.transform import compose_transforms
 from distributed import Lock, MultiLock
+
+
+logger = logging.getLogger(__name__)
 
 
 @cluster
@@ -206,9 +211,8 @@ def distributed_piecewise_alignment_pipeline(
     blocksize = np.array(blocksize)
     nblocks = np.ceil(fix.shape / blocksize).astype(int)
     overlaps = np.round(blocksize * overlap).astype(int)
-    print(f'Partition {fix.shape} into {nblocks} using',
-          f'{blocksize} and {overlaps}',
-          flush=True)
+    logger.info(f'Partition {fix.shape} into {nblocks} using' +
+                f'{blocksize} and {overlaps}')
     indices, slices = [], []
     for (i, j, k) in np.ndindex(*nblocks):
         start = blocksize * (i, j, k) - overlaps
@@ -249,8 +253,7 @@ def distributed_piecewise_alignment_pipeline(
         start_time = time.time()
         # parse input, log index and slices
         block_index, fix_slices, neighbor_flags = indices
-        print("Block index: ", block_index, "\nSlices: ", fix_slices,
-              flush=True)
+        logger.info(f'Block index: {block_index}\n Slices: {fix_slices}')
 
 
         ########## Map fix block corners onto mov coordinates ############
@@ -262,8 +265,7 @@ def distributed_piecewise_alignment_pipeline(
             fix_block_coords.append(a)
         fix_block_coords = np.array(fix_block_coords)
         fix_block_coords_phys = fix_block_coords * fix_spacing
-        print(f'Block index: {block_index} - corner physical coords: {fix_block_coords_phys}',
-              flush=True)
+        logger.debug(f'Block index: {block_index} - corner physical coords: {fix_block_coords_phys}')
 
         # read static transforms: recenter affines, apply to crop coordinates
         new_list = []
@@ -299,12 +301,11 @@ def distributed_piecewise_alignment_pipeline(
         # get moving crop origin relative to fixed crop
         mov_origin = mov_start * mov_spacing - fix_block_coords_phys[0]
 
-        print(f'{time.ctime(time.time())} Block {block_index} :'
-            f'fix voxel coords {fix_block_coords},',
-            f'fix phys coords {fix_block_coords_phys} -> ',
-            f'mov coords {mov_slices},',
-            f'mov phys coords {mov_block_coords_phys} -> ',
-            flush=True)
+        logger.debug(f'Block {block_index} :' +
+                     f'fix voxel coords {fix_block_coords},' +
+                     f'fix phys coords {fix_block_coords_phys} -> ' +
+                     f'mov coords {mov_slices},' +
+                     f'mov phys coords {mov_block_coords_phys}')
         ##################################################################
 
         ################ Read fix and moving data ########################
@@ -336,11 +337,10 @@ def distributed_piecewise_alignment_pipeline(
 
         ############################ Align ###############################
         # run alignment pipeline
-        print(f'{time.ctime(start_time)} Compute block transform',
-            f'{block_index}: {fix_slices}, {mov_origin}',
-            f'fix shape: {fix.shape}, mov_shape: {mov.shape}',
-            static_transform_list,
-            flush=True)
+        logger.info(f'Compute block transform' +
+                    f'{block_index}: {fix_slices}, {mov_origin}' +
+                    f'fix shape: {fix.shape}, mov_shape: {mov.shape}' +
+                    f'{static_transform_list}')
         transform = alignment_pipeline(
             fix, mov, fix_spacing, mov_spacing, steps,
             fix_mask=fix_mask, mov_mask=mov_mask,
@@ -353,9 +353,8 @@ def distributed_piecewise_alignment_pipeline(
             transform = ut.matrix_to_displacement_field(
                 transform, fix.shape, spacing=fix_spacing,
             )
-            print(f'Block {block_index} - transform -> vector field',
-                transform.shape,
-                flush=True)
+            logger.info(f'Block {block_index} - transform -> vector field' +
+                        f'{transform.shape}')
         ##################################################################
 
 
@@ -367,9 +366,7 @@ def distributed_piecewise_alignment_pipeline(
 
         # rebalance if any neighbors are missing
         if rebalance_for_missing_neighbors and not np.all(list(neighbor_flags.values())):
-            print(f'{time.ctime(time.time())} Rebalance transform weights',
-                block_index,
-                flush=True)
+            logger.debug(f'Rebalance transform weights {block_index}')
             # define overlap slices
             slices = {}
             slices[-1] = tuple(slice(0, 2*y) for y in overlaps)
@@ -403,17 +400,15 @@ def distributed_piecewise_alignment_pipeline(
             weights = weights[tuple(slice(0, s) for s in transform.shape[:-1])]
 
         # apply weights
-        print(f'{time.ctime(time.time())} Block {block_index} :'
-            f'Apply weights {weights.shape},',
-            f'to transform {transform.shape}',
-            flush=True)
+        logger.debug(f'Block {block_index} :' +
+                     f'Apply weights {weights.shape},' +
+                     f'to transform {transform.shape}')
         transform = transform * weights[..., None]
         end_time = time.time()
 
-        print(f'{time.ctime(end_time)} Finished computing {transform.shape}',
-              f'block  transform in {end_time-start_time}s',
-              block_index,
-              flush=True)
+        logger.info(f'Finished computing {transform.shape}' +
+                    f'block  transform in {end_time-start_time}s' +
+                    f'{block_index}')
         ##################################################################
 
 
@@ -432,12 +427,10 @@ def distributed_piecewise_alignment_pipeline(
             lock.acquire()
 
             # write result to disk
-            print(f'{time.ctime(time.time())} Writing block {block_index} at {fix_slices}',
-                  flush=True)
+            logger.info(f'Writing block {block_index} at {fix_slices}')
             output_block = output_transform[fix_slices] + transform
             output_transform[fix_slices] = output_block
-            print(f'{time.ctime(time.time())} Finished writing block {block_index} at {fix_slices}',
-                  flush=True)
+            logger.info(f'Finished writing block {block_index} at {fix_slices}')
 
             # release the lock
             lock.release()

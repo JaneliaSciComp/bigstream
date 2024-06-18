@@ -1,4 +1,3 @@
-import dask.array as da
 import functools
 import logging
 import numpy as np
@@ -376,26 +375,20 @@ def distributed_apply_transform_to_coordinates(
         block_slice_coords = tuple(slice(x, y) for x, y in zip(block_start, block_stop))
         lower_bound = min_coord + phys_blocksize * np.array(block_index)
         upper_bound = lower_bound + phys_blocksize
-        print(f'{time.ctime(time.time())}',
-              f'Get points for block {block_index}: {block_slice_coords}',
-              f'from {lower_bound} to {upper_bound}',
-              flush=True)
+        logger.info(f'Get points for block {block_index}: {block_slice_coords}' +
+                    f'from {lower_bound} to {upper_bound}')
         not_too_low = np.all(coordinates[:, 0:3] >= lower_bound, axis=1)
         not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
         point_indexes = np.nonzero(not_too_low * not_too_high)[0]
         if point_indexes.size > 0:
-            print(f'{time.ctime(time.time())}',
-                  f'Add {point_indexes.size} to block {block_index}',
-                  flush=True)
+            logger.info(f'Add {point_indexes.size} to block {block_index}')
             blocks_indexes.append(block_index)
             blocks_slices.append(block_slice_coords)
             blocks_origins.append(lower_bound)
             blocks_points.append(coordinates[point_indexes])
             blocks_points_indexes.append(point_indexes)
         else:
-            print(f'{time.ctime(time.time())}',
-                  f'No point added to block {block_index}',
-                  flush=True)
+            logger.info(f'No point added to block {block_index}')
     original_points_indexes = np.concatenate(blocks_points_indexes, axis=0)
     # transform all partitions and return
     futures = cluster_client.map(
@@ -421,11 +414,10 @@ def _transform_coords(block_index,
                       coords_spacing=None,
                       transform_list=[]):
     # read relevant region of transform
-    print(f'{time.ctime(time.time())} Apply block {block_index} transform ',
-          'block origin', block_origin,
-          'block slice coords', block_slice_coords,
-          'to', len(coord_indexed_values), 'points',
-          flush=True)
+    logger.info(f'Apply block {block_index} transform ' +
+                f'block origin {block_origin}' +
+                f'block slice coords {block_slice_coords}' +
+                f'to {len(coord_indexed_values)} points')
 
     points_coords = coord_indexed_values[:, 0:3]
     points_values = coord_indexed_values[:, 3:]
@@ -441,9 +433,8 @@ def _transform_coords(block_index,
                     crop_slices.append(slice(start, transform.shape[axis]))
                 else:
                     crop_slices.append(slice(start, stop))
-            print(f'{time.ctime(time.time())} Crop transform {block_index}: ',
-                f'to {crop_slices} from {transform.shape}',
-                flush=True)
+            logger.debug(f'Crop transform {block_index}: ' +
+                         f'to {crop_slices} from {transform.shape}')
             # for vector displacement fields crop the transformation
             cropped_transforms.append(transform[tuple(crop_slices)])
         else:
@@ -466,11 +457,10 @@ def _transform_coords(block_index,
     min_warped_coord = np.min(warped_coord_indexed_values[:, 0:3], axis=0)
     max_warped_coord = np.max(warped_coord_indexed_values[:, 0:3], axis=0)
 
-    print(f'{time.ctime(time.time())} Finished block: ', block_index,
-          f'- warped {warped_coord_indexed_values.shape} coords',
-          f'min warped coord {min_warped_coord}',
-          f'max warped coord {max_warped_coord}',
-          flush=True)
+    logger.info(f'Finished block: {block_index}' +
+                f'- warped {warped_coord_indexed_values.shape} coords' +
+                f'min warped coord {min_warped_coord}' +
+                f'max warped coord {max_warped_coord}')
 
     return warped_coord_indexed_values
 
@@ -535,9 +525,8 @@ def distributed_invert_displacement_vector_field(
     nblocks = np.ceil(np.array(vectorfield_array.shape[:-1]) / 
                       blocksize_array).astype(int)
 
-    print(f'{time.ctime(time.time())}'
-          'Prepare inverting blocks with partition size', blocksize_array,
-          flush=True)
+    logger.info('Prepare inverting blocks with ' +
+                f'partition size {blocksize_array}')
     # store block coordinates in a dask array
     blocks_coords = []
     for (i, j, k) in np.ndindex(*nblocks):
@@ -563,25 +552,19 @@ def distributed_invert_displacement_vector_field(
     invert_block =  throttle_method_invocations(
         invert_block_method, max_tasks
     )
-    print(f'{time.ctime(time.time())} Submit Invert for',
-          len(blocks_coords), 'blocks',
-          flush=True)
+    logger.info(f'Submit Invert for {len(blocks_coords)} blocks')
     invert_res = cluster_client.map(invert_block,
         blocks_coords,
     )
     for f in as_completed(invert_res):
         if f.cancelled():
             exc = f.exception()
-            print(f'{time.ctime(time.time())} Invert block exception:', exc,
-                file=sys.stderr, flush=True)
+            logger.warn(f'Invert block exception:', exc)
             tb = f.traceback()
             traceback.print_tb(tb)
         else:
             block_coords = _write_block(f, output=inv_vectorfield_array)
-            print(f'{time.ctime(time.time())} ',
-                    f'Finished inverting and writing block:',
-                    block_coords,
-                    flush=True)
+            logger.info(f'Finished inverting and writing block {block_coords}')
 
 
 def _invert_block(block_coords,
@@ -597,7 +580,7 @@ def _invert_block(block_coords,
     """
     Invert block function
     """
-    print('Invert block:', block_coords, flush=True)
+    logger.info(f'Invert block: {block_coords}')
 
     block_vectorfield = full_vectorfield[block_coords]
     inverse_block = bs_transform.invert_displacement_vector_field(
@@ -635,11 +618,9 @@ def _invert_block(block_coords,
         inverse_block_coords_list.append(slice(start, stop))
 
     inverse_block_coords = tuple(inverse_block_coords_list)
-    print('Completed inverse vector field for block', 
-          block_coords, block_vectorfield.shape,
-          '->',
-          inverse_block_coords, inverse_block.shape,
-          flush=True)
+    logger.info('Completed inverse vector field for block' +
+                f'{block_coords}, {block_vectorfield.shape} -> ' +
+                f'{inverse_block_coords}, {inverse_block.shape}')
     # return result
     return inverse_block_coords, inverse_block
 
@@ -648,10 +629,7 @@ def _write_block(future, output=None):
     block_coords, block_data = future.result()
 
     if output is not None:
-        print(f'{time.ctime(time.time())} Write block:',
-                block_coords,
-                '(', block_data.shape, ')',
-                flush=True)
+        logger.info(f'Write {block_data.shape} block at {block_coords}')
         output[block_coords] = block_data
 
     return block_coords

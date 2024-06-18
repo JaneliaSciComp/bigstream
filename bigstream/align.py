@@ -1410,12 +1410,12 @@ def alignment_pipeline(
     # loop over steps
     new_transforms = []
     for alignment, arguments in steps:
-        logger.info(f'Run {context} {alignment} {arguments}')
+        logger.debug(f'Run {context} {alignment} {arguments}')
         arguments = {**kwargs, **arguments}
         logger.debug(f'All {alignment} args: {arguments}')
         arguments['static_transform_list'] = static_transform_list + new_transforms
         alignment_result = align[alignment](context=context, **arguments)
-        logger.info(f'Completed {context} {alignment} {arguments}')
+        logger.debug(f'Completed {context} {alignment} {arguments}')
         new_transforms.append(alignment_result)
 
     # return in the requested format

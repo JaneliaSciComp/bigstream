@@ -112,7 +112,7 @@ def apply_transform(
             transform_list, list(transform_spacing),
         )
         transform_spacing = tuple(transform_spacing)
-    transform = ut.transform_list_to_composite_transform(
+    transform = transform_list_to_composite_transform(
         transform_list, transform_spacing, transform_origin,
     )
 

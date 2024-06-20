@@ -5,7 +5,7 @@ import bigstream.utility as ut
 import time
 
 from bigstream.configure_irm import configure_irm
-from bigstream.transform import apply_transform, compose_transform_list, compress_transform_list
+import bigstream.transform as bst
 from bigstream.metrics import patch_mutual_information
 from bigstream import features
 import cv2
@@ -450,14 +450,14 @@ def feature_point_ransac_affine_align(
 
     # apply static transforms
     if static_transform_list:
-        mov = apply_transform(
+        mov = bst.apply_transform(
             fix, mov, fix_spacing, mov_spacing,
             transform_list=static_transform_list,
             fix_origin=fix_origin,
             mov_origin=mov_origin,
         )
         if mov_mask is not None:
-            mov_mask = apply_transform(
+            mov_mask = bst.apply_transform(
                 fix.astype(mov_mask.dtype), mov_mask,
                 fix_spacing, mov_spacing,
                 transform_list=static_transform_list,
@@ -812,7 +812,7 @@ def random_affine_search(
         def score_affine(affine):
             # apply transform
             transform_list = static_transform_list + [affine,]
-            aligned = apply_transform(
+            aligned = bst.apply_transform(
                 fix, mov, fix_spacing, mov_spacing,
                 transform_list=transform_list,
                 fix_origin=fix_origin,
@@ -822,7 +822,7 @@ def random_affine_search(
             )
             mov_mask_aligned = None
             if mov_mask is not None:
-                mov_mask_aligned = apply_transform(
+                mov_mask_aligned = bst.apply_transform(
                     fix_mask, mov_mask, fix_mask_spacing, mov_mask_spacing,
                     transform_list=transform_list,
                     fix_origin=fix_origin,
@@ -857,7 +857,7 @@ def random_affine_search(
         if fix_mask is not None: irm.SetMetricFixedMask(fix_mask)
         if mov_mask is not None: irm.SetMetricMovingMask(mov_mask)
         if static_transform_list:
-            T = ut.transform_list_to_composite_transform(
+            T = bst.transform_list_to_composite_transform(
                 static_transform_list,
                 static_transform_spacing,
                 static_transform_origin,
@@ -866,7 +866,7 @@ def random_affine_search(
 
         # wrap irm metric
         def score_affine(affine):
-            irm.SetInitialTransform(ut.matrix_to_affine_transform(affine))
+            irm.SetInitialTransform(bst.matrix_to_affine_transform(affine))
             try:
                 return irm.MetricEvaluate(fix, mov)
             except Exception as e:
@@ -876,7 +876,7 @@ def random_affine_search(
     current_best_score = WORST_POSSIBLE_SCORE
     scores = np.empty(random_iterations + 1, dtype=np.float64)
     for iii, ppp in enumerate(params):
-        scores[iii] = score_affine(ut.physical_parameters_to_affine_matrix_3d(ppp, center))
+        scores[iii] = score_affine(bst.physical_parameters_to_affine_matrix_3d(ppp, center))
         if print_running_improvements and scores[iii] < current_best_score:
                 current_best_score = scores[iii]
                 print(f'{time.ctime(time.time())}',iii, ': ', current_best_score, '\n', ppp)
@@ -885,7 +885,7 @@ def random_affine_search(
     # return top results
     partition_indx = np.argpartition(scores, nreturn)[:nreturn]
     params, scores = params[partition_indx], scores[partition_indx]
-    return [ut.physical_parameters_to_affine_matrix_3d(p, center) for p in params[np.argsort(scores)]]
+    return [bst.physical_parameters_to_affine_matrix_3d(p, center) for p in params[np.argsort(scores)]]
 
 
 def affine_align(
@@ -1031,7 +1031,7 @@ def affine_align(
     irm = configure_irm(**kwargs)
     # set initial static transforms
     if static_transform_list:
-        T = ut.transform_list_to_composite_transform(
+        T = bst.transform_list_to_composite_transform(
             static_transform_list,
             static_transform_spacing,
             static_transform_origin,
@@ -1055,11 +1055,11 @@ def affine_align(
     if rigid and not initial_transform_given:
         transform = rigid_transform_constructor()
     elif rigid and initial_transform_given:
-        transform = ut.matrix_to_euler_transform(initial_condition)
+        transform = bst.matrix_to_euler_transform(initial_condition)
     elif not rigid and not initial_transform_given:
         transform = sitk.AffineTransform(fix.GetDimension())
     elif not rigid and initial_transform_given:
-        transform = ut.matrix_to_affine_transform(initial_condition)
+        transform = bst.matrix_to_affine_transform(initial_condition)
     irm.SetInitialTransform(transform, inPlace=True)
     # set masks
     if fix_mask is not None: irm.SetMetricFixedMask(fix_mask)
@@ -1083,7 +1083,7 @@ def affine_align(
     if final_metric_value < initial_metric_value:
         print(f'{time.ctime(time.time())} Registration succeeded',
               flush=True)
-        return ut.affine_transform_to_matrix(transform)
+        return bst.affine_transform_to_matrix(transform)
     else:
         print(f'{time.ctime(time.time())} Optimization failed to improve metric',
               flush=True)
@@ -1257,7 +1257,7 @@ def deformable_align(
 
     # set initial static transforms
     if static_transform_list:
-        T = ut.transform_list_to_composite_transform(
+        T = bst.transform_list_to_composite_transform(
             static_transform_list,
             static_transform_spacing,
             static_transform_origin,
@@ -1270,7 +1270,7 @@ def deformable_align(
     # now we can set the default
     if not default:
         params = np.concatenate((transform.GetFixedParameters(), transform.GetParameters()))
-        field = ut.bspline_to_displacement_field(
+        field = bst.bspline_to_displacement_field(
             transform, initial_fix_shape,
             spacing=initial_fix_spacing, origin=fix_origin,
             direction=np.eye(fix.GetDimension()),
@@ -1294,7 +1294,7 @@ def deformable_align(
     # otherwise return default
     if final_metric_value < initial_metric_value:
         params = np.concatenate((transform.GetFixedParameters(), transform.GetParameters()))
-        field = ut.bspline_to_displacement_field(
+        field = bst.bspline_to_displacement_field(
             transform, initial_fix_shape,
             spacing=initial_fix_spacing, origin=fix_origin,
             direction=np.eye(fix.GetDimension()),
@@ -1449,7 +1449,7 @@ def alignment_pipeline(
     if return_format == 'independent':
         return new_transforms
     elif return_format == 'compressed':
-        return compress_transform_list(new_transforms, [fix_spacing,]*len(new_transforms))
+        return bst.compress_transform_list(new_transforms, [fix_spacing,]*len(new_transforms))
     elif return_format == 'flatten':
-        return compose_transform_list(new_transforms, fix_spacing)
+        return bst.compose_transform_list(new_transforms, fix_spacing)
 

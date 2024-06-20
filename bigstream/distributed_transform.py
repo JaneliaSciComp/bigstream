@@ -1,9 +1,7 @@
 import functools
 import logging
 import numpy as np
-import time
 import traceback
-import sys
 
 import bigstream.transform as bs_transform
 

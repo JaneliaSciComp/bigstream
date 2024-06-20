@@ -1,11 +1,14 @@
-import time
+import logging
 
 from dask.distributed import Semaphore
 
 
+logger = logging.getLogger(__name__)
+
+
 def throttle_method_invocations(m, max_executions, name=None):
     if max_executions > 0:
-        print(f'Limit {m} to {max_executions}', flush=True)
+        logger.info(f'Limit {m} to {max_executions}')
         semaphore_name = name if name is not None else repr(m)
         tasks_semaphore = Semaphore(max_leases=max_executions,
                                     name=semaphore_name)
@@ -17,12 +20,10 @@ def throttle_method_invocations(m, max_executions, name=None):
 def _throttle(m, sem):
     def throttled_m(*args, **kwargs):
         with sem:
-            print(f'{time.ctime(time.time())} Secured slot to run {m}',
-                  flush=True)
+            logger.info(f'Secured slot to run {m}')
             try:
                 return m(*args, **kwargs)
             finally:
-                print(f'{time.ctime(time.time())} Release slot used for {m}',
-                      flush=True)
+                logger.info(f'Release slot used for {m}')
 
     return throttled_m

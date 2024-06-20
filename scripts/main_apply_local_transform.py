@@ -1,34 +1,14 @@
 import argparse
 import numpy as np
 import bigstream.io_utility as io_utility
-import yaml
 
-from flatten_json import flatten
-from os.path import exists
 from dask.distributed import (Client, LocalCluster)
+from bigstream.cli import (inttuple, floattuple, stringlist)
+from bigstream.configure_logging import (configure_logging)
 from bigstream.distributed_transform import distributed_apply_transform
 from bigstream.image_data import ImageData
-
-
-def _inttuple(arg):
-    if arg is not None and arg.strip():
-        return tuple([int(d) for d in arg.split(',')])
-    else:
-        return ()
-
-
-def _floattuple(arg):
-    if arg is not None and arg.strip():
-        return tuple([float(d) for d in arg.split(',')])
-    else:
-        return ()
-
-
-def _stringlist(arg):
-    if arg is not None and arg.strip():
-        return list(filter(lambda x: x, [s.strip() for s in arg.split(',')]))
-    else:
-        return []
+from bigstream.workers_config import (ConfigureWorkerLoggingPlugin,
+                                      load_dask_config)
 
 
 def _define_args():
@@ -41,7 +21,7 @@ def _define_args():
                              help='Fixed image subpath')
     args_parser.add_argument('--fix-spacing', '--fixed-spacing',
                              dest='fixed_spacing',
-                             type=_floattuple,
+                             type=floattuple,
                              help='Fixed image voxel spacing')
 
     args_parser.add_argument('--mov', '--moving',
@@ -52,12 +32,12 @@ def _define_args():
                              help='Moving image subpath')
     args_parser.add_argument('--mov-spacing', '--moving-spacing',
                              dest='moving_spacing',
-                             type=_floattuple,
+                             type=floattuple,
                              help='Moving image voxel spacing')
 
     args_parser.add_argument('--affine-transformations',
                              dest='affine_transformations',
-                             type=_stringlist,
+                             type=stringlist,
                              help='Affine transformations')
 
     args_parser.add_argument('--local-transform', dest='local_transform',
@@ -67,7 +47,7 @@ def _define_args():
                              help='Local transformation dataset to be applied')
     args_parser.add_argument('--transform-spacing',
                              dest='transform_spacing',
-                             type=_floattuple,
+                             type=floattuple,
                              help='Transform spacing')
 
     args_parser.add_argument('--output',
@@ -83,7 +63,7 @@ def _define_args():
                              help='Output chunk size')
     args_parser.add_argument('--output-blocksize',
                              dest='output_blocksize',
-                             type=_inttuple,
+                             type=inttuple,
                              help='Output chunk size as a tuple.')
     args_parser.add_argument('--blocks-overlap-factor',
                              dest='blocks_overlap_factor',
@@ -98,6 +78,14 @@ def _define_args():
     args_parser.add_argument('--dask-config', dest='dask_config',
                              type=str, default=None,
                              help='YAML file containing dask configuration')
+
+    args_parser.add_argument('--logging-config', dest='logging_config',
+                             type=str,
+                             help='Logging configuration')
+    args_parser.add_argument('--verbose',
+                             dest='verbose',
+                             action='store_true',
+                             help='Set logging level to verbose')
 
     return args_parser
 
@@ -118,19 +106,18 @@ def _run_apply_transform(args):
     elif args.fixed_spacing:
         mov_data.voxel_spacing = fix_data.voxel_spacing
 
-    print(f'Fixed volume: {fix_data}', flush=True)
-    print(f'Moving volume: {mov_data}', flush=True)
+    logger.info(f'Fixed volume: {fix_data}')
+    logger.info(f'Moving volume: {mov_data}')
 
-    if (args.dask_config):
-        import dask.config
-        with open(args.dask_config) as f:
-            dask_config = flatten(yaml.safe_load(f))
-            dask.config.set(dask_config)
+    load_dask_config(args.dask_config)
 
     if args.dask_scheduler:
         cluster_client = Client(address=args.dask_scheduler)
     else:
         cluster_client = Client(LocalCluster())
+
+    cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(args.logging_config,
+                                                                args.verbose))
 
     local_deform_data = ImageData(args.local_transform, args.local_transform_subpath)
     if args.transform_spacing:
@@ -140,9 +127,8 @@ def _run_apply_transform(args):
         local_deform_data.voxel_spacing = np.array((1,) + tuple(fix_data.voxel_spacing[::-1]))[::-1]
     # deform spacing axes are: v,x,y,z in reverse so z,y,x,v
 
-    print(f'Local transform spacing for {local_deform_data} -> ',
-          f'{local_deform_data.voxel_spacing[:local_deform_data.ndim-1]}',
-          flush=True)
+    logger.info(f'Local transform spacing for {local_deform_data} -> ' +
+                f'{local_deform_data.voxel_spacing[:local_deform_data.ndim-1]}')
 
     transform_spacing = ()
     if (args.output_blocksize is not None and
@@ -164,8 +150,7 @@ def _run_apply_transform(args):
         )
 
         if args.affine_transformations:
-            print('Affine transformations arg:', args.affine_transformations,
-                  flush=True)
+            logger.info(f'Affine transformations arg: {args.affine_transformations}')
             applied_affines = [args.affine_transformations]
             affine_transforms_list = [np.loadtxt(tfile)
                                       for tfile in args.affine_transformations]
@@ -175,9 +160,9 @@ def _run_apply_transform(args):
             applied_affines = []
             affine_transforms_list = []
 
-        print(f'Check if {local_deform_data} has data')
+        logger.info(f'Check if {local_deform_data} has data')
         if local_deform_data.has_data():
-            print(f'Read image for {local_deform_data}')
+            logger.info(f'Read image for {local_deform_data}')
             local_deform_data.read_image()
             all_transforms = affine_transforms_list + [local_deform_data.image_array]
             applied_transforms = applied_affines + [f'{local_deform_data}']
@@ -186,9 +171,9 @@ def _run_apply_transform(args):
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines
 
-        print('Apply', applied_transforms, ' to ',
-              mov_data, '->', args.output, output_subpath,
-              'transform spacing: ', transform_spacing)
+        logger.info(f'Apply {applied_transforms} to ' +
+                    f'{mov_data} -> {args.output}:{output_subpath}' +
+                    f'transform spacing: {transform_spacing}')
 
         distributed_apply_transform(
             fix_data, mov_data,
@@ -208,6 +193,11 @@ def _run_apply_transform(args):
 if __name__ == '__main__':
     args_parser = _define_args()
     args = args_parser.parse_args()
-    print('Invoked transformation:', args, flush=True)
+    args = args_parser.parse_args()
+    # prepare logging
+    global logger
+    logger = configure_logging(args.logging_config, args.verbose)
+
+    logger.info(f'Invoked transformation: {args}')
 
     _run_apply_transform(args)

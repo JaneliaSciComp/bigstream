@@ -1,11 +1,8 @@
 import argparse
 import numpy as np
 import bigstream.io_utility as io_utility
-import yaml
 
-from dask.distributed import (Client, LocalCluster, Worker)
-from distributed.diagnostics.plugin import WorkerPlugin
-from flatten_json import flatten
+from dask.distributed import (Client, LocalCluster)
 from os.path import exists
 from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            define_registration_input_args,
@@ -17,28 +14,11 @@ from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
 from bigstream.image_data import ImageData
+from bigstream.workers_config import (ConfigureWorkerLoggingPlugin,
+                                      load_dask_config)
 
 
 logger = None # initialized in main as a result of calling configure_logging
-
-
-class ConfigureWorkerLoggingPlugin(WorkerPlugin):
-
-    def __init__(self, logging_config, verbose):
-        self.logging_config = logging_config
-        self.verbose = verbose
-
-    def setup(self, worker: Worker):
-        self.logger = configure_logging(self.logging_config, self.verbose)
-
-    def teardown(self, worker: Worker):
-        pass
-
-    def transition(self, key: str, start: str, finish: str, **kwargs):
-        pass
-
-    def release_key(self, key: str, state: str, cause: str | None, reason: None, report: bool):
-        pass
 
 
 def _define_args(local_descriptor):
@@ -138,11 +118,7 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
         raise Exception(f'{mov_image} expected to have ',
                         f'the same ndim as {fix_image}')
 
-    if dask_config_file:
-        import dask.config
-        with open(dask_config_file) as f:
-            dask_config = flatten(yaml.safe_load(f))
-            dask.config.set(dask_config)
+    load_dask_config(dask_config_file)
 
     if dask_scheduler_address:
         cluster_client = Client(address=dask_scheduler_address)

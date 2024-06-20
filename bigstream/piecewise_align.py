@@ -9,9 +9,7 @@ from ClusterWrap.decorator import cluster
 import bigstream.utility as ut
 from bigstream.align import realize_mask
 from bigstream.align import alignment_pipeline
-from bigstream.transform import apply_transform, compose_transform_list
-from bigstream.transform import apply_transform_to_coordinates
-from bigstream.transform import compose_transforms
+import bigstream.transform as bst
 from distributed import Lock, MultiLock
 
 
@@ -265,10 +263,10 @@ def distributed_piecewise_alignment_pipeline(
         mov_block_coords_phys = np.copy(fix_block_coords_phys)
         for transform in static_transform_list[::-1]:
             if len(transform.shape) == 2:
-                mov_block_coords_phys = apply_transform_to_coordinates(
+                mov_block_coords_phys = bst.apply_transform_to_coordinates(
                     mov_block_coords_phys, [transform,],
                 )
-                transform = ut.change_affine_matrix_origin(transform, fix_block_coords_phys[0])
+                transform = bst.change_affine_matrix_origin(transform, fix_block_coords_phys[0])
             else:
                 spacing = ut.relative_spacing(transform.shape, fix_zarr.shape, fix_spacing)
                 ratio = np.array(transform.shape[:-1]) / fix_zarr.shape
@@ -277,7 +275,7 @@ def distributed_piecewise_alignment_pipeline(
                 transform_slices = tuple(slice(a, b) for a, b in zip(start, stop))
                 transform = transform[transform_slices]
                 origin = spacing * start
-                mov_block_coords_phys = apply_transform_to_coordinates(
+                mov_block_coords_phys = bst.apply_transform_to_coordinates(
                     mov_block_coords_phys, [transform,], spacing, origin
                 )
             new_list.append(transform)
@@ -334,7 +332,7 @@ def distributed_piecewise_alignment_pipeline(
 
         # ensure transform is a vector field
         if len(transform.shape) == 2:
-            transform = ut.matrix_to_displacement_field(
+            transform = bst.matrix_to_displacement_field(
                 transform, fix.shape, spacing=fix_spacing,
             )
         ##################################################################
@@ -575,7 +573,7 @@ def nested_distributed_piecewise_alignment_pipeline(
         )
         # TODO: THIS DOES NOT WORK WITH LARGER THAN MEMORY TRANSFORMS
         if iii > 0:
-            deform = compose_transforms(
+            deform = bst.compose_transforms(
                 static_transform_list.pop(), deform,
                 fix_spacing, fix_spacing,
             )

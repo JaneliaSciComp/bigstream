@@ -79,6 +79,10 @@ def _define_args():
                              type=str, default=None,
                              help='YAML file containing dask configuration')
 
+    args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
+                             type=int, default=0,
+                             help='Maximum number of parallel cluster tasks if >= 0')
+
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
                              help='Logging configuration')
@@ -184,6 +188,7 @@ def _run_apply_transform(args):
             overlap_factor=args.blocks_overlap_factor,
             aligned_data=output_dataarray,
             transform_spacing=transform_spacing,
+            max_tasks=args.cluster_max_tasks,
         )
         return output_dataarray
     else:

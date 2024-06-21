@@ -1054,8 +1054,7 @@ def affine_align(
         irm.Execute(fix, mov)
         final_metric_value = irm.MetricEvaluate(fix, mov)
     except Exception as e:
-        logger.error(f'{context} Registration failed due to ITK exception:\n',
-                     e)
+        logger.error(f'{context} Registration failed due to ITK exception: {e}')
         logger.info(f'{context} Returning default')
         return default
 
@@ -1260,8 +1259,7 @@ def deformable_align(
         irm.Execute(fix, mov)
         final_metric_value = irm.MetricEvaluate(fix, mov)
     except Exception as e:
-        logger.error(f'{context} Registration failed due to ITK exception:\n',
-                     e)
+        logger.error(f'{context} Registration failed due to ITK exception: {e}')
         logger.info(f'{context} Returning default')
         return default
 

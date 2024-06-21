@@ -609,7 +609,7 @@ def _collect_results(futures, output):
     for f in as_completed(futures):
         if f.cancelled():
             exc = f.exception()
-            logger.error(f'Block exception:', exc)
+            logger.error(f'Block exception: {exc}')
             tb = f.traceback()
             traceback.print_tb(tb)
             res = False

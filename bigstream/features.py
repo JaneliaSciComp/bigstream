@@ -140,8 +140,7 @@ def _stats(arr):
         stddevs = np.sqrt( sqr_means - np.square(means) )
         return means, stddevs
     except Exception as e:
-        logger.error(f'Stats exception for array of shape {arr.shape}',
-                     e)
+        logger.error(f'Stats exception for array of shape {arr.shape}: {e}')
         raise e
 
 

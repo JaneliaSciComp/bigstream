@@ -292,8 +292,7 @@ def _transform_single_block(fix_block_read_method,
         # return result
         return final_block_coords, aligned_block
     except Exception as e:
-        logger.error(f'Error trying to transform block {block_coords}',
-                     e)
+        logger.error(f'Error trying to transform block {block_coords}: {e}')
         traceback.print_tb(e)
         raise e
 
@@ -557,7 +556,7 @@ def distributed_invert_displacement_vector_field(
     for f in as_completed(invert_res):
         if f.cancelled():
             exc = f.exception()
-            logger.warn(f'Invert block exception:', exc)
+            logger.error(f'Invert block exception: {exc}')
             tb = f.traceback()
             traceback.print_tb(tb)
         else:

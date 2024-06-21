@@ -54,8 +54,7 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             zarr_data.attrs.update((k, v) for k,v in kwargs.items() if v)
             return zarr_data
     except Exception as e:
-        logger.error(f'Error creating a dataset at {container_path}:{container_subpath}',
-                     e)
+        logger.error(f'Error creating a dataset at {container_path}:{container_subpath}: {e}')
         raise e
 
 
@@ -159,7 +158,7 @@ def _open_zarr(data_path, data_subpath, data_store_name=None, block_coords=None)
         ba = a[block_coords] if block_coords is not None else a
         return ba, a.attrs.asdict()
     except Exception as e:
-        logger.error(f'Error opening {data_path} : {data_subpath}', e)
+        logger.error(f'Error opening {data_path} : {data_subpath}: {e}')
         raise e
 
 
@@ -174,7 +173,7 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         logger.info(f'{data_path}:{data_subpath} attrs: {dict}')
         return dict
     except Exception as e:
-        logger.error(f'Error opening {data_path} : {data_subpath}', e)
+        logger.error(f'Error opening {data_path} : {data_subpath}, {e}')
         raise e
 
 

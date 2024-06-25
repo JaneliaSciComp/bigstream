@@ -79,7 +79,7 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--compression', dest='compression',
                              default='zstd',
                              type=str,
-                             help='Set the compression. ' +
+                             help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
 
     args_parser.add_argument('--logging-config', dest='logging_config',

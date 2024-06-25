@@ -76,6 +76,12 @@ def _define_args(local_descriptor):
                              type=int, default=0,
                              help='Maximum number of parallel cluster tasks if >= 0')
 
+    args_parser.add_argument('--compression', dest='compression',
+                             default='zstd',
+                             type=str,
+                             help='Set the compression. ' +
+                             'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
                              help='Logging configuration')
@@ -100,6 +106,7 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
                          aggregate_blockfield_writing=False,
                          max_tasks=0,
                          logging_config=None,
+                         compressor=None,
                          verbose=False,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
@@ -203,6 +210,7 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
         inv_order,
         cluster_client,
         aggregate_blockfield_writing,
+        compressor,
         max_tasks,
     )
 
@@ -229,6 +237,7 @@ def _align_local_data(fix_image: ImageData,
                       inv_order,
                       cluster_client,
                       aggregate_blockfield_writing,
+                      compressor,
                       cluster_max_tasks):
 
     fix_shape = fix_image.shape
@@ -246,6 +255,7 @@ def _align_local_data(fix_image: ImageData,
             tuple(transform_blocksize) + (fix_ndim,),
             np.float32,
             overwrite=True,
+            compressor=compressor,
             pixelResolution=transform_spacing,
             downsamplingFactors=transform_downsampling, 
         )
@@ -280,6 +290,7 @@ def _align_local_data(fix_image: ImageData,
             tuple(inv_transform_blocksize) + (fix_ndim,),
             np.float32,
             overwrite=True,
+            compressor=compressor,
             pixelResolution=transform_spacing,
             downsamplingFactors=transform_downsampling,            
         )
@@ -311,6 +322,7 @@ def _align_local_data(fix_image: ImageData,
             align_blocksize,
             fix_image.dtype,
             overwrite=True,
+            compressor=compressor,
             pixelResolution=mov_image.get_attr('pixelResolution'),
             downsamplingFactors=mov_image.get_attr('downsamplingFactors'),
         )
@@ -371,6 +383,7 @@ def main():
         aggregate_blockfield_writing=args.aggregate_blockfield_writing,
         max_tasks=args.cluster_max_tasks,
         logging_config=args.logging_config,
+        compressor=args.compression,
         verbose=args.verbose,
     )
 

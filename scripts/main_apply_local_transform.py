@@ -83,6 +83,12 @@ def _define_args():
                              type=int, default=0,
                              help='Maximum number of parallel cluster tasks if >= 0')
 
+    args_parser.add_argument('--compression', dest='compression',
+                             default='zstd',
+                             type=str,
+                             help='Set the compression. ' +
+                             'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
                              help='Logging configuration')
@@ -149,6 +155,7 @@ def _run_apply_transform(args):
             fix_data.shape,
             output_blocks,
             fix_data.dtype,
+            compressor=args.compression,
             pixelResolution=mov_data.get_attr('pixelResolution'),
             downsamplingFactors=mov_data.get_attr('downsamplingFactors'),
         )

@@ -1,5 +1,6 @@
 import logging
 import nrrd
+import numcodecs as codecs
 import numpy as np
 import os
 import zarr
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                    data=None, overwrite=False,
+                   compressor=None,
                    **kwargs):
     try:
         real_container_path = os.path.realpath(container_path)
@@ -25,8 +27,10 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             store = zarr.N5Store(real_container_path)
         if container_subpath:
             logger.info(f'Create dataset {container_path}:{container_subpath} ' +
-                        f'{kwargs}')
+                        f'compressor={compressor}, {kwargs}')
             container_root = zarr.open_group(store=store, mode='a')
+            codec = (None if compressor is None 
+                     else codecs.get_codec(dict(id=compressor)))
             if data is None and overwrite:
                 dataset = container_root.create_dataset(
                     container_subpath,
@@ -34,6 +38,7 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                     chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
+                    compressor=codec,
                     data=data)
             else:
                 dataset = container_root.require_dataset(
@@ -42,6 +47,7 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                     chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
+                    compressor=codec,
                     data=data)
             # set additional attributes
             dataset.attrs.update((k, v) for k,v in kwargs.items() if v)

@@ -84,7 +84,7 @@ def _define_args():
                              help='Maximum number of parallel cluster tasks if >= 0')
 
     args_parser.add_argument('--compression', dest='compression',
-                             default='zstd',
+                             default='gzip',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')

@@ -281,6 +281,8 @@ def _align_local_data(fix_image: ImageData,
         )
     else:
         deform_ok = False
+        logger.warn('Fix image or moving image has no data or ' +
+                    'the distributed alignment failed')
 
     if deform_ok and transform and inv_transform_path:
         inv_transform = io_utility.create_dataset(
@@ -348,6 +350,8 @@ def _align_local_data(fix_image: ImageData,
         )
     else:
         align = None
+        if not align_path:
+            logger.info('Align arg is not set, so deformation is be applied')
 
     return transform, align
 

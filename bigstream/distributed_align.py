@@ -548,8 +548,8 @@ def distributed_alignment_pipeline(
     # establish all keyword arguments
     block_align_steps = [(a, {**kwargs, **b}) for a, b in steps]
 
-    logger.info(f'Prepare params for {len(fix_blocks_infos)}' +
-                f'bocks for a {fix_shape_arr} volume')
+    logger.info(f'Prepare params for {len(fix_blocks_infos)} ' +
+                f'blocks for a {fix_shape_arr} volume')
 
     transform_blocks = tuple(nblocks) +(1,)
     [Lock(f'{x}') for x in np.ndindex(*transform_blocks)]

@@ -175,7 +175,9 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
                                    mode='r')
         a = data_container[data_subpath] if data_subpath else data_container
         dict = a.attrs.asdict()
-        dict.update({'dataType': a.dtype, 'dimensions': a.shape})
+        dict.update({'dataType': a.dtype,
+                     'dimensions': a.shape,
+                     'blockSize': a.chunks})
         logger.info(f'{data_path}:{data_subpath} attrs: {dict}')
         return dict
     except Exception as e:

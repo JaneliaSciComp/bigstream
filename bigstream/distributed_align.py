@@ -583,8 +583,6 @@ def _collect_results(futures):
             traceback.print_tb(tb)
             res = False
         else:
-            (block_index, block_coords) = r
-            logger.info('Finished computing deformation field for ' +
-                        f'block {block_index} at {block_coords}')
+            logger.info(f'Finished computing deformation field for {r}')
 
     return res

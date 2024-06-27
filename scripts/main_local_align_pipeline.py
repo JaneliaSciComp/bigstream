@@ -67,11 +67,6 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--dask-config', dest='dask_config',
                              type=str, default=None,
                              help='YAML file containing dask configuration')
-    args_parser.add_argument('--aggregate-blockfield-writing',
-                             dest='aggregate_blockfield_writing',
-                             action='store_true',
-                             help='Collect all block displacement vectors ' +
-                                  'before writing')
     args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
                              type=int, default=0,
                              help='Maximum number of parallel cluster tasks if >= 0')
@@ -103,7 +98,6 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
                          inv_order=2,
                          dask_scheduler_address=None,
                          dask_config_file=None,
-                         aggregate_blockfield_writing=False,
                          max_tasks=0,
                          logging_config=None,
                          compressor=None,
@@ -210,7 +204,6 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
             inv_sqrt_iterations,
             inv_order,
             cluster_client,
-            aggregate_blockfield_writing,
             compressor,
             max_tasks,
         )
@@ -239,7 +232,6 @@ def _align_local_data(fix_image: ImageData,
                       inv_sqrt_iterations,
                       inv_order,
                       cluster_client,
-                      aggregate_blockfield_writing,
                       compressor,
                       cluster_max_tasks):
 
@@ -279,7 +271,6 @@ def _align_local_data(fix_image: ImageData,
             mov_mask=mov_mask,
             static_transform_list=global_affine_transforms,
             output_transform=transform,
-            aggregate_writing=aggregate_blockfield_writing,
             max_tasks=cluster_max_tasks,
         )
     else:
@@ -387,7 +378,6 @@ def main():
         inv_order=args.inv_order,
         dask_scheduler_address=args.dask_scheduler,
         dask_config_file=args.dask_config,
-        aggregate_blockfield_writing=args.aggregate_blockfield_writing,
         max_tasks=args.cluster_max_tasks,
         logging_config=args.logging_config,
         compressor=args.compression,

@@ -5,7 +5,7 @@ import bigstream.utility as ut
 import time
 import traceback
 
-from dask.distributed import as_completed, Lock, MultiLock
+from dask.distributed import as_completed, MultiLock
 from itertools import product
 
 from .align import alignment_pipeline
@@ -263,21 +263,19 @@ def _compute_block_transform(compute_transform_params,
             lock_strs.append(str(tuple(a + b for a, b in zip(block_index, delta))))
         lock = MultiLock(lock_strs)
         lock.acquire()
+        try:
+            # write result to disk
+            logger.info(f'Writing block {block_index} at {block_coords}')
 
-        # write result to disk
-        logger.info(f'Writing block {block_index} at {block_coords}')
+            output_block = output_transform[block_coords] + transform
+            output_transform[block_coords] = output_block
 
-        output_block = output_transform[block_coords] + transform
-        output_transform[block_coords] = output_block
+            logger.info(f'Finished writing block {block_index} at {block_coords}')
+        finally:
+            # release the lock
+            lock.release()
 
-        logger.info(f'Finished writing block {block_index} at {block_coords}')
-        # release the lock
-        lock.release()
-        returned_block = None
-    else:
-        returned_block = transform
-
-    return block_index, block_coords, returned_block
+    return block_index, block_coords
 
 
 def _get_transform_weights(block_index,
@@ -330,22 +328,6 @@ def _get_transform_weights(block_index,
     return weights
 
 
-def _write_block_transform(block_transform_future, output):
-    (block_index,
-     block_slice_coords,
-     block_transform) = block_transform_future.result()
-
-    if output is not None and block_transform is not None:
-        logger.info(f'Write block transform results {block_index}')
-        # write result
-        output[block_slice_coords] = (output[block_slice_coords] +
-                                      block_transform)
-        logger.info(f'Updated vector field for block: {block_index}' +
-                    f'at {block_slice_coords}')
-
-    return block_index, block_slice_coords
-
-
 def distributed_alignment_pipeline(
     fix_image,
     mov_image,
@@ -361,7 +343,6 @@ def distributed_alignment_pipeline(
     static_transform_list=[],
     output_transform=None,
     max_tasks=0,
-    aggregate_writing=False,
     **kwargs,
 ):
     """
@@ -447,13 +428,6 @@ def distributed_alignment_pipeline(
 
     output_transform : ndarray (default: None)
         Output transform
-
-    write_group_interval : float (default: 30.)
-        The time each of the 27 mutually exclusive write block groups have
-        each round to write finished data.
-
-    aggregate_writing: bool (default: False)
-        If set collect block deformation results first and then write them
 
     kwargs : any additional arguments
         Arguments that will apply to all alignment steps. These are overruled by
@@ -551,8 +525,6 @@ def distributed_alignment_pipeline(
     logger.info(f'Prepare params for {len(fix_blocks_infos)} ' +
                 f'blocks for a {fix_shape_arr} volume')
 
-    transform_blocks = tuple(nblocks) +(1,)
-    [Lock(f'{x}') for x in np.ndindex(*transform_blocks)]
     prepare_blocks_method = functools.partial(
         _prepare_compute_block_transform_params,
         fix_shape=fix_shape_arr,
@@ -583,9 +555,6 @@ def distributed_alignment_pipeline(
         _compute_block_transform, max_tasks)
 
     logger.info(f'Submit {block_align_steps} for {len(blocks)} blocks')
-    # if aggregate_writing is set write collect the results first
-    # then write them out
-    compute_output = output_transform if not aggregate_writing else None
     block_transform_res = cluster_client.map(compute_block_transform,
                                              blocks_to_process,
                                              fix_spacing=fix_spacing,
@@ -594,19 +563,19 @@ def distributed_alignment_pipeline(
                                              block_overlaps=overlaps,
                                              nblocks=nblocks,
                                              align_steps=block_align_steps,
-                                             output_transform=compute_output)
+                                             output_transform=output_transform)
     logger.info('Collect compute transform results for ' +
                 f'{len(block_transform_res)} blocks')
 
-    res = _collect_results(block_transform_res, output=output_transform)
+    res = _collect_results(block_transform_res)
     logger.info(f'Distributed alignment completed successfully')
     return res
 
 
-def _collect_results(futures, output):
+def _collect_results(futures):
     res = True
 
-    for f in as_completed(futures):
+    for f, r in as_completed(futures, with_results=True):
         if f.cancelled():
             exc = f.exception()
             logger.error(f'Block exception: {exc}')
@@ -614,6 +583,8 @@ def _collect_results(futures, output):
             traceback.print_tb(tb)
             res = False
         else:
-            _write_block_transform(f, output)
+            (block_index, block_coords) = r
+            logger.info('Finished computing deformation field for ' +
+                        f'block {block_index} at {block_coords}')
 
     return res

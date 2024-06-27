@@ -119,16 +119,6 @@ def _run_apply_transform(args):
     logger.info(f'Fixed volume: {fix_data}')
     logger.info(f'Moving volume: {mov_data}')
 
-    load_dask_config(args.dask_config)
-
-    if args.dask_scheduler:
-        cluster_client = Client(address=args.dask_scheduler)
-    else:
-        cluster_client = Client(LocalCluster())
-
-    cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(args.logging_config,
-                                                                args.verbose))
-
     local_deform_data = ImageData(args.local_transform, args.local_transform_subpath)
     if args.transform_spacing:
         local_deform_data.voxel_spacing = np.array((1,) + args.transform_spacing)[::-1]
@@ -186,17 +176,30 @@ def _run_apply_transform(args):
                     f'{mov_data} -> {args.output}:{output_subpath}' +
                     f'transform spacing: {transform_spacing}')
 
-        distributed_apply_transform(
-            fix_data, mov_data,
-            fix_data.voxel_spacing, mov_data.voxel_spacing,
-            output_blocks, # use block chunk size for distributing the work
-            all_transforms, # transform_list
-            cluster_client,
-            overlap_factor=args.blocks_overlap_factor,
-            aligned_data=output_dataarray,
-            transform_spacing=transform_spacing,
-            max_tasks=args.cluster_max_tasks,
-        )
+        # open a dask client
+        load_dask_config(args.dask_config)
+
+        if args.dask_scheduler:
+            cluster_client = Client(address=args.dask_scheduler)
+        else:
+            cluster_client = Client(LocalCluster())
+
+        cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(args.logging_config,
+                                                                    args.verbose))
+        try:
+            distributed_apply_transform(
+                fix_data, mov_data,
+                fix_data.voxel_spacing, mov_data.voxel_spacing,
+                output_blocks, # use block chunk size for distributing the work
+                all_transforms, # transform_list
+                cluster_client,
+                overlap_factor=args.blocks_overlap_factor,
+                aligned_data=output_dataarray,
+                transform_spacing=transform_spacing,
+                max_tasks=args.cluster_max_tasks,
+            )
+        finally:
+            cluster_client.close()
         return output_dataarray
     else:
         return None

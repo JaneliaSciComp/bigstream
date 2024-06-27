@@ -39,7 +39,7 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--local-processing-size',
                              dest='local_processing_size',
                              type=inttuple,
-                             help='partition overlap when splitting the work - a fractional number between 0 - 1')
+                             help='partition size for splitting the work')
     args_parser.add_argument('--local-processing-overlap-factor',
                              dest='local_processing_overlap_factor',
                              type=float,
@@ -125,16 +125,6 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
         raise Exception(f'{mov_image} expected to have ',
                         f'the same ndim as {fix_image}')
 
-    load_dask_config(dask_config_file)
-
-    if dask_scheduler_address:
-        cluster_client = Client(address=dask_scheduler_address)
-    else:
-        cluster_client = Client(LocalCluster())
-
-    cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(logging_config,
-                                                                verbose))
-
     if processing_size:
         # block are defined as x,y,z so I am reversing it to z,y,x
         local_processing_size = processing_size[::-1]
@@ -187,32 +177,45 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
         # default to output_chunk_size
         align_blocksize = transform_blocksize
 
-    _align_local_data(
-        fix_image,
-        fix_mask,
-        mov_image,
-        mov_mask,
-        local_steps,
-        local_processing_size,
-        local_processing_overlap_factor,
-        [global_affine] if global_affine is not None else [],
-        args.transform_path(),
-        transform_subpath,
-        transform_blocksize,
-        args.inv_transform_path(),
-        inv_transform_subpath,
-        inv_transform_blocksize,
-        args.align_path(),
-        align_subpath,
-        align_blocksize,
-        inv_iterations,
-        inv_sqrt_iterations,
-        inv_order,
-        cluster_client,
-        aggregate_blockfield_writing,
-        compressor,
-        max_tasks,
-    )
+    # start a dask client
+    load_dask_config(dask_config_file)
+
+    if dask_scheduler_address:
+        cluster_client = Client(address=dask_scheduler_address)
+    else:
+        cluster_client = Client(LocalCluster())
+
+    cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(logging_config,
+                                                                verbose))
+    try:
+        _align_local_data(
+            fix_image,
+            fix_mask,
+            mov_image,
+            mov_mask,
+            local_steps,
+            local_processing_size,
+            local_processing_overlap_factor,
+            [global_affine] if global_affine is not None else [],
+            args.transform_path(),
+            transform_subpath,
+            transform_blocksize,
+            args.inv_transform_path(),
+            inv_transform_subpath,
+            inv_transform_blocksize,
+            args.align_path(),
+            align_subpath,
+            align_blocksize,
+            inv_iterations,
+            inv_sqrt_iterations,
+            inv_order,
+            cluster_client,
+            aggregate_blockfield_writing,
+            compressor,
+            max_tasks,
+        )
+    finally:
+        cluster_client.close()
 
 
 def _align_local_data(fix_image: ImageData,

@@ -167,7 +167,7 @@ def configure_irm(
     # identify number of physical cores available
     ncores = ut.get_number_of_cores()
     if 'ITK_THREADS' in os.environ:
-        nthreads = int(os.environ["ITK_THREADS"])
+        nthreads = min(ncores, int(os.environ["ITK_THREADS"]))
     elif 'NO_HYPERTHREADING' in os.environ:
         nthreads = ncores
     else:

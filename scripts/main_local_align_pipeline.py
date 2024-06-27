@@ -1,6 +1,7 @@
 import argparse
 import numpy as np
 import bigstream.io_utility as io_utility
+import bigstream.utility as ut
 
 from dask.distributed import (Client, LocalCluster)
 from os.path import exists
@@ -238,7 +239,8 @@ def _align_local_data(fix_image: ImageData,
     fix_shape = fix_image.shape
     fix_ndim = fix_image.ndim
 
-    logger.info(f'Align moving data {mov_image} to reference {fix_image}')
+    logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
+                f'using {ut.get_number_of_cores()} cpus')
 
     transform_downsampling = (list(fix_image.downsampling) + [1])[::-1]
     transform_spacing = (list(fix_image.get_downsampled_voxel_resolution(False)) + [1])[::-1]

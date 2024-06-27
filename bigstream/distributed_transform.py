@@ -151,7 +151,7 @@ def distributed_apply_transform(
     )
 
     res = True
-    for f in as_completed(transform_block_res):
+    for f, r in as_completed(transform_block_res, with_results=True):
         if f.cancelled():
             exc = f.exception()
             logger.error(f'Block exception: {exc}')
@@ -159,7 +159,7 @@ def distributed_apply_transform(
             traceback.print_tb(tb)
             res = False
 
-        finished_block_coords, aligned_block = f.result()
+        (finished_block_coords, aligned_block) = r
 
         logger.info(f'Completed to transform block: {finished_block_coords}')
 
@@ -554,14 +554,14 @@ def distributed_invert_displacement_vector_field(
     invert_res = cluster_client.map(invert_block,
         blocks_coords,
     )
-    for f in as_completed(invert_res):
+    for f, r in as_completed(invert_res, with_results=True):
         if f.cancelled():
             exc = f.exception()
             logger.error(f'Invert block exception: {exc}')
             tb = f.traceback()
             traceback.print_tb(tb)
         else:
-            block_coords = f.result()
+            block_coords = r
             logger.info(f'Finished inverting block {block_coords}')
 
 

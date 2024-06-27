@@ -43,21 +43,22 @@ def _define_args():
     args_parser.add_argument('--processing-overlap-factor',
                              dest='processing_overlap_factor',
                              type=float,
+                             default=0.5,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
     args_parser.add_argument('--inv-iterations',
                              dest='inv_iterations',
-                             default=10,
                              type=int,
+                             default=10,
                              help="Number of iterations for getting the inverse transformation")
     args_parser.add_argument('--inv-order',
                              dest='inv_order',
-                             default=2,
                              type=int,
+                             default=2,
                              help="Order value for the inverse transformation")
     args_parser.add_argument('--inv-sqrt-iterations',
                              dest='inv_sqrt_iterations',
-                             default=10,
                              type=int,
+                             default=10,
                              help="Number of square root iterations for getting the inverse transformation")
 
     args_parser.add_argument('--dask-scheduler', dest='dask_scheduler',
@@ -115,22 +116,18 @@ def _run_compute_inverse(args):
 
     deform_blocksize = deform_field.get_attr('blockSize')
 
-    print('!!!!!! DEFORM ATTRS ', deform_field.attrs)
-    print('!!!!!! DEFORM BLOCKSIZE ', deform_blocksize)
-    print('!!!!!! DEFORM VOXEL SPACING ', deform_field.voxel_spacing)
-    print('!!!!!! DEFORM SHAPE ', deform_field.shape)
-
     inv_transform_blocksize=(args.inv_transform_blocksize[::-1]
                              if args.inv_transform_blocksize
                              else deform_blocksize[0:-1])
-    print('!!!!!! INV DEFORM BLOCK ', inv_transform_blocksize, len(inv_transform_blocksize))
+    transform_spacing = tuple(args.transform_spacing[::-1]
+                              if args.transform_spacing
+                              else deform_field.voxel_spacing[0:-1])
 
-    transform_downsampling = (list(deform_field.downsampling))[::-1]
-    print('!!!!!! transform downsampling ', transform_downsampling)
+    transform_downsampling = deform_field.downsampling[0:-1]
+    persisted_downsampling = list(deform_field.downsampling)[::-1]
 
-    transform_spacing = (list(deform_field.get_downsampled_voxel_resolution(False)))[::-1]
-    print('!!!!!! transform spacing ', transform_spacing)
-
+    pixel_resolution = np.array(transform_spacing) / transform_downsampling
+    persisted_pixel_resolution = [1] + list(pixel_resolution[::-1])
 
     inv_deform_field = io_utility.create_dataset(
         inv_transform_path,
@@ -140,8 +137,8 @@ def _run_compute_inverse(args):
         np.float32,
         overwrite=True,
         compressor=args.compression,
-        pixelResolution=transform_spacing,
-        downsamplingFactors=transform_downsampling,            
+        pixelResolution=persisted_pixel_resolution,
+        downsamplingFactors=persisted_downsampling,
     )
 
     # open a dask client
@@ -159,19 +156,20 @@ def _run_compute_inverse(args):
         logger.info('Calculate inverse transformation' +
                     f'{inv_transform_path}:{inv_transform_subpath}' +
                     f'from {transform_path}:{args.transform_subpath}')
-
-        # distributed_invert_displacement_vector_field(
-        #     deform_field,
-        #     fix_image.voxel_spacing,
-        #     inv_transform_blocksize, # use blocksize for partitioning the work
-        #     inv_deform_field,
-        #     cluster_client,
-        #     overlap_factor=args.processing_overlap_factor,
-        #     iterations=args.inv_iterations,
-        #     sqrt_order=args.inv_order,
-        #     sqrt_iterations=args.inv_sqrt_iterations,
-        #     max_tasks=args.cluster_max_tasks,
-        # )
+        # read the image because distributed_invert method expects a zarr array
+        deform_field.read_image()
+        distributed_invert_displacement_vector_field(
+            deform_field.image_array,
+            np.array(transform_spacing),
+            inv_transform_blocksize, # use blocksize for partitioning the work
+            inv_deform_field,
+            cluster_client,
+            overlap_factor=args.processing_overlap_factor,
+            iterations=args.inv_iterations,
+            sqrt_order=args.inv_order,
+            sqrt_iterations=args.inv_sqrt_iterations,
+            max_tasks=args.cluster_max_tasks,
+        )
     finally:
         cluster_client.close()
 

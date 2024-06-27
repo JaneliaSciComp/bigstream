@@ -538,6 +538,7 @@ def distributed_invert_displacement_vector_field(
     invert_block_method = functools.partial(
         _invert_block,
         full_vectorfield=vectorfield_array,
+        inv_vectorfield_result=inv_vectorfield_array,
         spacing=spacing,
         blocksize=blocksize_array,
         blockoverlaps=overlap,
@@ -560,12 +561,13 @@ def distributed_invert_displacement_vector_field(
             tb = f.traceback()
             traceback.print_tb(tb)
         else:
-            block_coords = _write_block(f, output=inv_vectorfield_array)
-            logger.info(f'Finished inverting and writing block {block_coords}')
+            block_coords = f.result()
+            logger.info(f'Finished inverting block {block_coords}')
 
 
 def _invert_block(block_coords,
                   full_vectorfield=None,
+                  inv_vectorfield_result=None,
                   spacing=None,
                   blocksize=None,
                   blockoverlaps=None,
@@ -590,9 +592,9 @@ def _invert_block(block_coords,
         sqrt_iterations=sqrt_iterations,
     )
 
-    logger.info('Computed inverse field for block' +
-                f'{block_coords}, {block_vectorfield.shape} ->' +
-                f'{inverse_block.shape}')
+    logger.debug('Computed inverse field for block' +
+                 f'{block_coords}, {block_vectorfield.shape} ->' +
+                 f'{inverse_block.shape}')
     # crop out overlap
     inverse_block_coords_list = []
     for axis in range(inverse_block.ndim - 1):
@@ -618,15 +620,12 @@ def _invert_block(block_coords,
     logger.info('Completed inverse vector field for block' +
                 f'{block_coords}, {block_vectorfield.shape} -> ' +
                 f'{inverse_block_coords}, {inverse_block.shape}')
-    # return result
-    return inverse_block_coords, inverse_block
+    return _write_block(inverse_block_coords, inverse_block, output=inv_vectorfield_result)
 
 
-def _write_block(future, output=None):
-    block_coords, block_data = future.result()
-
+def _write_block(block_coords, block_data, output=None):
     if output is not None:
-        logger.info(f'Write {block_data.shape} block at {block_coords}')
+        logger.debug(f'Write {block_data.shape} block at {block_coords}')
         output[block_coords] = block_data
 
     return block_coords

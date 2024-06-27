@@ -160,7 +160,7 @@ def _run_apply_transform(args):
         return None
 
 
-if __name__ == '__main__':
+def main():
     args_parser = _define_args()
     args = args_parser.parse_args()
     # prepare logging
@@ -170,3 +170,7 @@ if __name__ == '__main__':
     logger.info('Invoked transformation:', args, flush=True)
 
     _run_apply_transform(args)
+
+
+if __name__ == '__main__':
+    main()

@@ -16,6 +16,7 @@ from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
 from bigstream.image_data import ImageData
 from bigstream.workers_config import (ConfigureWorkerLoggingPlugin,
+                                      SetWorkerEnvPlugin,
                                       load_dask_config)
 
 
@@ -68,6 +69,9 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--dask-config', dest='dask_config',
                              type=str, default=None,
                              help='YAML file containing dask configuration')
+    args_parser.add_argument('--worker-cpus', dest='worker_cpus',
+                             type=int, default=0,
+                             help='Number of cpus allocated to a dask worker')
     args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
                              type=int, default=0,
                              help='Maximum number of parallel cluster tasks if >= 0')
@@ -89,7 +93,8 @@ def _define_args(local_descriptor):
     return args_parser
 
 
-def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
+def _run_local_alignment(reg_args: RegistrationInputs,
+                         align_config, global_affine,
                          processing_size=None,
                          processing_overlap=None,
                          default_blocksize=128,
@@ -99,6 +104,7 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
                          inv_order=2,
                          dask_scheduler_address=None,
                          dask_config_file=None,
+                         worker_cpus=0,
                          max_tasks=0,
                          logging_config=None,
                          compressor=None,
@@ -106,14 +112,14 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
                                                        'local_align',
-                                                       args.registration_steps)
+                                                       reg_args.registration_steps)
     if len(local_steps) == 0:
         logger.info('Skip local alignment because no local steps were specified.')
         return None
 
-    logger.info(f'Run local registration with: {args}, {local_steps}')
+    logger.info(f'Run local registration with: {reg_args}, {local_steps}')
 
-    (fix_image, fix_mask, mov_image, mov_mask) = get_input_images(args)
+    (fix_image, fix_mask, mov_image, mov_mask) = get_input_images(reg_args)
     if mov_image.ndim != fix_image.ndim:
         # only check for ndim and not shape because as it happens 
         # the test data has different shape for fix.highres and mov.highres
@@ -139,35 +145,35 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
                         f'{local_processing_overlap_factor}',
                         'must be greater than 0 and less than 1')
 
-    if args.transform_subpath:
-        transform_subpath = args.transform_subpath
+    if reg_args.transform_subpath:
+        transform_subpath = reg_args.transform_subpath
     else:
-        transform_subpath = args.mov_subpath
+        transform_subpath = reg_args.mov_subpath
 
-    if args.transform_blocksize:
+    if reg_args.transform_blocksize:
         # block chunks are define as x,y,z so I am reversing it to z,y,x
-        transform_blocksize = args.transform_blocksize[::-1]
+        transform_blocksize = reg_args.transform_blocksize[::-1]
     else:
         # default to processing
         transform_blocksize = local_processing_size
 
-    if args.inv_transform_subpath:
-        inv_transform_subpath = args.inv_transform_subpath
+    if reg_args.inv_transform_subpath:
+        inv_transform_subpath = reg_args.inv_transform_subpath
     else:
         inv_transform_subpath = transform_subpath
 
-    if args.inv_transform_blocksize:
+    if reg_args.inv_transform_blocksize:
         # block chunks are define as x,y,z so I am reversing it to z,y,x
-        inv_transform_blocksize = args.inv_transform_blocksize[::-1]
+        inv_transform_blocksize = reg_args.inv_transform_blocksize[::-1]
     else:
         # default to output_chunk_size
         inv_transform_blocksize = transform_blocksize
 
-    align_subpath = args.align_dataset()
+    align_subpath = reg_args.align_dataset()
 
-    if args.align_blocksize:
+    if reg_args.align_blocksize:
         # block chunks are define as x,y,z so I am reversing it to z,y,x
-        align_blocksize = args.align_blocksize[::-1]
+        align_blocksize = reg_args.align_blocksize[::-1]
     else:
         # default to output_chunk_size
         align_blocksize = transform_blocksize
@@ -182,6 +188,7 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
 
     cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(logging_config,
                                                                 verbose))
+    cluster_client.register_plugin(SetWorkerEnvPlugin(worker_cpus))
     try:
         _align_local_data(
             fix_image,
@@ -192,13 +199,13 @@ def _run_local_alignment(args: RegistrationInputs, align_config, global_affine,
             local_processing_size,
             local_processing_overlap_factor,
             [global_affine] if global_affine is not None else [],
-            args.transform_path(),
+            reg_args.transform_path(),
             transform_subpath,
             transform_blocksize,
-            args.inv_transform_path(),
+            reg_args.inv_transform_path(),
             inv_transform_subpath,
             inv_transform_blocksize,
-            args.align_path(),
+            reg_args.align_path(),
             align_subpath,
             align_blocksize,
             inv_iterations,
@@ -380,6 +387,7 @@ def main():
         inv_order=args.inv_order,
         dask_scheduler_address=args.dask_scheduler,
         dask_config_file=args.dask_config,
+        worker_cpus=args.worker_cpus,
         max_tasks=args.cluster_max_tasks,
         logging_config=args.logging_config,
         compressor=args.compression,

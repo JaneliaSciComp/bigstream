@@ -16,7 +16,7 @@ from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
 from bigstream.image_data import ImageData
 from bigstream.workers_config import (ConfigureWorkerLoggingPlugin,
-                                      SetWorkerEnvPlugin,
+                                      SetWorkerEnvironmentPlugin,
                                       load_dask_config)
 
 
@@ -189,7 +189,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(
         logging_config,
         verbose))
-    cluster_client.register_plugin(SetWorkerEnvPlugin(worker_cpus))
+    cluster_client.register_worker_plugin(SetWorkerEnvironmentPlugin(worker_cpus))
     try:
         _align_local_data(
             fix_image,

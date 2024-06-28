@@ -30,7 +30,7 @@ class ConfigureWorkerLoggingPlugin(WorkerPlugin):
         pass
 
 
-class SetWorkerEnvPlugin(WorkerPlugin):
+class SetWorkerEnvironmentPlugin(WorkerPlugin):
 
     def __init__(self, worker_cpus):
         self.worker_cpus = worker_cpus

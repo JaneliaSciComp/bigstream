@@ -176,7 +176,7 @@ def _run_apply_transform(args):
             applied_transforms = applied_affines
 
         logger.info(f'Apply {applied_transforms} to ' +
-                    f'{mov_data} -> {args.output}:{output_subpath}' +
+                    f'{mov_data} -> {args.output}:{output_subpath} ' +
                     f'transform spacing: {transform_spacing}')
 
         # open a dask client

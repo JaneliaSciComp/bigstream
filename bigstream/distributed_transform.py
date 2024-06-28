@@ -105,7 +105,7 @@ def distributed_apply_transform(
         transform_spacing_list = transform_spacing
 
     # prepare block coordinates
-    logger.info(f'Apply distributed transform to {fix_image.shape}' +
+    logger.info(f'Apply distributed transform to {fix_image.shape} ' +
           f'partitioned in {nblocks} blocks using {blocksize_array}')
     blocks_coords = []
     for (i, j, k) in np.ndindex(*nblocks):

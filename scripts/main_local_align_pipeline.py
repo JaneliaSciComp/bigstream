@@ -186,8 +186,9 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     else:
         cluster_client = Client(LocalCluster())
 
-    cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(logging_config,
-                                                                verbose))
+    cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(
+        logging_config,
+        verbose))
     cluster_client.register_plugin(SetWorkerEnvPlugin(worker_cpus))
     try:
         _align_local_data(

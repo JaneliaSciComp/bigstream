@@ -1,3 +1,4 @@
+import logging
 import os
 import yaml
 
@@ -5,6 +6,9 @@ from bigstream.configure_logging import configure_logging
 from dask.distributed import (Worker)
 from distributed.diagnostics.plugin import WorkerPlugin
 from flatten_json import flatten
+
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigureWorkerLoggingPlugin(WorkerPlugin):
@@ -33,6 +37,7 @@ class SetWorkerEnvPlugin(WorkerPlugin):
 
     def setup(self, worker: Worker):
         if self.worker_cpus > 0:
+            logger.info(f'Set worker {worker.name} cpus: {self.worker_cpus}')
             os.environ['ITK_THREADS'] = f'{self.worker_cpus}'
             os.environ['MKL_NUM_THREADS'] = f'{self.worker_cpus}'
             os.environ['NUM_MKL_THREADS'] = f'{self.worker_cpus}'

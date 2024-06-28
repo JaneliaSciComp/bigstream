@@ -7,7 +7,7 @@ from bigstream.cli import (inttuple, floattuple, stringlist)
 from bigstream.configure_logging import (configure_logging)
 from bigstream.distributed_transform import distributed_apply_transform
 from bigstream.image_data import ImageData
-from bigstream.workers_config import (ConfigureWorkerLoggingPlugin,
+from bigstream.workers_config import (ConfigureWorkerPlugin,
                                       load_dask_config)
 
 
@@ -79,6 +79,9 @@ def _define_args():
                              type=str, default=None,
                              help='YAML file containing dask configuration')
 
+    args_parser.add_argument('--worker-cpus', dest='worker_cpus',
+                             type=int, default=0,
+                             help='Number of cpus allocated to a dask worker')
     args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
                              type=int, default=0,
                              help='Maximum number of parallel cluster tasks if >= 0')
@@ -178,14 +181,14 @@ def _run_apply_transform(args):
 
         # open a dask client
         load_dask_config(args.dask_config)
-
+        worker_config = ConfigureWorkerPlugin(args.logging_config,
+                                              args.verbose,
+                                              worker_cpus=args.worker_cpus)
         if args.dask_scheduler:
             cluster_client = Client(address=args.dask_scheduler)
         else:
             cluster_client = Client(LocalCluster())
-
-        cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(args.logging_config,
-                                                                    args.verbose))
+        cluster_client.register_plugin(worker_config, name='WorkerConfig')
         try:
             distributed_apply_transform(
                 fix_data, mov_data,

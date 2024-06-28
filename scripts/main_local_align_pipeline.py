@@ -15,7 +15,7 @@ from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
 from bigstream.image_data import ImageData
-from bigstream.workers_config import (ConfigureWorkerLoggingPlugin,
+from bigstream.workers_config import (ConfigureWorkerPlugin,
                                       load_dask_config)
 
 
@@ -180,20 +180,13 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     # start a dask client
     load_dask_config(dask_config_file)
 
-    # env_plugin = SetWorkerEnvironmentPlugin(worker_cpus)
-    logging_plugin = ConfigureWorkerLoggingPlugin(
-        logging_config,
-        verbose,
-        worker_cpus=worker_cpus)
-
+    worker_config = ConfigureWorkerPlugin(logging_config, verbose,
+                                          worker_cpus=worker_cpus)
     if dask_scheduler_address:
         cluster_client = Client(address=dask_scheduler_address)
     else:
         cluster_client = Client(LocalCluster())
-
-    cluster_client.register_plugin(logging_plugin, name='WorkerLoggingConfig')
-    # cluster_client.register_plugin(env_plugin, name='WorkerEnv')
-
+    cluster_client.register_plugin(worker_config, name='WorkerConfig')
     try:
         _align_local_data(
             fix_image,
@@ -271,8 +264,8 @@ def _align_local_data(fix_image: ImageData,
     else:
         transform = None
     logger.info(f'Calculate transformation {transform_path}' +
-                f'for local alignment of {mov_image}' +
-                f'to reference {fix_image}')
+                f'for the local alignment of {mov_image}' +
+                f'to {fix_image}')
     if fix_image.has_data() and mov_image.has_data():
         deform_ok = distributed_alignment_pipeline(
             fix_image, mov_image,
@@ -287,6 +280,9 @@ def _align_local_data(fix_image: ImageData,
             output_transform=transform,
             max_tasks=cluster_max_tasks,
         )
+        logger.info('Finished computing the deformation field ' +
+                    f'{transform_path} for the local alignment of ' +
+                    f'{mov_image} to {fix_image}')
     else:
         deform_ok = False
         logger.warn('Fix image or moving image has no data or ' +
@@ -321,6 +317,9 @@ def _align_local_data(fix_image: ImageData,
             sqrt_iterations=inv_sqrt_iterations,
             max_tasks=cluster_max_tasks,
         )
+    else:
+        if not inv_transform_path:
+            logger.info('Skip the inverse because it is not set')
 
     if (deform_ok or len(global_affine_transforms) > 0) and align_path:
         # Apply local transformation only if 
@@ -359,7 +358,7 @@ def _align_local_data(fix_image: ImageData,
     else:
         align = None
         if not align_path:
-            logger.info('Align arg is not set, so deformation is be applied')
+            logger.info('Align arg is not set, so no deformation is applied')
 
     return transform, align
 

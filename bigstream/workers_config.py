@@ -11,7 +11,7 @@ from flatten_json import flatten
 logger = logging.getLogger(__name__)
 
 
-class ConfigureWorkerLoggingPlugin(WorkerPlugin):
+class ConfigureWorkerPlugin(WorkerPlugin):
 
     def __init__(self, logging_config, verbose,
                  worker_cpus=0):
@@ -21,31 +21,6 @@ class ConfigureWorkerLoggingPlugin(WorkerPlugin):
 
     def setup(self, worker: Worker):
         self.logger = configure_logging(self.logging_config, self.verbose)
-        if self.worker_cpus:
-            logger.info(f'Set worker {worker.name} cpus: {self.worker_cpus}')
-            os.environ['ITK_THREADS'] = str(self.worker_cpus)
-            os.environ['MKL_NUM_THREADS'] = str(self.worker_cpus)
-            os.environ['NUM_MKL_THREADS'] = str(self.worker_cpus)
-            os.environ['OPENBLAS_NUM_THREADS'] = str(self.worker_cpus)
-            os.environ['OPENMP_NUM_THREADS'] = str(self.worker_cpus)
-            os.environ['OMP_NUM_THREADS'] = str(self.worker_cpus)
-
-    def teardown(self, worker: Worker):
-        pass
-
-    def transition(self, key: str, start: str, finish: str, **kwargs):
-        pass
-
-    def release_key(self, key: str, state: str, cause: str | None, reason: None, report: bool):
-        pass
-
-
-class SetWorkerEnvironmentPlugin(WorkerPlugin):
-
-    def __init__(self, worker_cpus):
-        self.worker_cpus = worker_cpus 
-
-    def setup(self, worker: Worker):
         if self.worker_cpus:
             logger.info(f'Set worker {worker.name} cpus: {self.worker_cpus}')
             os.environ['ITK_THREADS'] = str(self.worker_cpus)

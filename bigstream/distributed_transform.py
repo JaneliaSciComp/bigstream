@@ -139,6 +139,7 @@ def distributed_apply_transform(
             blockoverlaps=overlaps,
             transform_list=transform_list,
             transform_spacing_list=transform_spacing_list,
+            output=aligned_data,
             *kwargs,
         ),
         max_tasks
@@ -159,15 +160,9 @@ def distributed_apply_transform(
             traceback.print_tb(tb)
             res = False
 
-        (finished_block_coords, aligned_block) = r
+        finished_block_coords = r
 
         logger.info(f'Completed to transform block: {finished_block_coords}')
-
-        if aligned_data is not None:
-            logger.info(f'Update warped block: {finished_block_coords}' +
-                        f'shape: {aligned_block.shape}')
-            aligned_data[finished_block_coords] = aligned_block
-
     if res:
         logger.info('Distributed deform transform applied successfully')
     else:
@@ -184,6 +179,7 @@ def _transform_single_block(fix_block_read_method,
                             blockoverlaps=None,
                             transform_list=[],
                             transform_spacing_list=[],
+                            output=None,
                             **additional_transform_args):
     """
     Block transform function
@@ -289,8 +285,8 @@ def _transform_single_block(fix_block_read_method,
         final_block_coords = tuple(final_block_coords_list)
         logger.info(f'Finished deforming {block_coords}, {mov_slices}' +
                     f'-> {final_block_coords}')
-        # return result
-        return final_block_coords, aligned_block
+        return _write_block(final_block_coords, aligned_block,
+                            output=output)
     except Exception as e:
         logger.error(f'Error trying to transform block {block_coords}: {e}')
         traceback.print_tb(e)
@@ -620,7 +616,8 @@ def _invert_block(block_coords,
     logger.info('Completed inverse vector field for block' +
                 f'{block_coords}, {block_vectorfield.shape} -> ' +
                 f'{inverse_block_coords}, {inverse_block.shape}')
-    return _write_block(inverse_block_coords, inverse_block, output=inv_vectorfield_result)
+    return _write_block(inverse_block_coords, inverse_block,
+                        output=inv_vectorfield_result)
 
 
 def _write_block(block_coords, block_data, output=None):

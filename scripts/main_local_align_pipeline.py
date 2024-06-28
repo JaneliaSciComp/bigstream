@@ -186,7 +186,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     else:
         cluster_client = Client(LocalCluster())
 
-    cluster_client.register_plugin(ConfigureWorkerLoggingPlugin(
+    cluster_client.register_worker_plugin(ConfigureWorkerLoggingPlugin(
         logging_config,
         verbose))
     cluster_client.register_worker_plugin(SetWorkerEnvironmentPlugin(worker_cpus))

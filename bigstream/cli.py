@@ -2,7 +2,7 @@ import logging
 import pydantic.v1.utils as pu
 import yaml
 
-from .config import default_bigstream_config_str
+from .configure_bigstream import default_bigstream_config_str
 from .image_data import ImageData
 
 

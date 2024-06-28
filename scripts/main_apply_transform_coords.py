@@ -4,7 +4,7 @@ import bigstream.io_utility as io_utility
 
 from dask.distributed import (Client, LocalCluster)
 from bigstream.cli import (inttuple, floattuple, stringlist)
-from bigstream.configure_logging import (configure_logging)
+from bigstream.configure_bigstream import (configure_logging)
 from bigstream.distributed_transform import (
     distributed_apply_transform_to_coordinates)
 from bigstream.workers_config import (ConfigureWorkerPlugin,

@@ -10,7 +10,7 @@ from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            extract_align_pipeline,
                            extract_registration_input_args,
                            inttuple, get_input_images)
-from bigstream.configure_logging import (configure_logging)
+from bigstream.configure_bigstream import (configure_logging)
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)

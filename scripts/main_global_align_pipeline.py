@@ -9,10 +9,10 @@ from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            extract_align_pipeline,
                            extract_registration_input_args,
                            get_input_images)
-from bigstream.configure_logging import configure_logging
+from bigstream.configure_bigstream import (configure_logging,
+                                           set_cpu_resources)
 from bigstream.image_data import ImageData
 from bigstream.transform import apply_transform
-from bigstream.config import set_cpu_resources
 
 
 logger = None # initialized in main as a result of calling configure_logging

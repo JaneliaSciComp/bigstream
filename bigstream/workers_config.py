@@ -13,12 +13,22 @@ logger = logging.getLogger(__name__)
 
 class ConfigureWorkerLoggingPlugin(WorkerPlugin):
 
-    def __init__(self, logging_config, verbose):
+    def __init__(self, logging_config, verbose,
+                 worker_cpus=0):
         self.logging_config = logging_config
         self.verbose = verbose
+        self.worker_cpus = worker_cpus
 
     def setup(self, worker: Worker):
         self.logger = configure_logging(self.logging_config, self.verbose)
+        if self.worker_cpus:
+            logger.info(f'Set worker {worker.name} cpus: {self.worker_cpus}')
+            os.environ['ITK_THREADS'] = str(self.worker_cpus)
+            os.environ['MKL_NUM_THREADS'] = str(self.worker_cpus)
+            os.environ['NUM_MKL_THREADS'] = str(self.worker_cpus)
+            os.environ['OPENBLAS_NUM_THREADS'] = str(self.worker_cpus)
+            os.environ['OPENMP_NUM_THREADS'] = str(self.worker_cpus)
+            os.environ['OMP_NUM_THREADS'] = str(self.worker_cpus)
 
     def teardown(self, worker: Worker):
         pass
@@ -33,10 +43,10 @@ class ConfigureWorkerLoggingPlugin(WorkerPlugin):
 class SetWorkerEnvironmentPlugin(WorkerPlugin):
 
     def __init__(self, worker_cpus):
-        self.worker_cpus = worker_cpus
+        self.worker_cpus = worker_cpus 
 
     def setup(self, worker: Worker):
-        if self.worker_cpus > 0:
+        if self.worker_cpus:
             logger.info(f'Set worker {worker.name} cpus: {self.worker_cpus}')
             os.environ['ITK_THREADS'] = str(self.worker_cpus)
             os.environ['MKL_NUM_THREADS'] = str(self.worker_cpus)

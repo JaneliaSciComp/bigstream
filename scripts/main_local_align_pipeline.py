@@ -16,7 +16,6 @@ from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
 from bigstream.image_data import ImageData
 from bigstream.workers_config import (ConfigureWorkerLoggingPlugin,
-                                      SetWorkerEnvironmentPlugin,
                                       load_dask_config)
 
 
@@ -181,10 +180,11 @@ async def _run_local_alignment(reg_args: RegistrationInputs,
     # start a dask client
     load_dask_config(dask_config_file)
 
-    env_plugin = SetWorkerEnvironmentPlugin(worker_cpus)
+    # env_plugin = SetWorkerEnvironmentPlugin(worker_cpus)
     logging_plugin = ConfigureWorkerLoggingPlugin(
         logging_config,
-        verbose)
+        verbose,
+        worker_cpus=worker_cpus)
 
     if dask_scheduler_address:
         cluster_client = Client(address=dask_scheduler_address)
@@ -192,7 +192,7 @@ async def _run_local_alignment(reg_args: RegistrationInputs,
         cluster_client = Client(LocalCluster())
 
     cluster_client.register_plugin(logging_plugin, name='WorkerLoggingConfig')
-    cluster_client.register_plugin(env_plugin, name='WorkerEnv')
+    # cluster_client.register_plugin(env_plugin, name='WorkerEnv')
 
     try:
         _align_local_data(

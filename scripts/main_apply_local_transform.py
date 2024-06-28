@@ -128,7 +128,7 @@ def _run_apply_transform(args):
     # deform spacing axes are: v,x,y,z in reverse so z,y,x,v
 
     logger.info(f'Local transform spacing for {local_deform_data} -> ' +
-                f'{local_deform_data.voxel_spacing[:local_deform_data.ndim-1]}')
+                f'{local_deform_data.voxel_spacing}')
 
     transform_spacing = ()
     if (args.output_blocksize is not None and

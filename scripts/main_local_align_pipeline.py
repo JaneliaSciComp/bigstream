@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import numpy as np
 import bigstream.io_utility as io_utility
 import bigstream.utility as ut
@@ -93,23 +94,23 @@ def _define_args(local_descriptor):
     return args_parser
 
 
-def _run_local_alignment(reg_args: RegistrationInputs,
-                         align_config, global_affine,
-                         processing_size=None,
-                         processing_overlap=None,
-                         default_blocksize=128,
-                         default_overlap=0.5,
-                         inv_iterations=10,
-                         inv_sqrt_iterations=10,
-                         inv_order=2,
-                         dask_scheduler_address=None,
-                         dask_config_file=None,
-                         worker_cpus=0,
-                         max_tasks=0,
-                         logging_config=None,
-                         compressor=None,
-                         verbose=False,
-                         ):
+async def _run_local_alignment(reg_args: RegistrationInputs,
+                               align_config, global_affine,
+                               processing_size=None,
+                               processing_overlap=None,
+                               default_blocksize=128,
+                               default_overlap=0.5,
+                               inv_iterations=10,
+                               inv_sqrt_iterations=10,
+                               inv_order=2,
+                               dask_scheduler_address=None,
+                               dask_config_file=None,
+                               worker_cpus=0,
+                               max_tasks=0,
+                               logging_config=None,
+                               compressor=None,
+                               verbose=False,
+                               ):
     local_steps, local_config = extract_align_pipeline(align_config,
                                                        'local_align',
                                                        reg_args.registration_steps)
@@ -187,12 +188,14 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     env_plugin = SetWorkerEnvironmentPlugin(worker_cpus)
 
     if dask_scheduler_address:
-        cluster_client = Client(address=dask_scheduler_address)
+        cluster_client = await Client(address=dask_scheduler_address)
     else:
-        cluster_client = Client(LocalCluster())
+        cluster_client = await Client(LocalCluster())
 
-    cluster_client.register_plugin(logging_plugin)
-    cluster_client.register_plugin(env_plugin, idempotent=True)
+    cluster_client.register_plugin(logging_plugin, name='WorkerLoggingConfig',
+                                   idempotent=True)
+    cluster_client.register_plugin(env_plugin, name='WorkerEnv',
+                                   idempotent=True)
 
     try:
         _align_local_data(
@@ -364,7 +367,7 @@ def _align_local_data(fix_image: ImageData,
     return transform, align
 
 
-def main():
+async def main():
     local_descriptor = CliArgsHelper('local')
     args_parser = _define_args(local_descriptor)
     args = args_parser.parse_args()
@@ -381,7 +384,7 @@ def main():
 
     reg_inputs = extract_registration_input_args(args, local_descriptor)
 
-    _run_local_alignment(
+    await _run_local_alignment(
         reg_inputs,
         args.align_config,
         global_affine,
@@ -401,4 +404,5 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())

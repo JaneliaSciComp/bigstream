@@ -1,7 +1,7 @@
 import logging
-import os
 import yaml
 
+from bigstream.config import set_cpu_resources
 from bigstream.configure_logging import configure_logging
 from dask.distributed import (Worker)
 from distributed.diagnostics.plugin import WorkerPlugin
@@ -21,14 +21,9 @@ class ConfigureWorkerPlugin(WorkerPlugin):
 
     def setup(self, worker: Worker):
         self.logger = configure_logging(self.logging_config, self.verbose)
-        if self.worker_cpus:
-            logger.info(f'Set worker {worker.name} cpus: {self.worker_cpus}')
-            os.environ['ITK_THREADS'] = str(self.worker_cpus)
-            os.environ['MKL_NUM_THREADS'] = str(self.worker_cpus)
-            os.environ['NUM_MKL_THREADS'] = str(self.worker_cpus)
-            os.environ['OPENBLAS_NUM_THREADS'] = str(self.worker_cpus)
-            os.environ['OPENMP_NUM_THREADS'] = str(self.worker_cpus)
-            os.environ['OMP_NUM_THREADS'] = str(self.worker_cpus)
+        n = set_cpu_resources(self.worker_cpus)
+        if n:
+            logger.info(f'Set worker {worker.name} cpus to {n}')
 
     def teardown(self, worker: Worker):
         pass

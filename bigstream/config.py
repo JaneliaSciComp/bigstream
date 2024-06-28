@@ -60,3 +60,17 @@ local_align:
     safeguard_exceptions: false
 
 """
+
+
+def set_cpu_resources(cpus:int):
+    if cpus:
+        import os
+
+        os.environ['ITK_THREADS'] = str(cpus)
+        os.environ['MKL_NUM_THREADS'] = str(cpus)
+        os.environ['NUM_MKL_THREADS'] = str(cpus)
+        os.environ['OPENBLAS_NUM_THREADS'] = str(cpus)
+        os.environ['OPENMP_NUM_THREADS'] = str(cpus)
+        os.environ['OMP_NUM_THREADS'] = str(cpus)
+
+    return cpus

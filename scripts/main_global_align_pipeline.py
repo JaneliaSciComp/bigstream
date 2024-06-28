@@ -12,6 +12,7 @@ from bigstream.cli import (CliArgsHelper, RegistrationInputs,
 from bigstream.configure_logging import configure_logging
 from bigstream.image_data import ImageData
 from bigstream.transform import apply_transform
+from bigstream.config import set_cpu_resources
 
 
 logger = None # initialized in main as a result of calling configure_logging
@@ -39,6 +40,10 @@ def _define_args(args_descriptor):
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+
+    args_parser.add_argument('--cpus', dest='cpus',
+                             type=int, default=0,
+                             help='Number of cpus allocated')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -210,6 +215,8 @@ def main():
         if global_transform_file and exists(global_transform_file):
             logger.info(f'Read global transform from {global_transform_file}')
             global_transform = np.loadtxt(global_transform_file)
+
+    set_cpu_resources(args.cpus)
 
     if global_transform is None:
         # no global transform found -> calculate it and then apply it

@@ -38,12 +38,12 @@ class SetWorkerEnvironmentPlugin(WorkerPlugin):
     def setup(self, worker: Worker):
         if self.worker_cpus > 0:
             logger.info(f'Set worker {worker.name} cpus: {self.worker_cpus}')
-            os.environ['ITK_THREADS'] = f'{self.worker_cpus}'
-            os.environ['MKL_NUM_THREADS'] = f'{self.worker_cpus}'
-            os.environ['NUM_MKL_THREADS'] = f'{self.worker_cpus}'
-            os.environ['OPENBLAS_NUM_THREADS'] = f'{self.worker_cpus}'
-            os.environ['OPENMP_NUM_THREADS'] = f'{self.worker_cpus}'
-            os.environ['OMP_NUM_THREADS'] = f'{self.worker_cpus}'
+            os.environ['ITK_THREADS'] = str(self.worker_cpus)
+            os.environ['MKL_NUM_THREADS'] = str(self.worker_cpus)
+            os.environ['NUM_MKL_THREADS'] = str(self.worker_cpus)
+            os.environ['OPENBLAS_NUM_THREADS'] = str(self.worker_cpus)
+            os.environ['OPENMP_NUM_THREADS'] = str(self.worker_cpus)
+            os.environ['OMP_NUM_THREADS'] = str(self.worker_cpus)
 
     def teardown(self, worker: Worker):
         pass

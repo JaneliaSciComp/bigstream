@@ -181,15 +181,19 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     # start a dask client
     load_dask_config(dask_config_file)
 
+    logging_plugin = ConfigureWorkerLoggingPlugin(
+        logging_config,
+        verbose)
+    env_plugin = SetWorkerEnvironmentPlugin(worker_cpus)
+
     if dask_scheduler_address:
         cluster_client = Client(address=dask_scheduler_address)
     else:
         cluster_client = Client(LocalCluster())
 
-    cluster_client.register_worker_plugin(ConfigureWorkerLoggingPlugin(
-        logging_config,
-        verbose))
-    cluster_client.register_worker_plugin(SetWorkerEnvironmentPlugin(worker_cpus))
+    cluster_client.register_plugin(logging_plugin)
+    cluster_client.register_plugin(env_plugin, idempotent=True)
+
     try:
         _align_local_data(
             fix_image,

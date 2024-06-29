@@ -1,12 +1,9 @@
-import logging
 import yaml
+import bigstream.configure_bigstream as cbs
 
 from dask.distributed import (Worker)
 from distributed.diagnostics.plugin import WorkerPlugin
 from flatten_json import flatten
-
-
-logger = logging.getLogger(__name__)
 
 
 class ConfigureWorkerPlugin(WorkerPlugin):
@@ -18,13 +15,10 @@ class ConfigureWorkerPlugin(WorkerPlugin):
         self.worker_cpus = worker_cpus
 
     def setup(self, worker: Worker):
-        from bigstream.configure_bigstream import (configure_logging,
-                                                   set_cpu_resources)
-
-        self.logger = configure_logging(self.logging_config, self.verbose)
-        n = set_cpu_resources(self.worker_cpus)
+        self.logger = cbs.configure_logging(self.logging_config, self.verbose)
+        n = cbs.set_cpu_resources(self.worker_cpus)
         if n:
-            logger.info(f'Set worker {worker.name} cpus to {n}')
+            self.logger.info(f'Set worker {worker.name} cpus to {n}')
 
     def teardown(self, worker: Worker):
         pass

@@ -463,7 +463,7 @@ def distributed_alignment_pipeline(
     nblocks = np.ceil(np.array(fix_shape_arr) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
     logger.info(f'Partition {fix_shape_arr} into {nblocks} using' +
-                f'{block_partition_size} and {overlaps}')
+                f'{block_partition_size} blocksize and {overlaps} overlaps')
     fix_blocks_ids = []
     fix_blocks_coords = []
     fix_blocks_neighbors = []

@@ -5,18 +5,19 @@ import bigstream.utility as ut
 
 from dask.distributed import (Client, LocalCluster)
 from os.path import exists
+
 from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            define_registration_input_args,
                            extract_align_pipeline,
                            extract_registration_input_args,
                            inttuple, get_input_images)
 from bigstream.configure_bigstream import (configure_logging)
+from bigstream.configure_dask import (ConfigureWorkerPlugin,
+                                      load_dask_config)
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
 from bigstream.image_data import ImageData
-from bigstream.workers_config import (ConfigureWorkerPlugin,
-                                      load_dask_config)
 
 
 logger = None # initialized in main as a result of calling configure_logging

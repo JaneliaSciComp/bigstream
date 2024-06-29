@@ -7,7 +7,7 @@ from bigstream.cli import (inttuple, floattuple, stringlist)
 from bigstream.configure_bigstream import (configure_logging)
 from bigstream.distributed_transform import (
     distributed_apply_transform_to_coordinates)
-from bigstream.workers_config import (ConfigureWorkerPlugin,
+from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
 
 

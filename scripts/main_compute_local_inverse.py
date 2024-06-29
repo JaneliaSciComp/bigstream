@@ -113,7 +113,7 @@ def _run_compute_inverse(args):
     inv_transform_subpath = (args.inv_transform_subpath
                              if args.inv_transform_subpath
                              else args.transform_subpath)
-    
+
     if (inv_transform_path == transform_path and
         inv_transform_subpath == args.transform_subpath):
         raise ValueError(f'Inverse transform overrides the direct transform')

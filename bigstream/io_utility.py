@@ -1,36 +1,66 @@
-import os
+import logging
 import nrrd
+import numcodecs as codecs
 import numpy as np
+import os
 import zarr
 
 from tifffile import TiffFile
 
 
+logger = logging.getLogger(__name__)
+
+
 def create_dataset(container_path, container_subpath, shape, chunks, dtype,
-                   data=None,
+                   data=None, overwrite=False,
+                   compressor=None,
                    **kwargs):
     try:
         real_container_path = os.path.realpath(container_path)
-        n5_store = zarr.N5Store(real_container_path)
+        path_comps = os.path.splitext(container_path)
+
+        container_ext = path_comps[1]
+
+        if container_ext == '.zarr':
+            store = real_container_path
+        else:
+            store = zarr.N5Store(real_container_path)
         if container_subpath:
-            print('Create dataset', container_path, container_subpath)
-            container_root = zarr.open_group(store=n5_store, mode='a')
-            dataset = container_root.require_dataset(
-                container_subpath,
-                shape=shape,
-                chunks=chunks,
-                dtype=dtype,
-                data=data)
+            logger.info(f'Create dataset {container_path}:{container_subpath} ' +
+                        f'compressor={compressor}, {kwargs}')
+            container_root = zarr.open_group(store=store, mode='a')
+            codec = (None if compressor is None 
+                     else codecs.get_codec(dict(id=compressor)))
+            if data is None and overwrite:
+                dataset = container_root.create_dataset(
+                    container_subpath,
+                    shape=shape,
+                    chunks=chunks,
+                    dtype=dtype,
+                    overwrite=overwrite,
+                    compressor=codec,
+                    data=data)
+            else:
+                dataset = container_root.require_dataset(
+                    container_subpath,
+                    shape=shape,
+                    chunks=chunks,
+                    dtype=dtype,
+                    overwrite=overwrite,
+                    compressor=codec,
+                    data=data)
             # set additional attributes
-            dataset.attrs.update(**kwargs)
+            dataset.attrs.update((k, v) for k,v in kwargs.items() if v)
             return dataset
         else:
-            print('Create root array', container_path)
-            return zarr.open(store=n5_store, mode='a',
-                             shape=shape, chunks=chunks)
+            logger.info(f'Create root array {container_path} {kwargs}')
+            zarr_data = zarr.open(store=store, mode='a',
+                                  shape=shape, chunks=chunks)
+            # set additional attributes
+            zarr_data.attrs.update((k, v) for k,v in kwargs.items() if v)
+            return zarr_data
     except Exception as e:
-        print('Error creating a dataset at', container_path, container_subpath,
-              e)
+        logger.error(f'Error creating a dataset at {container_path}:{container_subpath}: {e}')
         raise e
 
 
@@ -41,57 +71,49 @@ def open(container_path, subpath, block_coords=None):
     container_ext = path_comps[1]
 
     if container_ext == '.nrrd':
-        print(f'Open nrrd {container_path} ({real_container_path})',
-              flush=True)
+        logger.info(f'Open nrrd {container_path} ({real_container_path})')
         return _read_nrrd(real_container_path, block_coords=block_coords)
     elif container_ext == '.tif' or container_ext == '.tiff':
-        print(f'Open tiff {container_path} ({real_container_path})',
-              flush=True)
-        im = _read_tiff(real_container_path, block_coords=block_coords)
-        return im, {}
+        logger.info(f'Open tiff {container_path} ({real_container_path})')
+        return _read_tiff(real_container_path, block_coords=block_coords)
     elif container_ext == '.npy':
         im = np.load(real_container_path)
         bim = im[block_coords] if block_coords is not None else im
         return bim, {}
     elif (container_ext == '.n5'
           or os.path.exists(f'{real_container_path}/attributes.json')):
-        print(f'Open N5 {container_path} ({real_container_path})',
-              flush=True)
+        logger.info(f'Open N5 {container_path} ({real_container_path})')
         return _open_zarr(real_container_path, subpath, data_store_name='n5',
                           block_coords=block_coords)
     elif container_ext == '.zarr':
-        print(f'Open Zarr {container_path} ({real_container_path})',
-              flush=True)
+        logger.info(f'Open Zarr {container_path} ({real_container_path})')
         return _open_zarr(real_container_path, subpath, data_store_name='zarr',
                           block_coords=block_coords)
     else:
-        print('Cannot handle', f'{container_path} ({real_container_path})',
-              subpath)
+        logger.error(f'Cannot handle {container_path} ' +
+                     f'({real_container_path}) {subpath}')
         return None, {}
 
 
 def get_voxel_spacing(attrs):
-    if (attrs.get('downsamplingFactors')):
-        voxel_spacing = (np.array(attrs['pixelResolution']) * 
-                         np.array(attrs['downsamplingFactors']))
+    pr = None
+    if attrs.get('pixelResolution'):
+        pr_attr = attrs.get('pixelResolution')
+        if type(pr_attr) == list:
+            pr = np.array(pr_attr)
+        elif type(pr_attr) == dict:
+            if pr_attr.get('dimensions'):
+                pr = np.array(pr_attr['dimensions'])
+
+    if pr is not None:
+        if attrs.get('downsamplingFactors'):
+            ds = np.array(attrs['downsamplingFactors'])
+        else:
+            ds = 1
+
+        return pr * ds
     else:
-        voxel_spacing = np.array(attrs['pixelResolution']['dimensions'])
-    return voxel_spacing[::-1] # put in zyx order
-
-
-def get_dimensions(attrs):
-    if (attrs.get('dimensions')):
-        shape = tuple(attrs['dimensions']) 
-        return shape, len(shape)
-    else:
-        raise Exception(f'Do not know how to read shape from {attrs}')
-
-
-def get_dtype(attrs):
-    if (attrs.get('dataType')):
-        return attrs['dataType']
-    else:
-        raise Exception(f'Do not know how to read data type from {attrs}')
+        return None
 
 
 def read_attributes(container_path, subpath):
@@ -101,16 +123,19 @@ def read_attributes(container_path, subpath):
     container_ext = path_comps[1]
 
     if container_ext == '.nrrd':
-        print(f'Read nrrd attrs {container_path} ({real_container_path})', flush=True)
+        logger.info(f'Read nrrd attrs {container_path} ({real_container_path})')
         return _read_nrrd_attrs(container_path)
     elif container_ext == '.n5' or os.path.exists(f'{container_path}/attributes.json'):
-        print(f'Read N5 attrs {container_path} ({real_container_path})', flush=True)
+        logger.info(f'Read N5 attrs {container_path} ({real_container_path})')
         return _open_zarr_attrs(real_container_path, subpath, data_store_name='n5')
     elif container_ext == '.zarr':
-        print(f'Read Zarr attrs {container_path} ({real_container_path})', flush=True)
+        logger.info(f'Read Zarr attrs {container_path} ({real_container_path})')
         return _open_zarr_attrs(real_container_path, subpath, data_store_name='zarr')
+    elif container_ext == '.tif' or container_ext == '.tiff':
+        logger.info(f'Read TIFF attrs {container_path} ({real_container_path})')
+        return _read_tiff_attrs(container_path)
     else:
-        print('Cannot read attributes for', container_path, subpath)
+        logger.error(f'Cannot read attributes for {container_path}:{subpath}')
         return {}
 
 
@@ -139,7 +164,7 @@ def _open_zarr(data_path, data_subpath, data_store_name=None, block_coords=None)
         ba = a[block_coords] if block_coords is not None else a
         return ba, a.attrs.asdict()
     except Exception as e:
-        print(f'Error opening {data_path} : {data_subpath}', e, flush=True)
+        logger.error(f'Error opening {data_path} : {data_subpath}: {e}')
         raise e
 
 
@@ -150,10 +175,13 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
                                    mode='r')
         a = data_container[data_subpath] if data_subpath else data_container
         dict = a.attrs.asdict()
-        dict.update({'dataType': a.dtype, 'dimensions': a.shape})
+        dict.update({'dataType': a.dtype,
+                     'dimensions': a.shape,
+                     'blockSize': a.chunks})
+        logger.info(f'{data_path}:{data_subpath} attrs: {dict}')
         return dict
     except Exception as e:
-        print(f'Error opening {data_path} : {data_subpath}', e, flush=True)
+        logger.error(f'Error opening {data_path} : {data_subpath}, {e}')
         raise e
 
 
@@ -164,7 +192,6 @@ def _get_data_store(data_path, data_store_name):
         return data_path
 
 
-
 def _read_tiff(input_path, block_coords=None):
     with TiffFile(input_path) as tif:
         tif_store = tif.aszarr()
@@ -173,8 +200,22 @@ def _read_tiff(input_path, block_coords=None):
             img = tif_array
         else:
             img = tif_array[block_coords]
-        return img
+        return img, _get_tiff_attrs(tif_array)
 
+
+def _read_tiff_attrs(input_path):
+    with TiffFile(input_path) as tif:
+        tif_store = tif.aszarr()
+        tif_array = zarr.open(tif_store)
+        return _get_tiff_attrs(tif_array)
+
+def _get_tiff_attrs(tif_array):
+    dict = tif_array.attrs.asdict()
+    dict.update({
+        'dataType': tif_array.dtype,
+        'dimensions': tif_array.shape,
+    })
+    return dict
 
 def _read_nrrd(input_path, block_coords=None):
     im, dict = nrrd.read(input_path)

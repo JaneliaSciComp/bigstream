@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 from itertools import product
 import bigstream.utility as ut
@@ -7,6 +8,9 @@ import dask.array as da
 import zarr
 import bigstream.transform as bs_transform
 from dask.distributed import as_completed
+
+
+logger = logging.getLogger(__name__)
 
 
 @cluster
@@ -144,7 +148,8 @@ def distributed_apply_transform(
                 start = np.floor(fix_origin / kwargs['transform_spacing'][iii]).astype(int)
                 stop = [s.stop for s in fix_slices] * fix_spacing / kwargs['transform_spacing'][iii]
                 stop = np.ceil(stop).astype(int)
-                transform = transform[tuple(slice(a, b) for a, b in zip(start, stop))]
+                transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
+                transform = transform[transform_slice]
                 transform_origin[iii] = start * kwargs['transform_spacing'][iii]
             new_list.append(transform)
         transform_list = new_list
@@ -169,6 +174,8 @@ def distributed_apply_transform(
         mov_origin = mov_spacing * [s.start for s in mov_slices]
 
         # resample
+        logger.info(f'Apply {len(transform_list)} transforms to {fix_slices}' +
+                    f'fix origin: {fix_origin}, mov origin: {mov_origin}')
         aligned = bs_transform.apply_transform(
             fix, mov, fix_spacing, mov_spacing,
             transform_list=transform_list,

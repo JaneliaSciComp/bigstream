@@ -1,5 +1,5 @@
 # Create final image
-FROM ghcr.io/janeliascicomp/dask:2023.10.1-py11-ol9
+FROM ghcr.io/janeliascicomp/dask:2024.4.1-py11-ol9
 ARG TARGETPLATFORM
 
 RUN dnf install -y \
@@ -8,14 +8,24 @@ RUN dnf install -y \
 
 WORKDIR /app/bigstream
 
-# install bigstream
+ENV ITK_THREADS=
+ENV MKL_NUM_THREADS=
+ENV NUM_MKL_THREADS=
+ENV OPENBLAS_NUM_THREADS=
+ENV OPENMP_NUM_THREADS=
+ENV OMP_NUM_THREADS=
+
+ENV PYTHONPATH=/app/bigstream
+
+# Use the base environment from the baseImage and the conda-env
+# from current dir
 COPY conda-env.yaml .
+RUN mamba env update -n base -f conda-env.yaml
+
+# install bigstream
 COPY scripts scripts
 COPY bigstream bigstream
 COPY *.py .
 COPY *.md .
-
-# Use the base environment from the baseImage
-RUN mamba env update -n base -f conda-env.yaml
 
 RUN pip install .

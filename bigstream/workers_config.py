@@ -1,11 +1,12 @@
 import logging
 import yaml
 
-from bigstream.configure_bigstream import (configure_logging,
-                                           set_cpu_resources)
 from dask.distributed import (Worker)
 from distributed.diagnostics.plugin import WorkerPlugin
 from flatten_json import flatten
+
+from bigstream.configure_bigstream import (configure_logging,
+                                           set_cpu_resources)
 
 
 logger = logging.getLogger(__name__)

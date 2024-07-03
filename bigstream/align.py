@@ -266,6 +266,7 @@ def feature_point_ransac_affine_align(
     mov_origin=None,
     static_transform_list=[],
     default=None,
+    context='',
     **kwargs,
 ):
     """
@@ -434,6 +435,10 @@ def feature_point_ransac_affine_align(
     default : 2d array 4x4 (default: identity)
         A default transform to return if the method fails to find a valid one
 
+    context : string
+        Additional context information for logging purposes only
+        - for local alignment it contains the block index that is being processed
+
     **kwargs : any additional keyword arguments
         Passed to cv2.estimateAffine3D
 
@@ -488,65 +493,65 @@ def feature_point_ransac_affine_align(
     num_sigma = int(min(blob_sizes[1] - blob_sizes[0], num_sigma_max))
     assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
 
-    logger.info('computing fixed spots')
+    logger.info(f'{context} computing fixed spots')
     if fix_spots is None:
         fix_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
         }
         fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
-        logger.debug(f'fixed spots detection using {fix_kwargs}')
+        logger.debug(f'{context} fixed spots detection using {fix_kwargs}')
         fix_spots = features.blob_detection(
             fix, blob_sizes[0], blob_sizes[1],
             mask=fix_mask,
             **fix_kwargs,
         )
-    logger.info(f'found {len(fix_spots)} fixed spots')
+    logger.info(f'{context} found {len(fix_spots)} fixed spots')
     if len(fix_spots) < fix_spots_count_threshold:
-        logger.info('insufficient fixed spots found')
+        logger.info(f'{context} insufficient fixed spots found')
         if safeguard_exceptions:
             raise ValueError('fix spot detection safeguard failed')
         else:
-            logger.info('returning default')
+            logger.info(f'{context} returning default')
             return default
 
     # get mov spots
-    logger.info('computing moving spots')
+    logger.info(f'{context} computing moving spots')
     if mov_spots is None:
         mov_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
         }
         mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
-        logger.debug(f'moving spots detection using {mov_kwargs}')
+        logger.debug(f'{context} moving spots detection using {mov_kwargs}')
         mov_spots = features.blob_detection(
             mov, blob_sizes[0], blob_sizes[1],
             mask=mov_mask,
             **mov_kwargs,
         )
-    logger.info(f'found {len(mov_spots)} moving spots')
+    logger.info(f'{context} found {len(mov_spots)} moving spots')
     if len(mov_spots) < mov_spots_count_threshold:
         logger.info('insufficient moving spots found')
         if safeguard_exceptions:
             raise ValueError('mov spot detection safeguard failed')
         else:
-            logger.info('returning default')
+            logger.info(f'{context} returning default')
             return default
 
     # sort
-    logger.info(f'sorting spots')
+    logger.info(f'{context} sorting spots')
     sort_idx = np.argsort(fix_spots[:, 3])[::-1]
     fix_spots = fix_spots[sort_idx, :3][:nspots]
     sort_idx = np.argsort(mov_spots[:, 3])[::-1]
     mov_spots = mov_spots[sort_idx, :3][:nspots]
 
     # get contexts
-    logger.info('extracting contexts')
+    logger.info(f'{context} extracting contexts')
     fix_spot_contexts = features.get_contexts(fix, fix_spots, cc_radius)
     mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
 
     # get pairwise correlations
-    logger.info('computing pairwise correlations')
+    logger.info(f'{context} computing pairwise correlations')
     correlations = features.pairwise_correlation(
         fix_spot_contexts, mov_spot_contexts,
     )
@@ -571,9 +576,9 @@ def feature_point_ransac_affine_align(
             return default
 
     # align
-    logger.debug('Found enough spots to estimate the affine',
-                 'fix:', len(fix_spots), ',',
-                 'moving:', len(mov_spots))
+    logger.debug(f'{context} Found enough spots to estimate the affine ' +
+                 f'fix: {len(fix_spots)}' +
+                 f'moving: {len(mov_spots)}')
     _, Aff, _ = cv2.estimateAffine3D(
         fix_spots, mov_spots,
         ransacThreshold=align_threshold,
@@ -583,11 +588,11 @@ def feature_point_ransac_affine_align(
 
     # ensure affine is sensible
     if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
-        logger.info('Degenerate affine produced')
+        logger.info(f'{context} Degenerate affine produced')
         if safeguard_exceptions:
             raise ValueError('diagonal_constraint safeguard failed')
         else:
-            logger.info('returning default')
+            logger.info(f'{context} returning default')
             return default
 
     # augment matrix and return

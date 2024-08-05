@@ -170,7 +170,7 @@ def main():
     global logger
     logger = configure_logging(args.logging_config, args.verbose)
 
-    logger.info('Invoked transformation:', args, flush=True)
+    logger.info(f'Invoked transformation: {args}')
 
     _run_apply_transform(args)
 

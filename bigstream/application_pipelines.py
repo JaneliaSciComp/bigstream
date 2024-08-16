@@ -1,10 +1,13 @@
+import os
 import numpy as np
 from ClusterWrap import cluster as cluster_constructor
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform
 from bigstream.piecewise_align import distributed_piecewise_alignment_pipeline
 from bigstream.piecewise_transform import distributed_apply_transform
-
+from tifffile import imwrite as tif_imwrite
+from tifffile import imread as tif_imread
+from pathlib import Path
 
 def easifish_registration_pipeline(
     fix_lowres,
@@ -23,6 +26,11 @@ def easifish_registration_pipeline(
     local_deform_kwargs={},
     cluster_kwargs={},
     cluster=None,
+    only_lowres=False,
+    fname='',
+    no_deform=False,
+    overwrite_lowres=False,
+    c = {'n_workers': 10, 'threads_per_worker':2},
 ):
     """
     The easifish registration pipeline.
@@ -168,26 +176,51 @@ def easifish_registration_pipeline(
              'numberOfIterations':400,
          },
     }
+
     steps = [
         ('ransac', {**a, **global_ransac_kwargs}),
         ('affine', {**b, **global_affine_kwargs}),
     ]
 
-    # run global affine alignment at lowres
-    affine = alignment_pipeline(
-        fix_lowres, mov_lowres,
-        fix_lowres_spacing, mov_lowres_spacing,
-        steps=steps,
-    )
+    if overwrite_lowres or (not os.path.exists(f'{write_directory}/{fname}_affine.mat') and
+                            not os.path.exists(f'{write_directory}/{fname}_affine.npy')):
+    
+        # run global affine alignment at lowres
+        affine = alignment_pipeline(
+            fix_lowres, mov_lowres,
+            fix_lowres_spacing, mov_lowres_spacing,
+            steps=steps,
+        )
+        
+        # apply global affine and save result
+        aligned = apply_transform(
+            fix_lowres, mov_lowres,
+            fix_lowres_spacing, mov_lowres_spacing,
+            transform_list=[affine,],
+        )
 
-    # apply global affine and save result
-    aligned = apply_transform(
-        fix_lowres, mov_lowres,
-        fix_lowres_spacing, mov_lowres_spacing,
-        transform_list=[affine,],
-    )
-    np.savetxt(f'{write_directory}/affine.mat', affine)
-    np.save(f'{write_directory}/affine.npy', aligned)
+        
+        np.savetxt(f'{write_directory}/{fname}_affine.mat', affine)
+        np.save(f'{write_directory}/{fname}_affine.npy', aligned)
+
+        tif_imwrite(f'{write_directory}/{fname}_mov_lowres.tiff', mov_lowres.transpose(2,1,0))
+        tif_imwrite(f'{write_directory}/{fname}_fix_lowres.tiff', fix_lowres.transpose(2,1,0))
+        tif_imwrite(f'{write_directory}/{fname}_both.tiff', np.swapaxes(np.array([ aligned.transpose(2,1,0), 
+                                                                            fix_lowres.transpose(2,1,0)]),0,1),
+                                                                            imagej=True)
+        # from IPython import embed; embed()
+        tif_imwrite(f'{write_directory}/{fname}_mov_lowres_affine.tiff', aligned.transpose(2,1,0))
+            
+
+        if only_lowres:
+            return affine, aligned, None
+    else:
+        print("low res was already calculated loading files",
+                f'{write_directory}/{fname}_affine.mat',
+                f'{write_directory}/{fname}_affine.npy')
+        affine = np.loadtxt(f'{write_directory}/{fname}_affine.mat')
+        aligned = np.load(f'{write_directory}/{fname}_affine.npy')
+
 
     # configure local deformable alignment at highres
     ratio = np.min(fix_lowres_spacing) / np.min(fix_highres_spacing)
@@ -203,6 +236,8 @@ def easifish_registration_pipeline(
              'numberOfIterations':25,
          },
     }
+    
+    '''
     c = {'ncpus':1,
          'threads':1,
          'min_workers':10,
@@ -213,11 +248,17 @@ def easifish_registration_pipeline(
              'distributed.worker.memory.pause':0.9,
          },
     }
+    '''
+
     steps = [
         ('ransac', {**a, **local_ransac_kwargs}),
         ('deform', {**b, **local_deform_kwargs}),
     ]
 
+    if no_deform == True:
+        steps = [
+            ('ransac', {**a, **local_ransac_kwargs}),
+        ]
     # closure for distributed functions
     alignment = lambda x: distributed_piecewise_alignment_pipeline(
         fix_highres, mov_highres,
@@ -239,7 +280,9 @@ def easifish_registration_pipeline(
 
     # if no cluster was given, make one then run on it
     if cluster is None:
+        print('constructing cluster')
         with cluster_constructor(**{**c, **cluster_kwargs}) as cluster:
+            print('running alignment')
             deform = alignment(cluster)
             aligned = resample(cluster)
     # otherwise, use the cluster that was given

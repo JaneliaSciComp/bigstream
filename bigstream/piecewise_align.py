@@ -158,10 +158,16 @@ def distributed_piecewise_alignment_pipeline(
     """
 
     ################  Input, output, and parameter formatting ############
+    temporary_directory = f'/mnt/ssd_cache/{os.getlogin()}'
+    os.makedirs(temporary_directory, exist_ok=True)
+    temporary_directory = temporary_directory if os.path.exists(temporary_directory) else None
+
     # temporary file paths and create zarr images
     temporary_directory = tempfile.TemporaryDirectory(
         prefix='.', dir=temporary_directory or os.getcwd(),
     )
+    print(f"set temp dir - {temporary_directory=} Starting")
+    
     zarr_blocks = (128,) * fix.ndim
     fix_zarr_path = temporary_directory.name + '/fix.zarr'
     mov_zarr_path = temporary_directory.name + '/mov.zarr'

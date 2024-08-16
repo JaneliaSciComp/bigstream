@@ -59,6 +59,7 @@ def configure_irm(
     sampling_percentage=None,
     exhaustive_step_sizes=None,
     callback=None,
+    ncores=None,
 ):
     """
     Wrapper exposing the itk::simple::ImageRegistrationMethod API
@@ -160,8 +161,12 @@ def configure_irm(
         images and a transform type to be ready for optimization.
     """
 
-    # identify number of physical cores available
-    ncores = ut.get_number_of_cores()
+    if ncores is None:
+        # identify number of physical cores available
+        #ncores = ut.get_number_of_cores()
+        # fix for now
+        ncores = 1 # just use one core for worker
+
     if 'ITK_THREADS' in os.environ:
         nthreads = int(os.environ["ITK_THREADS"])
     elif 'NO_HYPERTHREADING' in os.environ:

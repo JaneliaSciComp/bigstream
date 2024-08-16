@@ -159,7 +159,8 @@ def distributed_piecewise_alignment_pipeline(
 
     ################  Input, output, and parameter formatting ############
     temporary_directory = f'/mnt/ssd_cache/{os.getlogin()}'
-    os.makedirs(temporary_directory, exist_ok=True)
+    try:os.makedirs(temporary_directory, exist_ok=True)
+    except:pass
     temporary_directory = temporary_directory if os.path.exists(temporary_directory) else None
 
     # temporary file paths and create zarr images

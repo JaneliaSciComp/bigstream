@@ -71,10 +71,10 @@ def blob_detection(
         kwargs['threshold'] = None
         kwargs['threshold_rel'] = 0.1
 
-    print(f'{time.ctime(time.time())}',
-          f'Start spot detection ({min_blob_radius}, {max_blob_radius})',
-          kwargs,
-          flush=True)
+    # print(f'{time.ctime(time.time())}',
+    #       f'Start spot detection ({min_blob_radius}, {max_blob_radius})',
+    #       kwargs,
+    #       flush=True)
     if winsorize_limits:
         processed_image = winsorize(processed_image, limits=winsorize_limits,
                                     inplace=True)

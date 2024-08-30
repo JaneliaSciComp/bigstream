@@ -486,26 +486,26 @@ def feature_point_ransac_affine_align(
     # get fix spots
     num_sigma = int(min(blob_sizes[1] - blob_sizes[0], num_sigma_max))
     assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
-    print(f'{time.ctime(time.time())} computing fixed spots', flush=True)
+    # print(f'{time.ctime(time.time())} computing fixed spots', flush=True)
     if fix_spots is None:
         fix_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
         }
         fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
-        print(f'{time.ctime(time.time())} fixed spots detection using',
-              fix_kwargs, flush=True)
+        # print(f'{time.ctime(time.time())} fixed spots detection using',
+        #       fix_kwargs, flush=True)
         fix_spots = features.blob_detection(
             fix, blob_sizes[0], blob_sizes[1],
             mask=fix_mask,
             **fix_kwargs,
         )
-    print(f'{time.ctime(time.time())} found {len(fix_spots)} fixed spots',
-          flush=True)
+    # print(f'{time.ctime(time.time())} found {len(fix_spots)} fixed spots',
+    #       flush=True)
     if len(fix_spots) < fix_spots_count_threshold:
-        print(f'{time.ctime(time.time())}',
-              'insufficient fixed spots found',
-              flush=True)
+        # print(f'{time.ctime(time.time())}',
+        #       'insufficient fixed spots found',
+        #       flush=True)
         if safeguard_exceptions:
             raise ValueError('fix spot detection safeguard failed')
         else:
@@ -513,26 +513,26 @@ def feature_point_ransac_affine_align(
             return default
 
     # get mov spots
-    print(f'{time.ctime(time.time())} computing moving spots', flush=True)
+    #print(f'{time.ctime(time.time())} computing moving spots', flush=True)
     if mov_spots is None:
         mov_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
         }
         mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
-        print(f'{time.ctime(time.time())} moving spots detection using',
-              mov_kwargs, flush=True)
+        #print(f'{time.ctime(time.time())} moving spots detection using',
+        #     mov_kwargs, flush=True)
         mov_spots = features.blob_detection(
             mov, blob_sizes[0], blob_sizes[1],
             mask=mov_mask,
             **mov_kwargs,
         )
-    print(f'{time.ctime(time.time())} found {len(mov_spots)} moving spots',
-          flush=True)
+    #print(f'{time.ctime(time.time())} found {len(mov_spots)} moving spots',
+    #      flush=True)
     if len(mov_spots) < mov_spots_count_threshold:
-        print(f'{time.ctime(time.time())}',
-              'insufficient moving spots found',
-              flush=True)
+        #print(f'{time.ctime(time.time())}',
+        #      'insufficient moving spots found',
+        #      flush=True)
         if safeguard_exceptions:
             raise ValueError('mov spot detection safeguard failed')
         else:
@@ -540,20 +540,20 @@ def feature_point_ransac_affine_align(
             return default
 
     # sort
-    print(f'{time.ctime(time.time())} sorting spots', flush=True)
+    #print(f'{time.ctime(time.time())} sorting spots', flush=True)
     sort_idx = np.argsort(fix_spots[:, 3])[::-1]
     fix_spots = fix_spots[sort_idx, :3][:nspots]
     sort_idx = np.argsort(mov_spots[:, 3])[::-1]
     mov_spots = mov_spots[sort_idx, :3][:nspots]
 
     # get contexts
-    print(f'{time.ctime(time.time())} extracting contexts', flush=True)
+    #print(f'{time.ctime(time.time())} extracting contexts', flush=True)
     fix_spot_contexts = features.get_contexts(fix, fix_spots, cc_radius)
     mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
 
     # get pairwise correlations
-    print(f'{time.ctime(time.time())} computing pairwise correlations',
-          flush=True)
+    #print(f'{time.ctime(time.time())} computing pairwise correlations',
+    #      flush=True)
     correlations = features.pairwise_correlation(
         fix_spot_contexts, mov_spot_contexts,
     )
@@ -568,12 +568,12 @@ def feature_point_ransac_affine_align(
         correlations, match_threshold,
         max_distance=max_spot_match_distance,
     )
-    print(f'{time.ctime(time.time())} {len(fix_spots)} - {len(mov_spots)} matched spots',
-          flush=True)
+    # print(f'{time.ctime(time.time())} {len(fix_spots)} - {len(mov_spots)} matched spots',
+    #       flush=True)
     if len(fix_spots) < point_matches_threshold or len(mov_spots) < point_matches_threshold:
-        print(f'{time.ctime(time.time())}',
-              'insufficient point matches found',
-              flush=True)
+        # print(f'{time.ctime(time.time())}',
+        #       'insufficient point matches found',
+        #       flush=True)
         if safeguard_exceptions:
             raise ValueError('point matches safeguard failed')
         else:
@@ -581,11 +581,11 @@ def feature_point_ransac_affine_align(
             return default
 
     # align
-    print(f'{time.ctime(time.time())}',
-          'Found enough spots to estimate the affine',
-          'fix:', len(fix_spots), ',',
-          'moving:', len(mov_spots),
-          flush=True)
+    # print(f'{time.ctime(time.time())}',
+    #       'Found enough spots to estimate the affine',
+    #       'fix:', len(fix_spots), ',',
+    #       'moving:', len(mov_spots),
+    #       flush=True)
     _, Aff, _ = cv2.estimateAffine3D(
         fix_spots, mov_spots,
         ransacThreshold=align_threshold,
@@ -595,9 +595,9 @@ def feature_point_ransac_affine_align(
 
     # ensure affine is sensible
     if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
-        print(f'{time.ctime(time.time())}',
-              'Degenerate affine produced',
-              flush=True)
+        # print(f'{time.ctime(time.time())}',
+        #       'Degenerate affine produced',
+        #       flush=True)
         if safeguard_exceptions:
             raise ValueError('diagonal_constraint safeguard failed')
         else:
@@ -1439,8 +1439,8 @@ def alignment_pipeline(
     # loop over steps
     new_transforms = []
     for alignment, arguments in steps:
-        print(f'{time.ctime(time.time())} Run', alignment, arguments,
-              flush=True)
+        # print(f'{time.ctime(time.time())} Run', alignment, arguments,
+        #       flush=True)
         arguments = {**kwargs, **arguments}
         arguments['static_transform_list'] = static_transform_list + new_transforms
         new_transforms.append(align[alignment](**arguments))

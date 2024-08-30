@@ -1,6 +1,7 @@
 import os, tempfile
 import numpy as np
 import zarr
+import getpass as gt
 import time
 from itertools import product
 from scipy.interpolate import LinearNDInterpolator
@@ -158,7 +159,7 @@ def distributed_piecewise_alignment_pipeline(
     """
 
     ################  Input, output, and parameter formatting ############
-    temporary_directory = f'/mnt/ssd_cache/{os.getlogin()}'
+    temporary_directory = f'/mnt/ssd_cache/{gt.getuser()}'
     try:os.makedirs(temporary_directory, exist_ok=True)
     except:pass
     temporary_directory = temporary_directory if os.path.exists(temporary_directory) else None
@@ -254,7 +255,7 @@ def distributed_piecewise_alignment_pipeline(
 
         # parse input, log index and slices
         block_index, fix_slices, neighbor_flags = indices
-        print("Block index: ", block_index, "\nSlices: ", fix_slices, flush=True)
+        # print("Block index: ", block_index, "\nSlices: ", fix_slices, flush=True)
 
 
         ########## Map fix block corners onto mov coordinates ############
@@ -408,9 +409,9 @@ def distributed_piecewise_alignment_pipeline(
             lock.acquire()
 
             # write result to disk
-            print(f'WRITING BLOCK {block_index} at {time.ctime(time.time())}', flush=True)
+            #print(f'WRITING BLOCK {block_index} at {time.ctime(time.time())}', flush=True)
             output_transform[fix_slices] = output_transform[fix_slices] + transform
-            print(f'FINISHED WRITING BLOCK {block_index} at {time.ctime(time.time())}', flush=True)
+            #print(f'FINISHED WRITING BLOCK {block_index} at {time.ctime(time.time())}', flush=True)
 
             # release the lock
             lock.release()

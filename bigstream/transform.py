@@ -316,14 +316,14 @@ def compose_transforms(
 
     # one affine, two field
     elif len(first_transform.shape) == 2:
-        first_transform = ut.matrix_to_displacement_field(
+        first_transform = matrix_to_displacement_field(
             first_transform, second_transform.shape[:-1], second_spacing,
         )
         first_spacing = second_spacing
 
     # one field, two affine
     elif len(second_transform.shape) == 2:
-        second_transform = ut.matrix_to_displacement_field(
+        second_transform = matrix_to_displacement_field(
             second_transform, first_transform.shape[:-1], first_spacing,
         )
         second_spacing = first_spacing

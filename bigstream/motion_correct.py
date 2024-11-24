@@ -387,7 +387,7 @@ def delta_motion_correct(
                 transform[iii] = result
         return transform
     else:
-        all_written = np.all(cluster.client.gather(future))
+        all_written = np.all(cluster.client.gather(futures))
         return output_transform
 
 

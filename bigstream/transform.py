@@ -233,6 +233,7 @@ def compose_displacement_vector_fields(
     second_field,
     first_spacing,
     second_spacing,
+    **kwargs,
 ):
     """
     Compose two displacement vector fields into a single field
@@ -251,6 +252,8 @@ def compose_displacement_vector_fields(
     second_spacing : 1d-array
         The voxel spacing for the second field
 
+    kwargs : passed to apply_transform
+
     Returns
     -------
     composite_field : nd-array
@@ -258,6 +261,10 @@ def compose_displacement_vector_fields(
         The second field is the one learned second. Thus, the composition
         is going to be on the same voxel grid and spacing as the second field.
     """
+
+    # default behavior is to extrapolate_with_nn
+    if 'extrapolate_with_nn' not in kwargs.keys():
+        kwargs['extrapolate_with_nn'] = True
 
     # container for warped first field
     first_field_warped = np.empty_like(second_field)
@@ -270,7 +277,7 @@ def compose_displacement_vector_fields(
             second_field[..., iii], first_field[..., iii],
             second_spacing, first_spacing,
             transform_list=[second_field,],
-            extrapolate_with_nn=True,
+            **kwargs,
         )
 
     # combine warped first field and second field
@@ -282,6 +289,7 @@ def compose_transforms(
     second_transform,
     first_spacing,
     second_spacing,
+    **kwargs,
 ):
     """
     Compose two transforms into a single transform
@@ -301,6 +309,8 @@ def compose_transforms(
     second_spacing : 1d-array
         The voxel spacing for the second transform
         Ignored for affine transforms (just put in a dummy value)
+
+    kwargs : passed to compose_displacement_vector_fields
 
     Returns
     -------
@@ -331,6 +341,7 @@ def compose_transforms(
     # compose fields
     return compose_displacement_vector_fields(
         first_transform, second_transform, first_spacing, second_spacing,
+        **kwargs,
     )
 
 

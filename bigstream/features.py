@@ -113,8 +113,9 @@ def get_contexts(image, coords, radius):
         The source image data
     coords : nd-array Nx3
         A set of coordinates into the image data
-    radius : scalar int
-        The half width of neighborhoods to extract
+    radius : scalar int or tuple of int
+        The half width of neighborhoods to extract. If an int, the same value
+        is used for all axes. If a tuple, length must equal image.ndim.
 
     Returns
     -------

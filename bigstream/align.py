@@ -338,9 +338,11 @@ def feature_point_ransac_affine_align(
     num_sigma_max : scalar int (default: 15)
         The maximum number of laplacians to use in the feature point LoG detector
 
-    cc_radius : scalar int (default: 12)
+    cc_radius : scalar int or tuple of int (default: 12)
         The halfwidth of neighborhoods around feature points used to determine
-        correlation and correspondence
+        correlation and correspondence. If an int, the same value is used for all
+        axes. If a tuple, the tuple length must equal the number of image axes.
+        Best practice is to use a tuple for anisotropic data.
 
     nspots : scalar int (default: 5000)
         The maximum number of feature point spots to use in each image
@@ -484,6 +486,7 @@ def feature_point_ransac_affine_align(
     mov_mask_spacing = X[7]
 
     # get fix spots
+    if type(cc_radius) not in (tuple,): cc_radius = (cc_radius,) * fix.ndim
     num_sigma = int(min(blob_sizes[1] - blob_sizes[0], num_sigma_max))
     assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
     print(f'{time.ctime(time.time())} computing fixed spots', flush=True)

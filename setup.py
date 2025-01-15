@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="bigstream",
-    version="3.0.0",
+    version="4.0.0",
     author="Greg M. Fleishman",
     author_email="greg.nli10me@gmail.com",
     description="Tools for distributed alignment of massive images",

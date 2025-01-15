@@ -485,9 +485,17 @@ def feature_point_ransac_affine_align(
     fix_mask_spacing = X[6]
     mov_mask_spacing = X[7]
 
-    # get fix spots
+    # format inputs
     if type(cc_radius) not in (tuple,): cc_radius = (cc_radius,) * fix.ndim
-    num_sigma = int(min(blob_sizes[1] - blob_sizes[0], num_sigma_max))
+    A, B = blob_sizes[0], blob_sizes[1]
+    if not isinstance(A, (tuple, list, np.ndarray)):
+        A = (A,)*fix.ndim
+    if not isinstance(B, (tuple, list, np.ndarray)):
+        B = (B,)*fix.ndim
+    blob_sizes = (np.array(A), np.array(B))
+
+    # get fix spots
+    num_sigma = int(min(np.max(blob_sizes[1] - blob_sizes[0]), num_sigma_max))
     assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
     print(f'{time.ctime(time.time())} computing fixed spots', flush=True)
     if fix_spots is None:
@@ -1048,8 +1056,8 @@ def affine_align(
     # set transform to optimize
     if isinstance(initial_condition, str) and initial_condition == "CENTER":
         a, b = fix, mov
-        if fix_mask is not None and mov_mask is not None:
-            a, b = fix_mask, mov_mask
+#        if fix_mask is not None and mov_mask is not None:
+#            a, b = fix_mask, mov_mask
         x = sitk.CenteredTransformInitializer(a, b, rigid_transform_constructor())
         x = rigid_transform_constructor(x).GetTranslation()[::-1]
         initial_condition = np.eye(ndims+1)

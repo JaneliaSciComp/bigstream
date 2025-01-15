@@ -380,21 +380,22 @@ def delta_motion_correct(
     # determine registration pairs if there is stride relaxation
     if stride_relaxation_radius is not None and np.any(np.array(strides, dtype=int) > 1):
 
-        # find all possible registration pairs
+        # find all possible registration pairs, largest strides first
         edge_matrices = []
-        for stride in strides:
+        for stride in strides[::-1]:
             upstream_nodes = [0,]
             edge_matrix = np.zeros((nframes, nframes), dtype=bool)
             while upstream_nodes:
-                upstream_node = upstream_nodes.pop(0)
+                upstream_node = upstream_nodes[0]
                 if upstream_node == nframes-1: break
                 mn = upstream_node + round(stride*(1 - stride_relaxation_radius))
                 mx = upstream_node + round(stride*(1 + stride_relaxation_radius))
                 mn = min(nframes-1, mn)
                 mx = min(nframes-1, mx)
                 edge_matrix[upstream_node, mn:mx+1] = True
-                upstream_nodes += list(range(mn, mx+1))
-                upstream_nodes = list(set(upstream_nodes))
+                mn = max(mn, upstream_nodes[-1]+1)
+                if mx >= mn: upstream_nodes += range(mn, mx+1)
+                upstream_nodes.pop(0)
             edge_matrices.append(edge_matrix)
 
         # define how and then get metric matrix
@@ -416,23 +417,26 @@ def delta_motion_correct(
         possible_alignments = np.any(np.array(edge_matrices), axis=0)
         futures = cluster.client.map(metric_matrix_row, range(nframes), possible_alignments)
         metric_matrix = np.array(cluster.client.gather(futures))
+        metric_matrix_max = np.max(metric_matrix)
 
         # find optimal registration pairs
-        # TODO: because registration pairs are determined independently for each stride level
-        #       it's possible that lower stride levels miss the key frames provided by the
-        #       higher stride levels, and thus can't be re-initialized during composition
-        #       lower stride levels should have the key frames chosen at higher stride levels
-        #       included as compulsory key frames. This can be accomplished by making all prior frames
-        #       less than one stride+radius away point only to the key frame node in the graph.
-        #       In other words, force the paths to go through those nodes.
         index_lists = []
-        for iii, stride in enumerate(strides):
+        for iii, stride in enumerate(strides[::-1]):
             if stride == 1:
                 index_lists.append(np.arange(nframes))
             else:
-                graph = DiGraph(metric_matrix * edge_matrices[iii])
+                edge_matrix = edge_matrices[iii]
+                metric_matrix_copy = np.copy(metric_matrix)
+                for key_node in list(set([x for xx in index_lists for x in xx])):
+                    edge_matrix[:key_node, key_node+1:] = False
+                    if not np.any(edge_matrix[:key_node, key_node]) and key_node > 0:
+                        edge_matrix[key_node-stride:key_node, key_node] = 1
+                        metric_matrix_copy[key_node-stride:key_node, key_node] = metric_matrix_max
+                graph = DiGraph(metric_matrix_copy * edge_matrix)
                 index_list = shortest_path(graph, source=0, target=nframes-1, weight='weight')
                 index_lists.append(np.array(index_list))
+        # restore to smallest strides first
+        index_lists = index_lists[::-1]
 
     # format output
     transform_shape = (4, 4)
@@ -462,6 +466,7 @@ def delta_motion_correct(
 
     # define alignments
     def align_frame_pair(fix_index, mov_index, stride_index, write_index):
+        print(f'FIX INDEX: {fix_index}    MOV INDEX: {mov_index}', flush=True)
         fix = timeseries_zarr[fix_index]
         mov = timeseries_zarr[mov_index]
         if os.path.isfile(temporary_directory.name + '/mask.npy'):
@@ -630,101 +635,6 @@ def compose_delta_transforms(
     return new_transforms
 
 
-def compose_delta_transforms_old(
-    transforms,
-    spacing=None,
-    sigma=None,
-    sigma_threshold=None,
-    write_path=None,
-    **kwargs,
-):
-    """
-    Compose all transforms returned by delta_motion_correct into a single
-    displacement flow
-
-    Parameters
-    ----------
-    transforms : nd array
-        The output of delta_motion_correct. Sould be a time series of transforms
-        with time as the first axis.
-
-    spacing : nd array (default: None)
-        The voxel spacing of the transforms. Only set this if transforms are vector
-        fields.
-
-    sigma : float or iterable of floats (default: None)
-        If not None, the cumulative transform is periodically smoothed
-
-    sigma_period : int (default: 1)
-        If sigma is not None, then after every sigma_period compositions, the
-        cumulative transform is smoothed.
-
-    write_path : string (default: None)
-        If not None, the final array of transforms will be written to disk as a zarr
-        array at this path. If None then this array is returned in memory. Only use
-        this if transforms are deformation and if the resultant set of transforms
-        is too large to fit in memory. 
-
-    kwargs : passed to compose_transforms
-
-    Returns
-    -------
-    transforms : nd array
-        An nd array the same shape as the input transforms, but with each transform
-        based in the first time point coordinate system.
-    """
-
-    # format output
-    if write_path:
-        new_transforms = ut.create_zarr(
-            write_path,
-            transforms.shape,
-            (1,) + transforms.shape[1:],
-            transforms.dtype,
-        )
-    else:
-        new_transforms = np.empty_like(transforms)
-
-    # position field needed for boundary checking
-    grid = tuple(slice(None, x) for x in transforms.shape[1:-1])
-    position_field = np.mgrid[grid].astype(transforms.dtype)
-    position_field = np.moveaxis(position_field, 0, -1) * spacing
-
-    # initialize
-    cumulative_transform = transforms[0]
-    new_transforms[0] = cumulative_transform
-    cumulative_magnitude = np.zeros(transforms.shape[1:-1], dtype=transforms.dtype)
-    for iii, transform in enumerate(transforms[1:]):
-
-        # compose
-        new_cumulative_transform = compose_transforms(
-            transform, cumulative_transform, spacing, spacing,
-            **kwargs,
-        )
-
-        # prevent vectors from leaving domain
-        new_positions = position_field + new_cumulative_transform
-        breaches = (new_positions < 0) + (new_positions > position_field[-1, -1, -1])
-        breaches = np.any(breaches, axis=-1)
-        new_cumulative_transform[breaches] = cumulative_transform[breaches]
-        cumulative_transform = new_cumulative_transform
-
-        # smooth, prevents build up of interpolation high frequencies
-        if sigma is not None and sigma_threshold is not None:
-            cumulative_magnitude += np.linalg.norm(transform, axis=-1)
-            median_magnitude = np.median(cumulative_magnitude)
-            if median_magnitude > sigma_threshold:
-                print(f'ITERATION {iii}: smoothing')
-                cumulative_transform = gaussian_filter(
-                    cumulative_transform, sigma/spacing,
-                    axes=tuple(range(len(spacing))),
-                    mode='constant',
-                )
-                cumulative_magnitude[...] = 0
-        new_transforms[iii+1] = cumulative_transform
-    return new_transforms
-
-
 def save_transforms(path, transforms):
     """
     """
@@ -751,6 +661,7 @@ def resample_frames(
     target_spacing,
     timeseries_spacing,
     transform_list,
+    timeseries_start_index=0,
     mask=None,
     interpolator='1',
     static_transform_list_before=[],
@@ -759,6 +670,7 @@ def resample_frames(
     cluster_kwargs={},
     temporary_directory=None,
     write_path=None,
+    **kwargs,
 ):
     """
     Resample a 4D dataset using a set of motion correction transforms
@@ -786,6 +698,10 @@ def resample_frames(
         A masked 4D dataset like this will take up considerably less space on disk
         due to more efficient compression of zeroed background voxels. We're talking
         60% fewer gigabytes.
+
+    timeseries_start_index : int (default: 0)
+        The first frame you wish to resample is at this index
+        Allows passing full zarr arrays without slicing
 
     interpolator : string (default: '1')
         The interpolator to use for resampling. See bigstream.configure_irm.configure_irm
@@ -818,6 +734,9 @@ def resample_frames(
     write_path : string (default: None)
         If not None, the final array of resampled frames will be written to disk as a zarr
         array at this path. If None then this array is returned in memory.
+
+    kwargs : any additional keyword arguments
+        Passed to bigstream.transform.apply_transform
 
     Returns
     -------
@@ -864,7 +783,7 @@ def resample_frames(
     static_transform_list_after = new_list
 
     # format output
-    output_shape = (timeseries.shape[0],) + target.shape
+    output_shape = (transform_list_zarr[0].shape[0],) + target.shape
     if write_path:
         zarr_blocks = (1,) + output_shape[1:]
         output = ut.create_zarr(write_path, output_shape, zarr_blocks, target.dtype)
@@ -876,7 +795,7 @@ def resample_frames(
         static_transform_list_after,
     ):
         fix = np.load(temporary_directory.name + '/target.npy')
-        mov = timeseries_zarr[index]
+        mov = timeseries_zarr[timeseries_start_index + index]
         transform_list = [x[index] for x in transform_list_zarr]
         a = [np.load(x) if isinstance(x, str) else x for x in static_transform_list_before]
         b = [np.load(x) if isinstance(x, str) else x for x in static_transform_list_after]
@@ -885,6 +804,7 @@ def resample_frames(
             fix, mov, target_spacing, timeseries_spacing,
             transform_list=transform_list,
             interpolator=interpolator,
+            **kwargs,
         )
         if os.path.isfile(temporary_directory.name + '/mask.npy'):
             mask = np.load(temporary_directory.name + '/mask.npy')
@@ -896,7 +816,7 @@ def resample_frames(
 
     # distribute and wait for completion
     futures = cluster.client.map(
-        apply_transform_to_frame, range(timeseries.shape[0]),
+        apply_transform_to_frame, range(transform_list_zarr[0].shape[0]),
         static_transform_list_before=static_transform_list_before,
         static_transform_list_after=static_transform_list_after,
     )

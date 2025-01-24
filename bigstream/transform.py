@@ -3,7 +3,7 @@ import SimpleITK as sitk
 import bigstream.utility as ut
 from bigstream.configure_irm import interpolator_switch
 import os
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import map_coordinates, zoom, gaussian_filter
 
 
 ######################### APPLYING TRANSFORMS #################################
@@ -545,23 +545,61 @@ def _displacement_field_composition_square_root(
     spacing,
     step,
     iterations,
+    shrink_factors=(1,),
+    smooth_sigmas=(0.,),
+    step_cut_factor=0.5,
     verbose=True,
 ):
     """
     """
 
-    # container to hold root
-    root = 0.5 * field
+    # initializations
+    root = None
+    step_level = step
+    level_values = zip(iterations, shrink_factors, smooth_sigmas)
 
-    # iterate
-    for i in range(iterations):
-        residual = (field - compose_transforms(root, root, spacing, spacing))
-        root += step * residual
-        if verbose:
-            residual_magnitude = np.linalg.norm(residual)
-            print(f'FITTING ROOT  -  Iteration: {i} --> Residual: {residual_magnitude}')
+    # loop over shrink factor levels
+    for level, (iterations, shrink, sigma) in enumerate(level_values):
+
+        if shrink > 1:
+            shrink_tuple = (1./shrink,) * (field.ndim-1) + (1,)
+            field_level = gaussian_filter(field, sigma/spacing, axes=range(field.ndim-1))
+            field_level = zoom(field_level, shrink_tuple,  mode='reflect')
+        else:
+            field_level = field
+        spacing_level = spacing * shrink
+        if root is not None:
+            root = zoom(root, np.array(field_level.shape)/root.shape,  mode='reflect')
+            gradient = np.zeros_like(root)
+        else:
+            root = np.zeros_like(field_level)
+            gradient = field_level
+
+        # iterate
+        step_level = (step + step_level) * 0.5
+        previous_residual_magnitude = np.inf
+        for i in range(iterations):
+            root += step_level * gradient
+            residual = field_level - compose_transforms(root, root, spacing_level, spacing_level)
+            residual_magnitudes = np.linalg.norm(residual, axis=-1)
+            mean_residual = residual_magnitudes.mean()
+            max_residual = residual_magnitudes.max()
+            residual_magnitude = np.sum(residual_magnitudes)
+            if residual_magnitude > previous_residual_magnitude:
+                root -= step_level * gradient
+                step_level *= step_cut_factor
+            else:
+                previous_residual_magnitude = residual_magnitude
+                jac_root = displacement_field_jacobian(root, spacing_level) + np.eye(field.ndim-1)
+                gradient = np.einsum('...ij,...j->...i', jac_root, residual)
+            if verbose:
+                print(f'FITTING ROOT: level-iteration: {level}-{i}  ' + \
+                      f'residual|mean|max: {residual_magnitude:.3f}|' + \
+                      f'{mean_residual:.3f}|{max_residual:.3f}')
 
     # return result
+    if root.shape != field.shape:
+        root = zoom(root, np.array(field.shape)/root.shape)
     return root
 
 
@@ -572,15 +610,17 @@ def displacement_field_jacobian(field, spacing):
     """
 
     # convert to position field
-    grid = tuple(slice(None, x) for x in field.shape[:-1])
+    grid = tuple(slice(x) for x in field.shape[:-1])
     position_field = np.mgrid[grid].astype(field.dtype)
     position_field = np.moveaxis(position_field, 0, -1) * spacing + field
 
     # get jacobian matrices
-    jacobian = np.empty(field.shape[:-1] + (field.shape[-1],)*2, dtype=field.dtype)
+    jacobian = np.empty(field.shape + (field.shape[-1],), dtype=field.dtype)
     for iii in range(field.shape[-1]):
-        grad = np.moveaxis( np.array( np.gradient(position_field[..., iii], *spacing) ), 0, -1)
-        jacobian[..., iii, :] = np.ascontiguousarray(grad)
+        sigma = spacing.min() / spacing[iii]
+        jacobian[..., iii] = gaussian_filter(position_field, sigma, 1, axes=iii) / (2*spacing[iii])
+#        grad = np.moveaxis( np.array( np.gradient(position_field[..., iii], *spacing) ), 0, -1)
+#        jacobian[..., iii, :] = np.ascontiguousarray(grad)
     return jacobian
 
 

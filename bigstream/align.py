@@ -945,7 +945,8 @@ def affine_align(
         How to begin the optimization. Only one string value is allowed:
         "CENTER" in which case the alignment is initialized by a center
         of mass alignment. If a 4x4 ndarray is given the optimization
-        is initialized with that transform.
+        is initialized with that transform. static_transform_list is
+        ignored.
 
     alignment_spacing : float (default: None)
         Fixed and moving images are skip sampled to a voxel spacing

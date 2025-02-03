@@ -2,7 +2,7 @@ channels:
   - conda-forge
 dependencies:
   - flatten_json
-  - zarr=2.13.3
+  - zarr=2.16.1
   - numcodecs>=0.9.1
   - numpy>=1.26.0
   - scikit-image>=0.21.0

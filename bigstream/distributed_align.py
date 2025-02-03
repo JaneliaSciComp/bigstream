@@ -1,5 +1,6 @@
 import functools
 import logging
+import bigstream.transform as bst
 import numpy as np
 import bigstream.utility as ut
 import time
@@ -165,7 +166,7 @@ def _get_moving_block_coords(fix_shape,
             original_mov_block_phys_coords,
             [original_transform,],
         )
-        block_transform = ut.change_affine_matrix_origin(
+        block_transform = bst.change_affine_matrix_origin(
             original_transform, fix_block_phys_coords[0])
     else:
         ratio = np.array(original_transform.shape[:-1]) / fix_shape
@@ -226,7 +227,7 @@ def _compute_block_transform(compute_transform_params,
     )
     # ensure transform is a vector field
     if len(transform.shape) == 2:
-        transform = ut.matrix_to_displacement_field(
+        transform = bst.matrix_to_displacement_field(
             transform, fix_block.shape, spacing=fix_spacing,
         )
     # Finished computing transformation for current block_index
@@ -537,10 +538,6 @@ def distributed_alignment_pipeline(
     )
 
     blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
-    # blocks = (block_index, fix_block_coords, fix_block_neighbors,
-    #           mov_slices,
-    #           fix_blockmask_coords, mov_blockmask_coords,
-    #           new_origin, block_transform_list)
 
     blocks_to_process = cluster_client.map(
         _read_blocks_for_processing,

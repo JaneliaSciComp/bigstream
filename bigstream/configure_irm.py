@@ -125,7 +125,12 @@ def configure_irm(
             'BWS':  BlackmanWindowedSinc,
 
     shrink_factors : tuple of int (default: (1,))
-        Downsampling scale levels at which to optimize
+        Downsampling scale levels at which to optimize.
+        This sets up multiscale alignment. For example (4, 2, 1)
+        will repeat the registration optimization three times.
+        First, it will register at 4x downsampling of the data along
+        all axes. Then at 2x downsampling, then finally at the full
+        given resolution.
 
     smooth_sigmas : tuple of float (default: (0,))
         Sigma of Gaussian used to smooth each scale level image

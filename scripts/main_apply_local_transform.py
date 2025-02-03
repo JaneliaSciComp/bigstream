@@ -212,7 +212,6 @@ def _run_apply_transform(args):
 def main():
     args_parser = _define_args()
     args = args_parser.parse_args()
-    args = args_parser.parse_args()
     # prepare logging
     global logger
     logger = configure_logging(args.logging_config, args.verbose)

@@ -243,7 +243,7 @@ def compose_displacement_vector_fields(
     second_field,
     first_spacing,
     second_spacing,
-    extrapolate_with_nn=True
+    **kwargs,
 ):
     """
     Compose two displacement vector fields into a single field
@@ -287,7 +287,7 @@ def compose_displacement_vector_fields(
             second_field[..., iii], first_field[..., iii],
             second_spacing, first_spacing,
             transform_list=[second_field,],
-            extrapolate_with_nn=extrapolate_with_nn,
+            **kwargs,
         )
 
     # combine warped first field and second field

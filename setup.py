@@ -14,7 +14,7 @@ setuptools.setup(
         'numpy>=1.20.3',
         'scipy>=1.9.1',
         'opencv-python>=4.5.5.64',
-        'bokeh>=2.4.3,<3',
+        'bokeh>=2.4.3',
         'dask>=2023.10.1',
         'distributed>=2023.10.1',
         'ClusterWrap>=0.3.0',

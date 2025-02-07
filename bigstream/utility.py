@@ -77,7 +77,6 @@ def numpy_to_sitk(image, spacing=None, origin=None, vector=False):
     image.SetOrigin(origin[::-1])
     return image
 
-
 # TODO: function that takes a numpy array and return transform type
 
 

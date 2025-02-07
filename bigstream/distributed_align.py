@@ -162,7 +162,7 @@ def _get_moving_block_coords(fix_shape,
                              original_mov_block_phys_coords,
                              original_transform):
     if len(original_transform.shape) == 2:
-        mov_block_phys_coords = apply_transform_to_coordinates(
+        mov_block_phys_coords = bst.apply_transform_to_coordinates(
             original_mov_block_phys_coords,
             [original_transform,],
         )
@@ -179,7 +179,7 @@ def _get_moving_block_coords(fix_shape,
                                       fix_shape,
                                       fix_spacing)
         origin = spacing * start
-        mov_block_phys_coords = apply_transform_to_coordinates(
+        mov_block_phys_coords = bst.apply_transform_to_coordinates(
             original_mov_block_phys_coords, [block_transform,], spacing, origin
         )
     return mov_block_phys_coords, block_transform

@@ -1044,8 +1044,8 @@ def affine_align(
     # set transform to optimize
     if isinstance(initial_condition, str) and initial_condition == "CENTER":
         a, b = fix, mov
-        if fix_mask is not None and mov_mask is not None:
-            a, b = fix_mask, mov_mask
+#        if fix_mask is not None and mov_mask is not None:
+#            a, b = fix_mask, mov_mask
         x = sitk.CenteredTransformInitializer(a, b, rigid_transform_constructor())
         x = rigid_transform_constructor(x).GetTranslation()[::-1]
         initial_condition = np.eye(ndims+1)

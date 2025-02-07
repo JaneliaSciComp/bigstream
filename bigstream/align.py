@@ -945,7 +945,8 @@ def affine_align(
         How to begin the optimization. Only one string value is allowed:
         "CENTER" in which case the alignment is initialized by a center
         of mass alignment. If a 4x4 ndarray is given the optimization
-        is initialized with that transform.
+        is initialized with that transform. static_transform_list is
+        ignored.
 
     alignment_spacing : float (default: None)
         Fixed and moving images are skip sampled to a voxel spacing
@@ -1054,10 +1055,9 @@ def affine_align(
     rigid_transform_constructor = sitk.Euler2DTransform if ndims == 2 else sitk.Euler3DTransform
 
     # set transform to optimize
+    # TODO: enable initialization with second moment as well
     if isinstance(initial_condition, str) and initial_condition == "CENTER":
         a, b = fix, mov
-#        if fix_mask is not None and mov_mask is not None:
-#            a, b = fix_mask, mov_mask
         x = sitk.CenteredTransformInitializer(a, b, rigid_transform_constructor())
         x = rigid_transform_constructor(x).GetTranslation()[::-1]
         initial_condition = np.eye(ndims+1)
@@ -1460,7 +1460,7 @@ def alignment_pipeline(
     if return_format == 'independent':
         return new_transforms
     elif return_format == 'compressed':
-        return bst.compress_transform_list(new_transforms, [fix_spacing,]*len(new_transforms))
+        return bst.compress_transform_list(new_transforms, [fix_spacing,]*len(new_transforms))[0]
     elif return_format == 'flatten':
         return bst.compose_transform_list(new_transforms, fix_spacing)
 

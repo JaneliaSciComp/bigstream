@@ -3,7 +3,7 @@ import SimpleITK as sitk
 import bigstream.utility as ut
 from bigstream.configure_irm import interpolator_switch
 import os
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import map_coordinates, zoom, gaussian_filter
 
 
 ######################### APPLYING TRANSFORMS #################################
@@ -443,42 +443,65 @@ def invert_affine(affine):
 def invert_displacement_vector_field(
     field,
     spacing,
-    step=0.5,
-    iterations=10,
-    sqrt_order=2,
-    sqrt_step=0.5,
-    sqrt_iterations=5,
+    step=1.0,
+    iterations=(100,),
+    shrink_spacings=(None,),
+    smooth_sigmas=(0.,),
+    step_cut_factor=0.5,
+    pad=0.1,
+    use_root=True,
     verbose=True,
+    **kwargs,
 ):
     """
     Numerically find the inverse of a displacement vector field.
 
     Parameters
     ----------
-    field : nd-array
-        The displacement vector field to invert
+    field : np.ndarray
+        The field to invert. Last axis should be the vector axis.
 
-    spacing : 1d-array
-        The physical voxel spacing of the displacement field
+    spacing : 1d iterable, ideally a tuple
+        The spacing between samples in field, in physical units
 
     step : float (default: 0.5)
-        The step size used for each iteration of the stationary point algorithm
+        The initial gradient descent step size. This step will be reduced
+        automatically when the residual increases.
 
-    iterations : scalar int (default: 10)
-        The number of stationary point iterations to find inverse. More
-        iterations gives a more accurate inverse but takes more time.
+    iterations : tuple of ints (default: (100,))
+        The number of iterations to run at each scale level
 
-    sqrt_order : scalar int (default: 2)
-        The number of roots to take before stationary point iterations
+    shrink_spacings : tuple of floats or None (default: (None,))
+        The desired spacing in microns for each scale level
+        None indicates full resolution, i.e. no down sampling
 
-    sqrt_step : float (default: 0.5)
-        The step size used for each iteration of the composition square root gradient descent
+    smooth_sigmas : tuple of floats (default: (0.))
+        The Gaussian smoothing sigma for each scale level in physical units
 
-    sqrt_iterations : scalar int (default: 5)
-        The number of iterations to find the field composition square root
+    step_cut_factor : float in range (0, 1] (default: 0.5)
+        If the residual increases after a gradient descent step, that step is
+        revoked and the gradient descent step size is multiplied by this value
+
+    pad : float in range [0, 1] (default: 0.1)
+        Input will be padded on all spatial axes to prevent edge effects. The number
+        of voxels added to each side of each axis is this number times the axis
+        shape rounded to the nearest integer.
+
+    use_root : bool (default: True)
+        If True, we first find the root of field with the
+        displacement_field_composition_square_root function. This takes time,
+        but will result in a more accurate and smooth inverse. Be sure to look at
+        the docstring for displacement_field_compostion_square_root. All kwargs
+        are passed to that function.
 
     verbose : bool (default: True)
-        Whether or not to print optimization feedback to standard output
+        Print feedback on optimization every iteration
+
+    **kwargs : passed to displacement_field_composition_square_root
+        The root finding algorithm is the bulk of computational cost and will
+        have a large impact on the accuracy of your inverse. Make sure to read
+        the docstring for displacement_field_composition_square_root and provide
+        well chosen values for all of its parameters.
 
     Returns
     -------
@@ -486,82 +509,279 @@ def invert_displacement_vector_field(
         The numerical inverse of the given displacement vector field.
         field(inverse_field) should be nearly zeros everywhere.
         inverse_field(field) should be nearly zeros everywhere.
-        If precision is not high enough, look at iterations,
-        order, and sqrt_iterations.
     """
 
     # initialize inverse as negative root
-    root = _displacement_field_composition_nth_square_root(
-        field, spacing, sqrt_order, sqrt_step, sqrt_iterations,
-        verbose=verbose,
-    )
-    inv = - np.copy(root)
+    root = field
+    if use_root:
+        root = displacement_field_composition_square_root(
+            field,
+            spacing,
+            step=step/2,
+            iterations=iterations,
+            shrink_spacings=shrink_spacings,
+            smooth_sigmas=smooth_sigmas,
+            step_cut_factor=step_cut_factor,
+            pad=pad,
+            verbose=verbose,
+        )
 
-    # iterate to invert
-    if verbose: print('INVERTING ROOT')
-    for i in range(iterations):
-        residual = compose_transforms(root, inv, spacing, spacing)
-        inv -= step * residual
-        if verbose:
-            residual_magnitude = np.linalg.norm(residual)
-            print(f'FITTING INVERSE  -  Iteration: {i} --> Residual: {residual_magnitude}')
-    if verbose: print('', flush=True)
+    # pad input
+    if pad > 0:
+        pad = tuple(round(pad*x) for x in root.shape[:-1])
+        root = np.pad(root, [(x, x) for x in pad] + [(0, 0),], mode='linear_ramp')
+
+    # create a store for smoothed fields
+    root_smooth_store = {}
+
+    # loop over scale levels
+    level_values = zip(iterations, shrink_spacings, smooth_sigmas)
+    for level, (iterations_level, shrink, sigma) in enumerate(level_values):
+
+        # smooth
+        root_level = root
+        if sigma > 0:
+            if sigma in root_smooth_store.keys():
+                root_level = root_smooth_store[sigma]
+            else:
+                root_level = gaussian_filter(
+                    root, sigma/spacing, axes=range(root.ndim-1),
+                )
+                root_smooth_store[sigma] = root_level
+
+        # resample
+        spacing_level = np.array(spacing)
+        if shrink is not None:
+            shrink_tuple = tuple(x/shrink for x in spacing) + (1,)
+            root_level = zoom(root_level, shrink_tuple,  mode='reflect', order=1)
+            spacing_level = np.array((shrink,) * len(spacing))
+            if np.any(pad):
+                pad_level = tuple(round(x*y) for x, y in zip(pad, shrink_tuple))
+                pad_crop = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad_level)
+
+        # initialize
+        if level > 0:
+            inv = zoom(inv, np.array(root_level.shape)/inv.shape, mode='reflect', order=1)
+            gradient = np.zeros_like(inv)
+        else:
+            inv = np.zeros_like(root_level)
+            residual = root_level
+            gradient = residual
+
+        # iterate
+        step_level = step if level == 0 else (step + step_level) * .5
+        previous_residual_magnitude = np.inf
+        for i in range(iterations_level):
+            inv -= step_level * gradient
+            residual = compose_transforms(root_level, inv, spacing_level, spacing_level)
+            residual_magnitudes = np.linalg.norm(residual, axis=-1)
+            if np.any(pad): residual_magnitudes = residual_magnitudes[pad_crop]
+            residual_magnitude = np.sum(residual_magnitudes)
+            if residual_magnitude > previous_residual_magnitude:
+                inv += step_level * gradient
+                step_level *= 0.5
+            else:
+                previous_residual_magnitude = residual_magnitude
+                gradient = residual
+            if verbose:
+                mean_residual = residual_magnitudes.mean()
+                max_residual = residual_magnitudes.max()
+                print(f'FITTING INVERSE: level-iteration: {level}-{i}    ' + \
+                      f'residual|mean|max: {residual_magnitude:.3f}|' + \
+                      f'{mean_residual:.3f}|{max_residual:.3f}')
+
+    # restore size
+    if inv.shape != root.shape:
+        inv = zoom(inv, np.array(root.shape)/inv.shape, mode='reflect', order=1)
 
     # square-compose inv order times
-    for i in range(sqrt_order):
-        inv = compose_transforms(inv, inv, spacing, spacing)
+    if use_root:
+        order = kwargs['order']+1 if 'order' in kwargs else 1
+        for i in range(order):
+            inv = compose_transforms(inv, inv, spacing, spacing)
 
-    # return result
+    # remove padding and return
+    if np.any(pad):
+        inv = inv[tuple(slice(x, -x) if x > 0 else slice(None) for x in pad)]
     return inv
 
 
-def _displacement_field_composition_nth_square_root(
+def displacement_field_composition_square_root(
     field,
     spacing,
-    order,
-    step,
-    iterations,
+    step=0.5,
+    iterations=(100,),
+    shrink_spacings=(None,),
+    smooth_sigmas=(0.,),
+    step_cut_factor=0.5,
+    pad=0.1,
+    jacobian_term=0,
+    composition_term=0,
+    order=0,
     verbose=True,
+    **kwargs
 ):
     """
+    Given a field Phi, finds a field phi such that Phi ~= phi(phi)
+    That is, finds an approximation to the square root, with respect to
+    composition, of the given field.
+
+    Parameters
+    ----------
+    field : np.ndarray
+        The field for which we want a composition square root. The last
+        axis should be the vector axis.
+
+    spacing : 1d iterable, ideally a tuple
+        The spacing between samples in field, in physical units
+
+    step : float (default: 0.5)
+        The initial gradient descent step size. This step will be reduced
+        automatically when the residual increases.
+
+    iterations : tuple of ints (default: (100,))
+        The number of iterations to run at each scale level
+
+    shrink_spacings : tuple of floats or None (default: (None,))
+        The desired spacing in microns for each scale level
+        None indicates full resolution, i.e. no down sampling
+
+    smooth_sigmas : tuple of floats (default: (0.))
+        The Gaussian smoothing sigma for each scale level in physical units
+
+    step_cut_factor : float in range (0, 1] (default: 0.5)
+        If the residual increases after a gradient descent step, that step is
+        revoked and the gradient descent step size is multiplied by this value
+
+    pad : float in range [0, 1] (default: 0.1)
+        Input will be padded on all spatial axes to prevent edge effects. The number
+        of voxels added to each side of each axis is this number times the axis
+        shape rounded to the nearest integer.
+
+    jacobian_term : float in range [0, 1] (default: 0)
+        The percent of iterations at each scale level that should use the
+        Jacobian term in the gradient. Set to 0 for maximum speed, set to a
+        small number for a slight improvement in diffeomorphic accuracy, set
+        to a large number if you want to be rigorous and wait a long time.
+
+    composition_term : float in range [0, 1] (default: 0)
+        The percent of iterations at each scale level that should use the
+        residual-composed-with-root term in the gradient. Set to 0 for maximum
+        speed, set to a small number for a slight improvement in diffeomorphic
+        accuracy, set to a large number if you want to be rigorous and wait a long time.
+
+    order : strictly positive int (default: 0)
+        The square root order. This function is called recursively order times.
+        That is, if order == 0, then we compute phi(phi) ~= Phi. If order == 1,
+        then we compute phi(phi(phi(phi))) ~= Phi and so on.
+
+    verbose : bool (default: True)
+        True prints out optimization information at every iteration
+
+    **kwargs : passed to compose_transforms
+        Control how root(root) interpolation is performed. Ultimately,
+        arguments go to apply_transform.
+
+    Returns
+    -------
+    root : np.ndarray
+        A field for which root(root) ~= field
+        Or if using bigstream.transform:
+        compose_displacement_vector_fields(root, root, spacing, spacing) ~= field
     """
 
-    # initialize with given field
-    root = np.copy(field)
+    # pad input
+    if pad > 0:
+        pad = tuple(round(pad*x) for x in field.shape[:-1])
+        field = np.pad(field, [(x, x) for x in pad] + [(0, 0),], mode='linear_ramp')
 
-    # iterate taking square roots
-    for i in range(order):
-        if verbose: print(f'FINDING ROOT ORDER {i}')
-        root = _displacement_field_composition_square_root(
-            root, spacing, step, iterations, verbose=verbose,
+    # create a store for smoothed fields
+    field_smooth_store = {}
+
+    # loop over scale levels
+    level_values = zip(iterations, shrink_spacings, smooth_sigmas)
+    for level, (iterations_level, shrink, sigma) in enumerate(level_values):
+
+        # smooth
+        field_level = field
+        if sigma > 0:
+            if sigma in field_smooth_store.keys():
+                field_level = field_smooth_store[sigma]
+            else:
+                field_level = gaussian_filter(
+                    field, sigma/spacing, axes=range(field.ndim-1),
+                )
+                field_smooth_store[sigma] = field_level
+
+        # resample
+        spacing_level = np.array(spacing)
+        if shrink is not None:
+            shrink_tuple = tuple(x/shrink for x in spacing) + (1,)
+            field_level = zoom(field_level, shrink_tuple,  mode='reflect', order=1)
+            spacing_level = np.array((shrink,) * len(spacing))
+            if np.any(pad):
+                pad_level = tuple(int(x*y)+1 for x, y in zip(pad, shrink_tuple))
+                pad_crop = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad_level)
+
+        # initialize
+        if level > 0:
+            root = zoom(root, np.array(field_level.shape)/root.shape, mode='reflect', order=1)
+            gradient = np.zeros_like(root)
+        else:
+            root = np.zeros_like(field_level)
+            gradient = field_level
+
+        # iterate
+        step_level = step
+        previous_residual_magnitude = np.inf
+        for i in range(iterations_level):
+            root += step_level * gradient
+            residual = field_level - compose_transforms(
+                root, root, spacing_level, spacing_level,
+                **kwargs,
+            )
+            residual_magnitudes = np.linalg.norm(residual, axis=-1)
+            if np.any(pad):
+                residual_magnitudes = residual_magnitudes[pad_crop]
+            mean_residual = residual_magnitudes.mean()
+            max_residual = residual_magnitudes.max()
+            residual_magnitude = np.sum(residual_magnitudes)
+            if residual_magnitude > previous_residual_magnitude:
+                root -= step_level * gradient
+                step_level *= step_cut_factor
+            else:
+                previous_residual_magnitude = residual_magnitude
+                gradient = residual
+                if i >= iterations_level * (1 - jacobian_term):
+                    jac_root = displacement_field_jacobian(root, spacing_level)
+                    gradient = np.einsum('...ij,...j->...i', jac_root, gradient)
+                if i >= iterations_level * (1 - composition_term):
+                    gradient += compose_transforms(
+                        residual, root, spacing_level, spacing_level,
+                    ) - root
+            if verbose:
+                print(f'FITTING ROOT: order: {order}: level-iteration: {level}-{i}  ' + \
+                      f'residual|mean|max: {residual_magnitude:.3f}|' + \
+                      f'{mean_residual:.3f}|{max_residual:.3f}')
+
+    # recurse
+    if order > 0:
+        root = displacement_field_composition_square_root(
+            root, spacing_level, step, iterations,
+            shrink_spacings=shrink_spacings,
+            smooth_sigmas=smooth_sigmas,
+            step_cut_factor=step_cut_factor,
+            jacobian_term=jacobian_term,
+            composition_term=composition_term,
+            order=order-1,
+            verbose=verbose,
         )
 
-    # return result
-    return root
-
-
-def _displacement_field_composition_square_root(
-    field,
-    spacing,
-    step,
-    iterations,
-    verbose=True,
-):
-    """
-    """
-
-    # container to hold root
-    root = 0.5 * field
-
-    # iterate
-    for i in range(iterations):
-        residual = (field - compose_transforms(root, root, spacing, spacing))
-        root += step * residual
-        if verbose:
-            residual_magnitude = np.linalg.norm(residual)
-            print(f'FITTING ROOT  -  Iteration: {i} --> Residual: {residual_magnitude}')
-
-    # return result
+    # restore correct shape w.r.t. scale and pad, then return
+    if root.shape != field.shape:
+        root = zoom(root, np.array(field.shape)/root.shape, mode='reflect', order=1)
+    if np.any(np.array(pad)):
+        root = root[tuple(slice(x, -x) if x > 0 else slice(None) for x in pad)]
     return root
 
 
@@ -572,15 +792,15 @@ def displacement_field_jacobian(field, spacing):
     """
 
     # convert to position field
-    grid = tuple(slice(None, x) for x in field.shape[:-1])
+    grid = tuple(slice(x) for x in field.shape[:-1])
     position_field = np.mgrid[grid].astype(field.dtype)
     position_field = np.moveaxis(position_field, 0, -1) * spacing + field
 
     # get jacobian matrices
-    jacobian = np.empty(field.shape[:-1] + (field.shape[-1],)*2, dtype=field.dtype)
+    jacobian = np.empty(field.shape + (field.shape[-1],), dtype=field.dtype)
     for iii in range(field.shape[-1]):
-        grad = np.moveaxis( np.array( np.gradient(position_field[..., iii], *spacing) ), 0, -1)
-        jacobian[..., iii, :] = np.ascontiguousarray(grad)
+        sigma = spacing.min() / spacing[iii]
+        jacobian[..., iii] = gaussian_filter(position_field, sigma, 1, axes=iii) / (2*spacing[iii])
     return jacobian
 
 

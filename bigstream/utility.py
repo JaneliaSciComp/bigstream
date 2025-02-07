@@ -4,10 +4,7 @@ import psutil
 import SimpleITK as sitk
 import zarr
 
-from distributed import Lock
-from scipy.spatial.transform import Rotation
 from zarr import blosc
-from zarr.indexing import BasicIndexer
 
 
 def skip_sample(image, spacing, ss_spacing):

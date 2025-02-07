@@ -1,15 +1,22 @@
 import functools
+import logging
+import bigstream.transform as bst
 import numpy as np
 import bigstream.utility as ut
-import bigstream.io_utility as io_utility
-import sys
 import time
 import traceback
 
-import bigstream.transform as bst
-from bigstream.align import alignment_pipeline
-from dask.distributed import as_completed, Semaphore
+from dask.distributed import as_completed, MultiLock
 from itertools import product
+
+from .align import alignment_pipeline
+from .transform import apply_transform_to_coordinates
+from .distributed_utils import throttle_method_invocations
+from .image_data import as_image_data
+from .io_utility import read_block as io_utility_read_block
+
+
+logger = logging.getLogger(__name__)
 
 
 def _prepare_compute_block_transform_params(block_info,
@@ -21,13 +28,14 @@ def _prepare_compute_block_transform_params(block_info,
                                             mov_fullmask_shape=None,
                                             static_transform_list=[]):
 
-    print(f'{time.ctime(time.time())} Prepare block coords',
-          block_info, flush=True)
+    logger.info(f'Prepare block coords {block_info}')
 
-    block_index, fix_block_coords = block_info
+    block_index, fix_block_coords, fix_block_neighbors = block_info
     (fix_block_voxel_coords,
      fix_block_phys_coords) = _get_block_corner_coords(fix_block_coords,
                                                        fix_spacing)
+    logger.debug(f'Block index: {block_index} - ' +
+                 f'corner physical coords: {fix_block_phys_coords}')
 
     # parse initial transforms
     # recenter affines, read deforms, apply transforms to crop coordinates
@@ -59,6 +67,12 @@ def _prepare_compute_block_transform_params(block_info,
     # get moving image origin
     new_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
 
+    logger.debug(f'Block {block_index} :' +
+                 f'fix voxel coords {fix_block_voxel_coords},' +
+                 f'fix phys coords {fix_block_phys_coords} -> ' +
+                 f'mov coords {mov_slices},' +
+                 f'mov phys coords {mov_block_phys_coords}')
+
     # read masks
     fix_blockmask_coords, mov_blockmask_coords = None, None
     if fix_fullmask_shape is not None:
@@ -78,12 +92,12 @@ def _prepare_compute_block_transform_params(block_info,
                                     for a, b in zip(mov_mask_start,
                                                     mov_mask_stop))
 
-    print(f'{time.ctime(time.time())} Return blocks data',
-          block_index, fix_block_coords,
-          flush=True)
+    logger.debug('Return blocks data: '+ 
+                 f'{block_index}, {fix_block_coords}, {new_origin}')
 
     return (block_index,
             fix_block_coords,
+            fix_block_neighbors,
             mov_slices,
             fix_blockmask_coords,
             mov_blockmask_coords,
@@ -91,22 +105,41 @@ def _prepare_compute_block_transform_params(block_info,
             block_transform_list)
 
 
-def _read_image_block(extract_block_coords_method, blocks_info, image=None):
+def _read_blocks_for_processing(blocks_info,
+                                fix=None,
+                                mov=None,
+                                fix_mask=None,
+                                mov_mask=None):
     # blocks_info is a tuple containing the fields below 
     # and the extract method knows to get the coords of the block to be read
     #    block_index,
     #    fix_block_coords,
-    #    mov_block,
+    #    fix_block_neighbors,
+    #    mov_block_coords,
     #    fix_mask_block_coords,
     #    mov_mask_block_coords,
     #    origin,
     #    block_transforms
-    block_coords = extract_block_coords_method(blocks_info)
-    print(f'{time.ctime(time.time())} '
-          f'Read block {blocks_info} -> {block_coords}',
-          f'using {extract_block_coords_method}', flush=True)
+    logger.debug(f'Read blocks: {blocks_info}')
+    fix_block = _read_block(blocks_info[1], fix)
+    mov_block = _read_block(blocks_info[3], mov)
+    fix_mask_block = _read_block(blocks_info[4], fix_mask)
+    mov_mask_block = _read_block(blocks_info[5], mov_mask)
 
-    return io_utility.read_block(block_coords, image=image)
+    return (blocks_info,
+            fix_block,
+            mov_block,
+            fix_mask_block,
+            mov_mask_block)
+
+
+def _read_block(block_coords, image_data):
+    image_repr = as_image_data(image_data)
+    if image_repr is not None:
+        return io_utility_read_block(block_coords,
+                                     image=image_repr.image_array,
+                                     image_path=image_repr.image_path,
+                                     image_subpath=image_repr.image_subpath)
 
 
 # get image block corners both in voxel and physical units
@@ -153,95 +186,114 @@ def _get_moving_block_coords(fix_shape,
 
 
 def _compute_block_transform(compute_transform_params,
-                             fix_block,
-                             mov_block,
-                             fix_mask_block,
-                             mov_mask_block,
                              fix_spacing=None,
                              mov_spacing=None,
                              block_size=None,
                              block_overlaps=None,
                              nblocks=None,
+                             output_transform=None,
                              align_steps=[]):
     start_time = time.time()
-    (block_index,
-     block_coords,
-     _, # mov_block_coords,
-     _, # fix_mask_block_coords,
-     _, # mov_mask_block_coords,
-     new_origin_phys,
-     static_block_transform_list) = compute_transform_params
-    print(f'{time.ctime(start_time)} Compute block transform',
-          f'{block_index} -> {block_coords}',
-          flush=True)
-
+    ((block_index,
+      block_coords,
+      block_neighbors,
+      _, # mov_block_coords,
+      _, # fix_mask_block_coords,
+      _, # mov_mask_block_coords,
+      new_origin_phys,
+      static_block_transform_list,
+     ),
+     fix_block,
+     mov_block,
+     fix_mask_block, # this can be a mask descriptor
+     mov_mask_block, # this can be a mask descriptor
+     ) = compute_transform_params
+    logger.debug(f'Compute block transform' +
+                 f'{block_index}: {block_coords}, {new_origin_phys}' +
+                 f'fix shape: {fix_block.shape}, ' +
+                 f'mov_shape: {mov_block.shape}' +
+                 f'using {len(static_block_transform_list)} transforms')
     # run alignment pipeline
+    # some pipeline algorithms use "fancy indexing" (list of tuples)
+    # which is not supported yet by dask arrays
+    # so in order to avoid the problem we materialize the fix and moving blocks
     transform = alignment_pipeline(
-        fix_block, mov_block,
-        fix_spacing, mov_spacing,
-        align_steps,
+        fix_block, mov_block, fix_spacing, mov_spacing, align_steps,
         fix_mask=fix_mask_block,
         mov_mask=mov_mask_block,
         mov_origin=new_origin_phys,
         static_transform_list=static_block_transform_list,
+        context=f'{block_index}',
     )
     # ensure transform is a vector field
     if len(transform.shape) == 2:
         transform = bst.matrix_to_displacement_field(
             transform, fix_block.shape, spacing=fix_spacing,
         )
+    # Finished computing transformation for current block_index
+    logger.info(f'Finished block alignment for ' +
+                f'{block_index}:{block_coords} -> {transform.shape}')
 
     weights = _get_transform_weights(block_index, 
                                      block_size,
                                      block_overlaps,
+                                     block_neighbors,
                                      nblocks)
 
     # handle end blocks
     if np.any(weights.shape != transform.shape[:-1]):
         crop = tuple(slice(0, s) for s in transform.shape[:-1])
-        print('Crop weights for', block_index,
-              'from', transform.shape, 'to', weights.shape,
-              flush=True)
+        logger.debug(f'Crop weights for {block_index}' + 
+                     f'from {transform.shape} to {weights.shape}')
         weights = weights[crop]
 
     # apply weights
+    logger.debug(f'Block {block_index} :' +
+                 f'Apply weights {weights.shape},' +
+                 f'to transform {transform.shape}')
     transform = transform * weights[..., None]
 
     end_time = time.time()
 
-    print(f'{time.ctime(end_time)} Finished computing block transform',
-          f'in {end_time-start_time}s',
-          block_index,
-          flush=True)
+    logger.debug(f'Finished computing {transform.shape}' +
+                 f'block  {block_index} transform in {end_time-start_time}s')
 
-    return block_index, block_coords, transform
+    if output_transform is not None:
+        lock_strs = []
+        for delta in product((-1, 0, 1,), repeat=3):
+            lock_strs.append(str(tuple(a + b for a, b in zip(block_index, delta))))
+        lock = MultiLock(lock_strs)
+        lock.acquire()
+        try:
+            # write result to disk
+            logger.info(f'Writing block {block_index} at {block_coords}')
+
+            output_block = output_transform[block_coords] + transform
+            output_transform[block_coords] = output_block
+
+            logger.info(f'Finished writing block {block_index} at {block_coords}')
+        finally:
+            # release the lock
+            lock.release()
+
+    return block_index, block_coords
 
 
 def _get_transform_weights(block_index,
                            block_size,
                            block_overlaps,
+                           block_neighbors,
                            nblocks):
-    print(f'{time.ctime(time.time())} Adjust transform',
-          block_index,
-          flush=True)
-
-    neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=3)))
-    block_neighbors = {tuple(o): (all(x <= y 
-                                      for x, y in zip(tuple(block_index + o),
-                                                      nblocks)),)
-                       for o in neighbor_offsets}
+    logger.debug(f'Adjust transform for {block_index}')
 
     # create the standard weights array
     core = tuple(x - 2*y + 2 for x, y in zip(block_size, block_overlaps))
     pad = tuple((2*y - 1, 2*y - 1) for y in block_overlaps)
-    weights = np.pad(np.ones(core, dtype=np.float64),
-                        pad, mode='linear_ramp')
+    weights = np.pad(np.ones(core, dtype=np.float64), pad, mode='linear_ramp')
 
     # rebalance if any neighbors are missing
     if not np.all(list(block_neighbors.values())):
-        print(f'{time.ctime(time.time())} Rebalance transform weights',
-            block_index,
-            flush=True)
+        logger.debug(f'Rebalance transform weights for {block_index}')
         # define overlap slices
         slices = {}
         slices[-1] = tuple(slice(0, 2*y) for y in block_overlaps)
@@ -258,51 +310,28 @@ def _get_transform_weights(block_index,
                 missing_weights[region] += weights[neighbor_region]
 
         # rebalance the weights
-        weights_adjustment = 1 - missing_weights
-        weights = np.divide(weights, weights_adjustment,
-                            out=np.zeros_like(weights),
-                            where=weights_adjustment != 0).astype(np.float32)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            weights = weights / (1 - missing_weights)
+        weights[np.isnan(weights)] = 0.  # edges of blocks are 0/0
+        weights = weights.astype(np.float32)
 
     # crop weights if block is on edge of domain
     block_dim = len(block_index)
-    region = [slice(None),]*block_dim
     for i in range(block_dim):
+        region = [slice(None),]*block_dim
         if block_index[i] == 0:
             region[i] = slice(block_overlaps[i], None)
-        elif block_index[i] == nblocks[i] - 1:
+            weights = weights[tuple(region)]
+        if block_index[i] == nblocks[i] - 1:
             region[i] = slice(None, -block_overlaps[i])
+            weights = weights[tuple(region)]
 
-    return weights[tuple(region)]
-
-
-def _write_block_transform(block_transform_results,
-                           output_transform=None):
-    start_time = time.time()
-    (block_index,
-     block_slice_coords,
-     block_transform) = block_transform_results
-    print(f'{time.ctime(start_time)} Write block transform results',
-          block_index,
-          flush=True)
-
-    if output_transform is not None:
-        output_transform[block_slice_coords] += block_transform
-        print(f'{time.ctime(time.time())} Updated vector field for block: ',
-                block_index,
-                'at', block_slice_coords,
-                flush=True)
-
-    end_time = time.time()
-    print(f'{time.ctime(end_time)} Finished writing vector field for block: ',
-            block_index,
-            flush=True)
-
-    return block_index, block_slice_coords
+    return weights
 
 
 def distributed_alignment_pipeline(
-    fix,
-    mov,
+    fix_image,
+    mov_image,
     fix_spacing,
     mov_spacing,
     steps,
@@ -328,10 +357,10 @@ def distributed_alignment_pipeline(
 
     Parameters
     ----------
-    fix : ndarray (zarr.Array)
+    fix_image : ImageData
         the fixed image
 
-    mov : ndarray (zarr.Array)
+    mov_image : ImageData
         the moving image; `fix.shape` must equal `mov.shape`
         I.e. typically piecewise affine alignment is done after
         a global affine alignment wherein the moving image has
@@ -366,17 +395,31 @@ def distributed_alignment_pipeline(
     overlap_factor : float in range [0, 1] (default: 0.5)
         Block overlap size as a percentage of block size
 
-    fix_mask : binary ndarray (zarr.Array) (default: None)
+    fix_mask : ImageData, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
-        Assumed to have the same domain as the fixed image, though sampling
-        can be different. I.e. the origin and span are the same (in physical
-        units) but the number of voxels can be different.
+        If an ImageData, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
 
-    mov_mask : binary ndarray (zarr.Array) (default: None)
+        If an ImageData, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
+
+    mov_mask : ImageData, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the moving image
-        Assumed to have the same domain as the moving image, though sampling
-        can be different. I.e. the origin and span are the same (in physical
-        units) but the number of voxels can be different.
+        If an ImageData, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+        If an ImageData, it is assumed to have the same domain as the fixed
+        image, though sampling can be different. I.e. the origin and span
+        are the same (in phyiscal units) but the number of voxels can
+        be different.
 
     static_transform_list : list of numpy arrays (default: [])
         Transforms applied to moving image before applying query transform
@@ -386,10 +429,6 @@ def distributed_alignment_pipeline(
 
     output_transform : ndarray (default: None)
         Output transform
-
-    write_group_interval : float (default: 30.)
-        The time each of the 27 mutually exclusive write block groups have
-        each round to write finished data.
 
     kwargs : any additional arguments
         Arguments that will apply to all alignment steps. These are overruled by
@@ -405,158 +444,142 @@ def distributed_alignment_pipeline(
 
     # there's no need to convert anything to a zarr array 
     # since they are already zarr arrays
+    logger.info(f'Run distributed alignment with: {steps}')
 
     # determine fixed image slices for blocking
-    fix_shape = fix.shape
-    mov_shape = mov.shape
+    fix_shape_arr = fix_image.shape_arr
+    mov_shape_arr = mov_image.shape_arr
+    # fix/mov mask shape gets set only the corresponding masks
+    # refer to an image array (either ImageData or ndarray)
+    fix_mask_image = as_image_data(fix_mask)
+    mov_mask_image = as_image_data(mov_mask)
+    fix_mask_shape_arr = (fix_mask_image.shape_arr
+                          if fix_mask_image is not None
+                          else None)
+    mov_mask_shape_arr = (mov_mask_image.shape_arr
+                          if mov_mask_image is not None
+                          else None)
+
     block_partition_size = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix_shape) / block_partition_size).astype(int)
+    nblocks = np.ceil(np.array(fix_shape_arr) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
-    
-    fix_blocks_infos = []
+    logger.info(f'Partition {fix_shape_arr} into {nblocks} using' +
+                f'{block_partition_size} blocksize and {overlaps} overlaps')
+    fix_blocks_ids = []
+    fix_blocks_coords = []
+    fix_blocks_neighbors = []
     for (i, j, k) in np.ndindex(*nblocks):
         start = block_partition_size * (i, j, k) - overlaps
         stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
-        stop = np.minimum(fix_shape, stop)
+        stop = np.minimum(fix_shape_arr, stop)
         block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
         if fix_mask is not None:
-            start = block_partition_size * (i, j, k)
-            stop = start + block_partition_size
-            ratio = np.array(fix_mask.shape) / fix_shape
-            start = np.round(ratio * start).astype(int)
-            stop = np.round(ratio * stop).astype(int)
-            mask_crop = fix_mask[tuple(slice(a, b)
-                                       for a, b in zip(start, stop))]
-            if (np.sum(mask_crop) / np.prod(mask_crop.shape) <
-                foreground_percentage):
-                foreground = False
+            logger.info(f'Use mask for block {(i, j, k)}')
+            mask_start = block_partition_size * (i, j, k)
+            mask_stop = mask_start + block_partition_size
+            if fix_mask_image is not None:
+                ratio = fix_mask_shape_arr / fix_shape_arr
+            else:
+                ratio = 1
+            mask_start = np.round(ratio * mask_start).astype(int)
+            mask_stop = np.round(ratio * mask_stop).astype(int)
+            fix_mask_block_coords = tuple(slice(a, b)
+                                                for a, b in zip(mask_start, mask_stop))
+            if fix_mask_image is not None:
+                # mask is provided as an image
+                fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
+                foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
+                logger.debug(f'Block {(i, j, k)} fg ratio: {foreground_ratio}')
+                if foreground_ratio < foreground_percentage:
+                    logger.debug(f'Ignore ndarray masked block {(i, j, k)}')
+                    foreground = False
+            elif isinstance(fix_mask, (tuple, list)):
+                # mask is provided as a tuple
+                fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
+                fix_mask_crop = np.isin(fix_mask_crop, fix_mask, invert=True).astype(np.uint8)
+                foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
+                logger.debug(f'Block {(i, j, k)} fg ratio: {foreground_ratio}')
+                if foreground_ratio < foreground_percentage:
+                    logger.debug(f'Ignore tuple masked block {(i, j, k)}')
+                    foreground = False
 
         if foreground:
-            fix_blocks_infos.append(((i, j, k,), block_slice))
+            fix_blocks_ids.append((i, j, k,))
+            fix_blocks_coords.append(block_slice)
+
+    neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=fix_image.ndim)))
+    for block_index in fix_blocks_ids:
+        block_neighbors = { tuple(o): tuple(block_index + o) in fix_blocks_ids
+                                      for o in neighbor_offsets }
+        fix_blocks_neighbors.append(block_neighbors)
+
+    fix_blocks_infos = list(zip(fix_blocks_ids,
+                                fix_blocks_coords,
+                                fix_blocks_neighbors))
 
     # establish all keyword arguments
     block_align_steps = [(a, {**kwargs, **b}) for a, b in steps]
 
-    print(f'{time.ctime(time.time())} Prepare params for',
-          len(fix_blocks_infos), 
-          f'bocks for a {fix_shape} volume',
-          flush=True)
+    logger.info(f'Prepare params for {len(fix_blocks_infos)} ' +
+                f'blocks for a {fix_shape_arr} volume')
 
-    partial_prepare_blocks = functools.partial(
+    prepare_blocks_method = functools.partial(
         _prepare_compute_block_transform_params,
-        fix_shape=fix_shape,
-        mov_shape=mov_shape,
+        fix_shape=fix_shape_arr,
+        mov_shape=mov_shape_arr,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
-        fix_fullmask_shape=(fix_mask.shape if
-                            fix_mask  is not None
-                            else None),
-        mov_fullmask_shape=(mov_mask.shape if
-                            mov_mask  is not None
-                            else None),
+        fix_fullmask_shape=fix_mask_shape_arr,
+        mov_fullmask_shape=mov_mask_shape_arr,
         static_transform_list=static_transform_list,
     )
 
-    if max_tasks > 0:
-        print(f'Limit segmentation tasks to {max_tasks}', flush=True)
-        tasks_semaphore = Semaphore(max_leases=max_tasks,
-                                    name='AlignLimiter')
-        prepare_blocks_method = _throttle(partial_prepare_blocks, tasks_semaphore)
-    else:
-        prepare_blocks_method = partial_prepare_blocks
-
     blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
 
-    read_fix_image_blocks = functools.partial(
-        _read_image_block,
-        lambda bi: bi[1], # fix_block_coords
-        image=fix,
-    )
-    fix_blocks = cluster_client.map(
-        read_fix_image_blocks,
+    blocks_to_process = cluster_client.map(
+        _read_blocks_for_processing,
         blocks,
+        fix=fix_image,
+        mov=mov_image,
+        fix_mask=fix_mask,
+        mov_mask=mov_mask,
     )
 
-    read_mov_image_blocks = functools.partial(
-        _read_image_block,
-        lambda bi: bi[2], # mov_block_coords
-        image=mov,
-    )
-    mov_blocks = cluster_client.map(
-        read_mov_image_blocks,
-        blocks,
-    )
+    compute_block_transform = throttle_method_invocations(
+        _compute_block_transform, max_tasks)
 
-    read_fix_mask_blocks = functools.partial(
-        _read_image_block,
-        lambda bi: bi[3], # fix_mask_block_coords
-        image=fix_mask,
-    )
-    fix_mask_blocks = cluster_client.map(
-        read_fix_mask_blocks,
-        blocks,
-    )
-
-    read_mov_mask_blocks = functools.partial(
-        _read_image_block,
-        lambda bi: bi[4], # mov_mask_block_coords
-        image=mov_mask,
-    )
-    mov_mask_blocks = cluster_client.map(
-        read_mov_mask_blocks,
-        blocks,
-    )
-
-    print(f'{time.ctime(time.time())} Submit compute transform for',
-          len(blocks), 'bocks', flush=True)
-    block_transform_res = cluster_client.map(_compute_block_transform,
-                                             blocks,
-                                             fix_blocks,
-                                             mov_blocks,
-                                             fix_mask_blocks,
-                                             mov_mask_blocks,
+    logger.info(f'Submit {block_align_steps} for {len(blocks)} blocks')
+    block_transform_res = cluster_client.map(compute_block_transform,
+                                             blocks_to_process,
                                              fix_spacing=fix_spacing,
                                              mov_spacing=mov_spacing,
                                              block_size=block_partition_size,
                                              block_overlaps=overlaps,
                                              nblocks=nblocks,
-                                             align_steps=block_align_steps)
+                                             align_steps=block_align_steps,
+                                             output_transform=output_transform)
+    logger.info('Collect compute transform results for ' +
+                f'{len(block_transform_res)} blocks')
 
-    res = _collect_results(block_transform_res, output_transform=output_transform)
-    print(f'{time.ctime(time.time())} Distributed alignment completed successfully',
-            flush=True)
+    res = _collect_results(block_transform_res)
+    logger.info(f'Distributed alignment completed successfully')
     return res
 
 
-def _throttle(m, sem):
-    def throttled_m(*args, **kwargs):
-        with sem:
-            print(f'{time.ctime(time.time())} Secured slot to run {m}',
-                  flush=True)
-            try:
-                return m(*args, **kwargs)
-            finally:
-                print(f'{time.ctime(time.time())} Release slot used for {m}',
-                      flush=True)
-
-    return throttled_m
-
-
-def _collect_results(futures_res, output_transform=None):
+def _collect_results(futures):
     res = True
-    for batch in as_completed(futures_res, with_results=True).batches():
-        for f,result in batch:
-            if f.cancelled():
-                exc = f.exception()
-                print(f'{time.ctime(time.time())} Block exception:', exc,
-                    file=sys.stderr, flush=True)
-                tb = f.traceback()
-                traceback.print_tb(tb)
-                res = False
-            else:
-                _write_block_transform(result,
-                                    output_transform=output_transform)
+
+    for f, r in as_completed(futures, with_results=True):
+        if f.cancelled():
+            exc = f.exception()
+            logger.error(f'Block exception: {exc}')
+            tb = f.traceback()
+            traceback.print_tb(tb)
+            res = False
+        else:
+            logger.info(f'Finished computing deformation field for {r}')
+
     return res

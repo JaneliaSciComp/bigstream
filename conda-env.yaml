@@ -1,18 +1,18 @@
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - flatten_json
-  - zarr=2.13.3
+  - zarr=2.16.1
   - numcodecs>=0.9.1
-  - numpy>=1.26.0
+  - numpy>=1.26.0,<2
   - scikit-image>=0.21.0
   - tifffile
   - pip
+  - pynrrd
+  - pydantic=2.7.1
   - pip:
-    - argparse
-    - fishspot>=0.3.0
-    - opencv-python>=4.5.5.64
-    - pynrrd
-    - SimpleITK>=2.2.1
-    - git+https://github.com/GFleishman/ClusterWrap.git@ecdcb7a
+      - argparse
+      - fishspot>=0.3.0
+      - opencv-python>=4.10.0.84
+      - simpleitk==2.3.1
+      - git+https://github.com/GFleishman/ClusterWrap.git@fa718ac49

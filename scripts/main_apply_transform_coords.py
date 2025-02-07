@@ -1,33 +1,14 @@
 import argparse
 import numpy as np
 import bigstream.io_utility as io_utility
-import yaml
 
-from flatten_json import flatten
 from dask.distributed import (Client, LocalCluster)
+from bigstream.cli import (inttuple, floattuple, stringlist)
+from bigstream.configure_bigstream import (configure_logging)
 from bigstream.distributed_transform import (
     distributed_apply_transform_to_coordinates)
-
-
-def _inttuple(arg):
-    if arg is not None and arg.strip():
-        return tuple([int(d) for d in arg.split(',')])
-    else:
-        return None
-
-
-def _floattuple(arg):
-    if arg is not None and arg.strip():
-        return tuple([float(d) for d in arg.split(',')])
-    else:
-        return None
-
-
-def _stringlist(arg):
-    if arg is not None and arg.strip():
-        return list(filter(lambda x: x, [s.strip() for s in arg.split(',')]))
-    else:
-        return []
+from bigstream.configure_dask import (ConfigureWorkerPlugin,
+                                      load_dask_config)
 
 
 def _define_args():
@@ -37,12 +18,12 @@ def _define_args():
     args_parser.add_argument('--pixel-resolution',
                              dest='pixel_resolution',
                              metavar='xres,yres,zres',
-                             type=_floattuple,
+                             type=floattuple,
                              help='Pixel resolution')
     args_parser.add_argument('--downsampling',
                              dest='downsampling',
                              metavar='xfactor,yfactor,zfactor',
-                             type=_inttuple,
+                             type=inttuple,
                              help='Downsampling factors')
     args_parser.add_argument('--input-volume', dest='input_volume',
                              help='Path to input volume')
@@ -54,7 +35,7 @@ def _define_args():
 
     args_parser.add_argument('--affine-transformations',
                              dest='affine_transformations',
-                             type=_stringlist,
+                             type=stringlist,
                              help='Affine transformations')
 
     args_parser.add_argument('--local-transform',
@@ -67,7 +48,7 @@ def _define_args():
                              help='Local transformation dataset to be applied')
     args_parser.add_argument('--processing-blocksize',
                              dest='processing_blocksize',
-                             type=_inttuple,
+                             type=inttuple,
                              help='Processing block size')
     args_parser.add_argument('--partition-size',
                              dest='partition_size',
@@ -83,11 +64,23 @@ def _define_args():
                              type=str, default=None,
                              help='YAML file containing dask configuration')
 
+    args_parser.add_argument('--worker-cpus', dest='worker_cpus',
+                             type=int, default=0,
+                             help='Number of cpus allocated to a dask worker')
+
+    args_parser.add_argument('--logging-config', dest='logging_config',
+                             type=str,
+                             help='Logging configuration')
+    args_parser.add_argument('--verbose',
+                             dest='verbose',
+                             action='store_true',
+                             help='Set logging level to verbose')
+
     return args_parser
 
 
-def _get_voxel_spacing(pixel_resolution, downsampling_factors,
-                       input_volume_path, input_dataset):
+def _get_coords_spacing(pixel_resolution, downsampling_factors,
+                        input_volume_path, input_dataset):
     if (pixel_resolution is not None and
         downsampling_factors is not None):
         voxel_spacing = (np.array(pixel_resolution) * 
@@ -98,11 +91,12 @@ def _get_voxel_spacing(pixel_resolution, downsampling_factors,
         return voxel_spacing[::-1] # zyx order
 
     if input_volume_path is not None:
-        _, volume_attrs = io_utility.open(
+        volume_attrs = io_utility.read_attributes(
             input_volume_path, input_dataset)
-        return io_utility.get_voxel_spacing(volume_attrs)
+        voxel_spacing = io_utility.get_voxel_spacing(volume_attrs)
+        return voxel_spacing[::-1] if voxel_spacing is not None else None
     else:
-        print('Not enough information to get voxel spacing')
+        logger.info('Not enough information to get voxel spacing')
         return None
 
 
@@ -119,17 +113,15 @@ def _run_apply_transform(args):
     zyx_coords[:, 0:3] = input_coords[:, [2, 1, 0]]
     zyx_coords[:, 3:] = input_coords[:, 3:]
 
-    if (args.dask_config):
-        import dask.config
-        with open(args.dask_config) as f:
-            dask_config = flatten(yaml.safe_load(f))
-            dask.config.set(dask_config)
-
+    load_dask_config(args.dask_config)
+    worker_config = ConfigureWorkerPlugin(args.logging_config,
+                                          args.verbose,
+                                          worker_cpus=args.worker_cpus)
     if args.dask_scheduler:
         cluster_client = Client(address=args.dask_scheduler)
     else:
         cluster_client = Client(LocalCluster())
-
+    cluster_client.register_plugin(worker_config, name='WorkerConfig')
     # read local deform, but ignore attributes as they are not needed
     local_deform, _ = io_utility.open(args.local_transform,
                                       args.local_transform_subpath)
@@ -148,11 +140,11 @@ def _run_apply_transform(args):
         else:
             affine_transforms_list = []
 
-        voxel_spacing = _get_voxel_spacing(args.pixel_resolution,
-                                           args.downsampling,
-                                           args.input_volume,
-                                           args.input_dataset)
-        print('Voxel spacing for transform coords:', voxel_spacing)
+        voxel_spacing = _get_coords_spacing(args.pixel_resolution,
+                                            args.downsampling,
+                                            args.input_volume,
+                                            args.input_dataset)
+        logger.info(f'Voxel spacing for transform coords: {voxel_spacing}')
         warped_zyx_coords = distributed_apply_transform_to_coordinates(
             zyx_coords,
             affine_transforms_list + [local_deform], # transform_list
@@ -164,16 +156,24 @@ def _run_apply_transform(args):
         # flip z,y,x back to x,y,z before writing them to file
         output_coords[:, 0:3] = warped_zyx_coords[:, [2, 1, 0]]
         output_coords[:, 3:] = warped_zyx_coords[:, 3:]
-        print('Save warped coords to', args.output_coords, flush=True)
+        logger.info(f'Save warped coords to {args.output_coords}')
         np.savetxt(args.output_coords, output_coords, delimiter=',')
         return args.output_coords
     else:
         return None
 
 
-if __name__ == '__main__':
+def main():
     args_parser = _define_args()
     args = args_parser.parse_args()
-    print('Invoked transformation:', args, flush=True)
+    # prepare logging
+    global logger
+    logger = configure_logging(args.logging_config, args.verbose)
+
+    logger.info(f'Invoked transformation: {args}')
 
     _run_apply_transform(args)
+
+
+if __name__ == '__main__':
+    main()

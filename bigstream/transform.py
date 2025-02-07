@@ -1,9 +1,13 @@
+import logging
 import numpy as np
 import SimpleITK as sitk
 import bigstream.utility as ut
 from bigstream.configure_irm import interpolator_switch
 import os
 from scipy.ndimage import map_coordinates, zoom, gaussian_filter
+
+
+logger = logging.getLogger(__name__)
 
 
 ######################### APPLYING TRANSFORMS #################################
@@ -98,7 +102,13 @@ def apply_transform(
 
     # set global number of threads
     ncores = ut.get_number_of_cores()
-    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(2*ncores)
+    if 'ITK_THREADS' in os.environ and os.environ['ITK_THREADS']:
+        nthreads = min(ncores, int(os.environ["ITK_THREADS"]))
+    elif 'NO_HYPERTHREADING' in os.environ:
+        nthreads = ncores
+    else:
+        nthreads = 2*ncores
+    sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(nthreads)
 
     # format transform spacing
     fix_spacing = np.array(fix_spacing)
@@ -118,7 +128,7 @@ def apply_transform(
 
     # set up resampler object
     resampler = sitk.ResampleImageFilter()
-    resampler.SetNumberOfThreads(2*ncores)
+    resampler.SetNumberOfThreads(nthreads)
 
     # set reference data
     if isinstance(fix, tuple):
@@ -233,7 +243,7 @@ def compose_displacement_vector_fields(
     second_field,
     first_spacing,
     second_spacing,
-    **kwargs,
+    extrapolate_with_nn=True
 ):
     """
     Compose two displacement vector fields into a single field
@@ -277,7 +287,7 @@ def compose_displacement_vector_fields(
             second_field[..., iii], first_field[..., iii],
             second_spacing, first_spacing,
             transform_list=[second_field,],
-            **kwargs,
+            extrapolate_with_nn=extrapolate_with_nn,
         )
 
     # combine warped first field and second field
@@ -1196,5 +1206,3 @@ def transform_list_to_composite_transform(transform_list, spacing=None, origin=N
             t = field_to_displacement_field_transform(t, a, b)
         transform.AddTransform(t)
     return transform
-
-

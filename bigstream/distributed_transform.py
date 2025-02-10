@@ -538,6 +538,7 @@ def distributed_invert_displacement_vector_field(
         spacing=spacing,
         blocksize=blocksize_array,
         blockoverlaps=overlap,
+        step=step,
         iterations=iterations,
         sqrt_order=sqrt_order,
         sqrt_step=sqrt_step,

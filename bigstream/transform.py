@@ -540,6 +540,7 @@ def invert_displacement_vector_field(
     if pad > 0:
         pad = tuple(round(pad*x) for x in root.shape[:-1])
         root = np.pad(root, [(x, x) for x in pad] + [(0, 0),], mode='linear_ramp')
+        pad_crop_full = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad)
 
     # create a store for smoothed fields
     root_smooth_store = {}
@@ -561,6 +562,7 @@ def invert_displacement_vector_field(
 
         # resample
         spacing_level = np.array(spacing)
+        if np.any(pad): pad_crop = pad_crop_full
         if shrink is not None:
             shrink_tuple = tuple(x/shrink for x in spacing) + (1,)
             root_level = zoom(root_level, shrink_tuple,  mode='reflect', order=1)
@@ -713,6 +715,7 @@ def displacement_field_composition_square_root(
     if pad > 0:
         pad = tuple(round(pad*x) for x in field.shape[:-1])
         field = np.pad(field, [(x, x) for x in pad] + [(0, 0),], mode='linear_ramp')
+        pad_crop_full = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad)
 
     # create a store for smoothed fields
     field_smooth_store = {}
@@ -736,6 +739,7 @@ def displacement_field_composition_square_root(
 
         # resample
         spacing_level = np.array(spacing)
+        if np.any(pad): pad_crop = pad_crop_full
         if shrink is not None:
             shrink_tuple = tuple(x/shrink for x in spacing) + (1,)
             field_level = zoom(field_level, shrink_tuple,  mode='reflect', order=1)

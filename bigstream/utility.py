@@ -77,7 +77,8 @@ def numpy_to_sitk(image, spacing=None, origin=None, vector=False):
     logger.info(f'Spacing used for {image.shape} image: {spacing} ({type(spacing)})')
     image = sitk.GetImageFromArray(image, isVector=vector)
     if spacing is None: spacing = np.ones(image.GetDimension())
-    image.SetSpacing(tuple(spacing[::-1]))
+    image_spacing = spacing[::-1].astype(float)
+    image.SetSpacing(image_spacing)
     if origin is None: origin = np.zeros(image.GetDimension())
     image.SetOrigin(origin[::-1])
     return image

@@ -598,9 +598,11 @@ def invert_displacement_vector_field(
             if verbose:
                 mean_residual = residual_magnitudes.mean()
                 max_residual = residual_magnitudes.max()
-                print(f'FITTING INVERSE: level-iteration: {level}-{i}    ' + \
-                      f'residual|mean|max: {residual_magnitude:.3f}|' + \
-                      f'{mean_residual:.3f}|{max_residual:.3f}')
+                logger.debug((
+                    f'FITTING INVERSE: level-iteration: {level}-{i}    '
+                    'residual|mean|max: '
+                    f'{residual_magnitude:.3f}|{mean_residual:.3f}|{max_residual:.3f}'
+                ))
 
     # restore size
     if inv.shape != root.shape:
@@ -713,6 +715,8 @@ def displacement_field_composition_square_root(
 
     # loop over scale levels
     level_values = zip(iterations, shrink_spacings, smooth_sigmas)
+    logger.info(f'Displacement vector leveled iterations: {level_values}')
+
     for level, (iterations_level, shrink, sigma) in enumerate(level_values):
 
         # smooth
@@ -773,10 +777,11 @@ def displacement_field_composition_square_root(
                     gradient += compose_transforms(
                         residual, root, spacing_level, spacing_level,
                     ) - root
-            if verbose:
-                print(f'FITTING ROOT: order: {order}: level-iteration: {level}-{i}  ' + \
-                      f'residual|mean|max: {residual_magnitude:.3f}|' + \
-                      f'{mean_residual:.3f}|{max_residual:.3f}')
+            logger.debug((
+                f'FITTING ROOT: order: {order}: level-iteration: {level}-{i}    '
+                'residual|mean|max: '
+                f'{residual_magnitude:.3f}|{mean_residual:.3f}|{max_residual:.3f} '
+            ))
 
     # recurse
     if order > 0:

@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import os
 import psutil
@@ -5,6 +6,9 @@ import SimpleITK as sitk
 import zarr
 
 from zarr import blosc
+
+
+logger = logging.getLogger(__name__)
 
 
 def skip_sample(image, spacing, ss_spacing):
@@ -70,11 +74,12 @@ def numpy_to_sitk(image, spacing=None, origin=None, vector=False):
         error += "Given array dtype is " + str(image.dtype)
         raise TypeError(error)
 
+    logger.info(f'Spacing used for {image.shape} image: {spacing} ({type(spacing)})')
     image = sitk.GetImageFromArray(image, isVector=vector)
     if spacing is None: spacing = np.ones(image.GetDimension())
-    image.SetSpacing(spacing[::-1])
+    image.SetSpacing(spacing[::-1].astype(float))
     if origin is None: origin = np.zeros(image.GetDimension())
-    image.SetOrigin(origin[::-1])
+    image.SetOrigin(origin[::-1].astype(float))
     return image
 
 # TODO: function that takes a numpy array and return transform type

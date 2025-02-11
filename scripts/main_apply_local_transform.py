@@ -83,9 +83,6 @@ def _define_args():
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
                              type=int, default=0,
                              help='Number of cpus allocated to a dask worker')
-    args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
-                             type=int, default=0,
-                             help='Maximum number of parallel cluster tasks if >= 0')
 
     args_parser.add_argument('--compression', dest='compression',
                              default='gzip',
@@ -200,7 +197,6 @@ def _run_apply_transform(args):
                 overlap_factor=args.blocks_overlap_factor,
                 aligned_data=output_dataarray,
                 transform_spacing=transform_spacing,
-                max_tasks=args.cluster_max_tasks,
             )
         finally:
             cluster_client.close()

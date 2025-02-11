@@ -10,8 +10,6 @@ from dask.distributed import as_completed, MultiLock
 from itertools import product
 
 from .align import alignment_pipeline
-from .transform import apply_transform_to_coordinates
-from .distributed_utils import throttle_method_invocations
 from .image_data import as_image_data
 from .io_utility import read_block as io_utility_read_block
 
@@ -343,7 +341,6 @@ def distributed_alignment_pipeline(
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
-    max_tasks=0,
     **kwargs,
 ):
     """
@@ -548,11 +545,8 @@ def distributed_alignment_pipeline(
         mov_mask=mov_mask,
     )
 
-    compute_block_transform = throttle_method_invocations(
-        _compute_block_transform, max_tasks)
-
     logger.info(f'Submit {block_align_steps} for {len(blocks)} blocks')
-    block_transform_res = cluster_client.map(compute_block_transform,
+    block_transform_res = cluster_client.map(_compute_block_transform,
                                              blocks_to_process,
                                              fix_spacing=fix_spacing,
                                              mov_spacing=mov_spacing,

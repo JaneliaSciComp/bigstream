@@ -73,9 +73,6 @@ def _define_args():
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
                              type=int, default=0,
                              help='Number of cpus allocated to a dask worker')
-    args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
-                             type=int, default=0,
-                             help='Maximum number of parallel cluster tasks if >= 0')
 
     args_parser.add_argument('--compression', dest='compression',
                              default='gzip',
@@ -171,7 +168,6 @@ def _run_compute_inverse(args):
             iterations=args.inv_iterations,
             sqrt_order=args.inv_order,
             sqrt_iterations=args.inv_sqrt_iterations,
-            max_tasks=args.cluster_max_tasks,
         )
     finally:
         cluster_client.close()

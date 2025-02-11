@@ -565,14 +565,22 @@ def _invert_block(block_coords,
     """
     Invert block function
     """
-    logger.info(f'Invert block: {block_coords}')
+    logger.info(f'Invert block: {block_coords}, spacing: {spacing}')
 
     block_vectorfield = full_vectorfield[block_coords]
+
+    if isinstance(iterations, int):
+        invert_iterations = (iterations,)
+    elif isinstance(iterations, tuple):
+        invert_iterations = iterations
+    else:
+        raise ValueError(f'Invalid iterations {iterations} of type {type(iterations)}')
+
     inverse_block = bs_transform.invert_displacement_vector_field(
         block_vectorfield,
         spacing,
         step=step,
-        iterations=iterations,
+        iterations=invert_iterations,
         sqrt_order=sqrt_order,
         sqrt_step=sqrt_step,
         sqrt_iterations=sqrt_iterations,

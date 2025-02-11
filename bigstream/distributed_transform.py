@@ -581,6 +581,7 @@ def _invert_block(block_coords,
         spacing,
         step=step,
         iterations=invert_iterations,
+        shrink_spacings=(1,)
         sqrt_order=sqrt_order,
         sqrt_step=sqrt_step,
         sqrt_iterations=sqrt_iterations,

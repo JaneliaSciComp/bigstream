@@ -710,6 +710,8 @@ def displacement_field_composition_square_root(
 
     # loop over scale levels
     level_values = zip(iterations, shrink_spacings, smooth_sigmas)
+    logger.info(f'Displacement vector leveled iterations: {level_values}')
+
     for level, (iterations_level, shrink, sigma) in enumerate(level_values):
 
         # smooth

@@ -527,13 +527,14 @@ def invert_displacement_vector_field(
         root = displacement_field_composition_square_root(
             field,
             spacing,
-            step=step/2,
+            step=step/2,  # root finding step should usually be half the inverse step
             iterations=iterations,
             shrink_spacings=shrink_spacings,
             smooth_sigmas=smooth_sigmas,
             step_cut_factor=step_cut_factor,
             pad=pad,
             verbose=verbose,
+            **kwargs,
         )
 
     # pad input

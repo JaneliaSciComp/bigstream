@@ -603,9 +603,11 @@ def invert_displacement_vector_field(
             if verbose:
                 mean_residual = residual_magnitudes.mean()
                 max_residual = residual_magnitudes.max()
-                print(f'FITTING INVERSE: level-iteration: {level}-{i}    ' + \
-                      f'residual|mean|max: {residual_magnitude:.3f}|' + \
-                      f'{mean_residual:.3f}|{max_residual:.3f}')
+                logger.debug((
+                    f'FITTING INVERSE: level-iteration: {level}-{i}    '
+                    'residual|mean|max: '
+                    f'{residual_magnitude:.3f}|{mean_residual:.3f}|{max_residual:.3f}'
+                ))
 
     # restore size
     if inv.shape != root.shape:
@@ -741,6 +743,13 @@ def displacement_field_composition_square_root(
             if np.any(pad):
                 pad_level = tuple(int(x*y)+1 for x, y in zip(pad, shrink_tuple))
                 pad_crop = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad_level)
+        else:
+            shrink_tuple = tuple(x for x in spacing) + (1,)
+            root_level = zoom(root_level, shrink_tuple,  mode='reflect', order=1)
+            spacing_level = np.array((1,) * len(spacing))
+            if np.any(pad):
+                pad_level = tuple(round(x*y) for x, y in zip(pad, shrink_tuple))
+                pad_crop = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad_level)
 
         # initialize
         if level > 0:
@@ -778,10 +787,11 @@ def displacement_field_composition_square_root(
                     gradient += compose_transforms(
                         residual, root, spacing_level, spacing_level,
                     ) - root
-            if verbose:
-                print(f'FITTING ROOT: order: {order}: level-iteration: {level}-{i}  ' + \
-                      f'residual|mean|max: {residual_magnitude:.3f}|' + \
-                      f'{mean_residual:.3f}|{max_residual:.3f}')
+            logger.debug((
+                f'FITTING ROOT: order: {order}: level-iteration: {level}-{i}    '
+                'residual|mean|max: '
+                f'{residual_magnitude:.3f}|{mean_residual:.3f}|{max_residual:.3f} '
+            ))
 
     # recurse
     if order > 0:

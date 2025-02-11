@@ -570,13 +570,6 @@ def invert_displacement_vector_field(
             if np.any(pad):
                 pad_level = tuple(round(x*y) for x, y in zip(pad, shrink_tuple))
                 pad_crop = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad_level)
-        else:
-            shrink_tuple = tuple(x for x in spacing) + (1,)
-            root_level = zoom(root_level, shrink_tuple,  mode='reflect', order=1)
-            spacing_level = np.array((1,) * len(spacing))
-            if np.any(pad):
-                pad_level = tuple(round(x*y) for x, y in zip(pad, shrink_tuple))
-                pad_crop = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad_level)
 
         # initialize
         if level > 0:
@@ -746,13 +739,6 @@ def displacement_field_composition_square_root(
             spacing_level = np.array((shrink,) * len(spacing))
             if np.any(pad):
                 pad_level = tuple(int(x*y)+1 for x, y in zip(pad, shrink_tuple))
-                pad_crop = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad_level)
-        else:
-            shrink_tuple = tuple(x for x in spacing) + (1,)
-            field_level = zoom(field_level, shrink_tuple,  mode='reflect', order=1)
-            spacing_level = np.array((1,) * len(spacing))
-            if np.any(pad):
-                pad_level = tuple(round(x*y) for x, y in zip(pad, shrink_tuple))
                 pad_crop = tuple(slice(x, -x) if x > 0 else slice(None) for x in pad_level)
 
         # initialize

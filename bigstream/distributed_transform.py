@@ -9,7 +9,6 @@ from itertools import product
 
 from dask.distributed import as_completed
 
-from .distributed_utils import throttle_method_invocations
 from .io_utility import read_block as io_utility_read_block
 
 
@@ -25,7 +24,6 @@ def distributed_apply_transform(
     overlap_factor=0.5,
     aligned_data=None,
     transform_spacing=None,
-    max_tasks=0,
     **kwargs,
 ):
     """
@@ -127,22 +125,19 @@ def distributed_apply_transform(
                                          image=mov_image.image_ndarray,
                                          image_path=mov_image.image_path,
                                          image_subpath=mov_image.image_subpath)
-    transform_block = throttle_method_invocations(
-        functools.partial(
-            _transform_single_block,
-            fix_block_reader,
-            mov_block_reader,
-            full_mov_shape=mov_shape_arr,
-            fix_spacing=fix_spacing,
-            mov_spacing=mov_spacing,
-            blocksize=blocksize_array,
-            blockoverlaps=overlaps,
-            transform_list=transform_list,
-            transform_spacing_list=transform_spacing_list,
-            output=aligned_data,
-            *kwargs,
-        ),
-        max_tasks
+    transform_block = functools.partial(
+        _transform_single_block,
+        fix_block_reader,
+        mov_block_reader,
+        full_mov_shape=mov_shape_arr,
+        fix_spacing=fix_spacing,
+        mov_spacing=mov_spacing,
+        blocksize=blocksize_array,
+        blockoverlaps=overlaps,
+        transform_list=transform_list,
+        transform_spacing_list=transform_spacing_list,
+        output=aligned_data,
+        *kwargs,
     )
 
     # apply transformation to all blocks
@@ -470,7 +465,6 @@ def distributed_invert_displacement_vector_field(
     sqrt_order=2,
     sqrt_step=0.5,
     sqrt_iterations=5,
-    max_tasks=0,
 ):
     """
     Numerically find the inverse of a larger-than-memory displacement vector field
@@ -531,7 +525,7 @@ def distributed_invert_displacement_vector_field(
         blocks_coords.append(coords)
 
     # invert all blocks
-    invert_block_method = functools.partial(
+    invert_block = functools.partial(
         _invert_block,
         full_vectorfield=vectorfield_array,
         inv_vectorfield_result=inv_vectorfield_array,
@@ -544,13 +538,8 @@ def distributed_invert_displacement_vector_field(
         sqrt_step=sqrt_step,
         sqrt_iterations=sqrt_iterations,
     )
-    invert_block =  throttle_method_invocations(
-        invert_block_method, max_tasks
-    )
     logger.info(f'Submit Invert for {len(blocks_coords)} blocks')
-    invert_res = cluster_client.map(invert_block,
-        blocks_coords,
-    )
+    invert_res = cluster_client.map(invert_block, blocks_coords)
     for f, r in as_completed(invert_res, with_results=True):
         if f.cancelled():
             exc = f.exception()

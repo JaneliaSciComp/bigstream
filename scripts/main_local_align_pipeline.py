@@ -72,9 +72,6 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
                              type=int, default=0,
                              help='Number of cpus allocated to a dask worker')
-    args_parser.add_argument('--cluster-max-tasks', dest='cluster_max_tasks',
-                             type=int, default=0,
-                             help='Maximum number of parallel cluster tasks if >= 0')
 
     args_parser.add_argument('--compression', dest='compression',
                              default='gzip',
@@ -105,7 +102,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          dask_scheduler_address=None,
                          dask_config_file=None,
                          worker_cpus=0,
-                         max_tasks=0,
                          logging_config=None,
                          compressor=None,
                          verbose=False,
@@ -212,7 +208,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             inv_order,
             cluster_client,
             compressor,
-            max_tasks,
         )
     finally:
         cluster_client.close()
@@ -239,8 +234,7 @@ def _align_local_data(fix_image: ImageData,
                       inv_sqrt_iterations,
                       inv_order,
                       cluster_client,
-                      compressor,
-                      cluster_max_tasks):
+                      compressor):
 
     fix_shape = fix_image.shape
     fix_ndim = fix_image.ndim
@@ -279,7 +273,6 @@ def _align_local_data(fix_image: ImageData,
             mov_mask=mov_mask,
             static_transform_list=global_affine_transforms,
             output_transform=transform,
-            max_tasks=cluster_max_tasks,
         )
         logger.info('Finished computing the deformation field ' +
                     f'{transform_path} for the local alignment of ' +
@@ -316,7 +309,6 @@ def _align_local_data(fix_image: ImageData,
             iterations=inv_iterations,
             sqrt_order=inv_order,
             sqrt_iterations=inv_sqrt_iterations,
-            max_tasks=cluster_max_tasks,
         )
     else:
         if not inv_transform_path:
@@ -354,7 +346,6 @@ def _align_local_data(fix_image: ImageData,
             overlap_factor=processing_overlap_factor,
             aligned_data=align,
             transform_spacing=transform_spacing,
-            max_tasks=cluster_max_tasks,
         )
     else:
         align = None
@@ -393,7 +384,6 @@ def main():
         dask_scheduler_address=args.dask_scheduler,
         dask_config_file=args.dask_config,
         worker_cpus=args.worker_cpus,
-        max_tasks=args.cluster_max_tasks,
         logging_config=args.logging_config,
         compressor=args.compression,
         verbose=args.verbose,

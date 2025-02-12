@@ -46,21 +46,42 @@ def _define_args():
                              type=float,
                              default=0.5,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
+
+    args_parser.add_argument('--inv-step',
+                             dest='inv_step',
+                             type=float,
+                             default=1.0,
+                             help="Inverse transformation step")
     args_parser.add_argument('--inv-iterations',
                              dest='inv_iterations',
-                             type=int,
-                             default=10,
-                             help="Number of iterations for getting the inverse transformation")
-    args_parser.add_argument('--inv-order',
-                             dest='inv_order',
-                             type=int,
-                             default=2,
-                             help="Order value for the inverse transformation")
-    args_parser.add_argument('--inv-sqrt-iterations',
-                             dest='inv_sqrt_iterations',
-                             type=int,
-                             default=10,
-                             help="Number of square root iterations for getting the inverse transformation")
+                             type=inttuple,
+                             default=(10,),
+                             help="Number of iterations for the inverse transformation")
+    args_parser.add_argument('--inv-shrink-spacings',
+                             dest='inv_shrink_spacings',
+                             type=floattuple,
+                             default=None,
+                             help="Inverse shrink spacings")
+    args_parser.add_argument('--inv-smooth-sigmas',
+                             dest='inv_smooth_sigmas',
+                             type=floattuple,
+                             default=(0.,),
+                             help="Inverse smooth sigmas")
+    args_parser.add_argument('--inv-step-cut-factor',
+                             dest='inv_step_cut_factor',
+                             type=float,
+                             default=0.5,
+                             help="Inverse step cut factor")
+    args_parser.add_argument('--inv-pad',
+                             dest='inv_pad',
+                             type=float,
+                             default=0.1,
+                             help="Inverse pad value")
+    args_parser.add_argument('--inv-use-root',
+                             dest='inv_use_root',
+                             action='store_true',
+                             default=False,
+                             help="Use root for inverse displacement")
 
     args_parser.add_argument('--dask-scheduler', dest='dask_scheduler',
                              type=str, default=None,
@@ -158,6 +179,21 @@ def _run_compute_inverse(args):
                     f'from {transform_path}:{args.transform_subpath}')
         # read the image because distributed_invert method expects a zarr array
         deform_field.read_image()
+
+        inv_shrink_spacings = (args.inv_shrink_spacings 
+                               if (args.inv_shrink_spacings is not None and
+                                   len(args.inv_shrink_spacings) > 0)
+                               else (None,))
+        if len(args.inv_iterations) == 0:
+            raise ValueError(f'Invalid inverse iterations: {args.inv_iterations}')
+        
+        if (len(args.inv_iterations) != len(inv_shrink_spacings) and
+            len(args.inv_iterations) != len(args.inv_smooth_sigmas)):
+            raise ValueError((
+                'Inverse iterations, inverse shrink spacings '
+                'and inverse smooth sigmas must all have the same length '
+                f'{args.inv_iterations} vs {inv_shrink_spacings} vs {args.inv_smooth_sigmas} '
+            ))
         distributed_invert_displacement_vector_field(
             deform_field.image_array,
             np.array(transform_spacing),
@@ -165,9 +201,13 @@ def _run_compute_inverse(args):
             inv_deform_field,
             cluster_client,
             overlap_factor=args.processing_overlap_factor,
+            step=args.inv_step,
             iterations=args.inv_iterations,
-            sqrt_order=args.inv_order,
-            sqrt_iterations=args.inv_sqrt_iterations,
+            shrink_spacings=inv_shrink_spacings,
+            smooth_sigmas=args.inv_smooth_sigmas,
+            step_cut_factor=args.inv_step_cut_factor,
+            pad=args.inv_pad,
+            use_root=args.inv_use_root,
         )
     finally:
         cluster_client.close()

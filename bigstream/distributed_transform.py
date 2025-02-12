@@ -488,7 +488,7 @@ def distributed_invert_displacement_vector_field(
         You have full control over the inversion algorithm through keyword arguments.
         Please read the docstring for bigstream.transform.invert_displacement_vector_field
         to understand what can be passed.
-        
+
     """
 
     # get overlap and number of blocks

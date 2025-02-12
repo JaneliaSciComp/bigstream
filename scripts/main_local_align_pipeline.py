@@ -423,7 +423,7 @@ def main():
     inv_shrink_spacings = (args.inv_shrink_spacings 
                             if (args.inv_shrink_spacings is not None and
                                 len(args.inv_shrink_spacings) > 0)
-                            else (None,))
+                            else (None,) * len(args.inv_iterations))
     _run_local_alignment(
         reg_inputs,
         args.align_config,

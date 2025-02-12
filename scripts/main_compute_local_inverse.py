@@ -180,13 +180,14 @@ def _run_compute_inverse(args):
         # read the image because distributed_invert method expects a zarr array
         deform_field.read_image()
 
+        if len(args.inv_iterations) == 0:
+            raise ValueError(f'Invalid inverse iterations: {args.inv_iterations}')
+
         inv_shrink_spacings = (args.inv_shrink_spacings 
                                if (args.inv_shrink_spacings is not None and
                                    len(args.inv_shrink_spacings) > 0)
-                               else (None,))
-        if len(args.inv_iterations) == 0:
-            raise ValueError(f'Invalid inverse iterations: {args.inv_iterations}')
-        
+                               else (None,) * len(args.inv_iterations))
+
         if (len(args.inv_iterations) != len(inv_shrink_spacings) and
             len(args.inv_iterations) != len(args.inv_smooth_sigmas)):
             raise ValueError((

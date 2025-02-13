@@ -4,6 +4,7 @@ import SimpleITK as sitk
 import bigstream.utility as ut
 from bigstream.configure_irm import interpolator_switch
 import os
+import sys
 from scipy.ndimage import map_coordinates, zoom, gaussian_filter
 
 
@@ -521,6 +522,16 @@ def invert_displacement_vector_field(
         inverse_field(field) should be nearly zeros everywhere.
     """
 
+    # set logger status
+    if verbose:
+        add_handler = True
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and handler.stream == sys.stdout:
+                add_handler = False; break
+        if add_handler:
+            logger.addHandler(logging.StreamHandler(stream=sys.stdout))
+        logger.setLevel(logging.DEBUG)
+
     # initialize inverse as negative root
     root = field
     if use_root:
@@ -705,6 +716,16 @@ def displacement_field_composition_square_root(
         compose_displacement_vector_fields(root, root, spacing, spacing) ~= field
     """
 
+    # set logger status
+    if verbose:
+        add_handler = True
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and handler.stream == sys.stdout:
+                add_handler = False; break
+        if add_handler:
+            logger.addHandler(logging.StreamHandler(stream=sys.stdout))
+        logger.setLevel(logging.DEBUG)
+
     # pad input
     if pad > 0:
         pad = tuple(round(pad*x) for x in field.shape[:-1])
@@ -715,7 +736,9 @@ def displacement_field_composition_square_root(
     field_smooth_store = {}
 
     # loop over scale levels
-    level_values = zip(iterations, shrink_spacings, smooth_sigmas)
+    level_values = tuple(zip(iterations, shrink_spacings, smooth_sigmas))
+    logger.info(f'Displacement vector leveled iterations: {level_values}')
+    
     for level, (iterations_level, shrink, sigma) in enumerate(level_values):
 
         # smooth

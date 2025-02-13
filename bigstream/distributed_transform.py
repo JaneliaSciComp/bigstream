@@ -460,11 +460,7 @@ def distributed_invert_displacement_vector_field(
     inv_vectorfield_array,
     cluster_client,
     overlap_factor=0.25,
-    step=0.5,
-    iterations=10,
-    sqrt_order=2,
-    sqrt_step=0.5,
-    sqrt_iterations=5,
+    **kwargs,
 ):
     """
     Numerically find the inverse of a larger-than-memory displacement vector field
@@ -483,26 +479,15 @@ def distributed_invert_displacement_vector_field(
     inv_vectorfield_array : zarr array
         The inverse vector field
 
-    overlap_factor : overlap factor (default: 0.25)
-
-    step : float (default: 0.5)
-        The step size used for each iteration of the stationary point algorithm
-
-    iterations : scalar int (default: 10)
-        The number of stationary point iterations to find inverse. More
-        iterations gives a more accurate inverse but takes more time.
-
-    sqrt_order : scalar int (default: 2)
-        The number of roots to take before stationary point iterations.
-
-    sqrt_step : float (default: 0.5)
-        The step size used for each iteration of the composition square root gradient descent
-
-    sqrt_iterations : scalar int (default: 5)
-        The number of iterations to find the field composition square root.
-
     cluster_client : Dask cluster client proxy
         the cluster must exists before this method is invoked
+
+    overlap_factor : overlap factor (default: 0.25)
+
+    **kwargs : passed to bigstream.transform.invert_displacement_vector_field
+        You have full control over the inversion algorithm through keyword arguments.
+        Please read the docstring for bigstream.transform.invert_displacement_vector_field
+        to understand what can be passed.
 
     """
 
@@ -512,8 +497,11 @@ def distributed_invert_displacement_vector_field(
     nblocks = np.ceil(np.array(vectorfield_array.shape[:-1]) / 
                       blocksize_array).astype(int)
 
-    logger.info('Prepare inverting blocks with ' +
-                f'partition size {blocksize_array}')
+    logger.info((
+        'Prepare inverting blocks with '
+        f'partition size {blocksize_array} '
+        f'invert displacement args: {kwargs} '
+    ))
     # store block coordinates in a dask array
     blocks_coords = []
     for (i, j, k) in np.ndindex(*nblocks):
@@ -532,11 +520,7 @@ def distributed_invert_displacement_vector_field(
         spacing=spacing,
         blocksize=blocksize_array,
         blockoverlaps=overlap,
-        step=step,
-        iterations=iterations,
-        sqrt_order=sqrt_order,
-        sqrt_step=sqrt_step,
-        sqrt_iterations=sqrt_iterations,
+        **kwargs
     )
     logger.info(f'Submit Invert for {len(blocks_coords)} blocks')
     invert_res = cluster_client.map(invert_block, blocks_coords)
@@ -557,34 +541,21 @@ def _invert_block(block_coords,
                   spacing=None,
                   blocksize=None,
                   blockoverlaps=None,
-                  step=0.5,
-                  iterations=10,
-                  sqrt_order=2,
-                  sqrt_step=0.5,
-                  sqrt_iterations=5):
+                  **kwargs):
     """
     Invert block function
     """
-    logger.info(f'Invert block: {block_coords}, spacing: {spacing}')
+    logger.info((
+        f'Invert block: {block_coords}, '
+        f'spacing: {spacing}, invert args: {kwargs} '
+    ))
 
     block_vectorfield = full_vectorfield[block_coords]
-
-    if isinstance(iterations, int):
-        invert_iterations = (iterations,)
-    elif isinstance(iterations, tuple):
-        invert_iterations = iterations
-    else:
-        raise ValueError(f'Invalid iterations {iterations} of type {type(iterations)}')
 
     inverse_block = bs_transform.invert_displacement_vector_field(
         block_vectorfield,
         spacing,
-        step=step,
-        iterations=invert_iterations,
-        shrink_spacings=(None,),
-        sqrt_order=sqrt_order,
-        sqrt_step=sqrt_step,
-        sqrt_iterations=sqrt_iterations,
+        **kwargs,
     )
 
     logger.debug('Computed inverse field for block' +
@@ -612,9 +583,11 @@ def _invert_block(block_coords,
         inverse_block_coords_list.append(slice(start, stop))
 
     inverse_block_coords = tuple(inverse_block_coords_list)
-    logger.info('Completed inverse vector field for block' +
-                f'{block_coords}, {block_vectorfield.shape} -> ' +
-                f'{inverse_block_coords}, {inverse_block.shape}')
+    logger.info((
+        'Completed inverse vector field for block '
+        f'{block_coords}, {block_vectorfield.shape} -> '
+        f'{inverse_block_coords}, {inverse_block.shape} '
+    ))
     return _write_block(inverse_block_coords, inverse_block,
                         output=inv_vectorfield_result)
 

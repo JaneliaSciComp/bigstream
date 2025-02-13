@@ -10,7 +10,7 @@ from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            define_registration_input_args,
                            extract_align_pipeline,
                            extract_registration_input_args,
-                           inttuple, get_input_images)
+                           inttuple, floattuple, get_input_images)
 from bigstream.configure_bigstream import (configure_logging)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
@@ -46,21 +46,42 @@ def _define_args(local_descriptor):
                              dest='local_processing_overlap_factor',
                              type=float,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
+
+    args_parser.add_argument('--inv-step',
+                             dest='inv_step',
+                             type=float,
+                             default=1.0,
+                             help="Inverse transformation step")
     args_parser.add_argument('--inv-iterations',
                              dest='inv_iterations',
-                             default=10,
-                             type=int,
-                             help="Number of iterations for getting the inverse transformation")
-    args_parser.add_argument('--inv-order',
-                             dest='inv_order',
-                             default=2,
-                             type=int,
-                             help="Order value for the inverse transformation")
-    args_parser.add_argument('--inv-sqrt-iterations',
-                             dest='inv_sqrt_iterations',
-                             default=10,
-                             type=int,
-                             help="Number of square root iterations for getting the inverse transformation")
+                             type=inttuple,
+                             default=(10,),
+                             help="Number of iterations for the inverse transformation")
+    args_parser.add_argument('--inv-shrink-spacings',
+                             dest='inv_shrink_spacings',
+                             type=floattuple,
+                             default=None,
+                             help="Inverse shrink spacings")
+    args_parser.add_argument('--inv-smooth-sigmas',
+                             dest='inv_smooth_sigmas',
+                             type=floattuple,
+                             default=(0.,),
+                             help="Inverse smooth sigmas")
+    args_parser.add_argument('--inv-step-cut-factor',
+                             dest='inv_step_cut_factor',
+                             type=float,
+                             default=0.5,
+                             help="Inverse step cut factor")
+    args_parser.add_argument('--inv-pad',
+                             dest='inv_pad',
+                             type=float,
+                             default=0.1,
+                             help="Inverse pad value")
+    args_parser.add_argument('--inv-use-root',
+                             dest='inv_use_root',
+                             action='store_true',
+                             default=False,
+                             help="Use root for inverse displacement")
 
     args_parser.add_argument('--dask-scheduler', dest='dask_scheduler',
                              type=str, default=None,
@@ -96,9 +117,13 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          processing_overlap=None,
                          default_blocksize=128,
                          default_overlap=0.5,
-                         inv_iterations=10,
-                         inv_sqrt_iterations=10,
-                         inv_order=2,
+                         inv_step=1.0,
+                         inv_iterations=(10,),
+                         inv_shrink_spacings=(None,),
+                         inv_smooth_sigmas=(0.,),
+                         inv_step_cut_factor=0.5,
+                         inv_pad=0.1,
+                         inv_use_root=True,
                          dask_scheduler_address=None,
                          dask_config_file=None,
                          worker_cpus=0,
@@ -203,9 +228,13 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             reg_args.align_path(),
             align_subpath,
             align_blocksize,
+            inv_step,
             inv_iterations,
-            inv_sqrt_iterations,
-            inv_order,
+            inv_shrink_spacings,
+            inv_smooth_sigmas,
+            inv_step_cut_factor,
+            inv_pad,
+            inv_use_root,
             cluster_client,
             compressor,
         )
@@ -230,9 +259,13 @@ def _align_local_data(fix_image: ImageData,
                       align_path,
                       align_subpath,
                       align_blocksize,
+                      inv_step,
                       inv_iterations,
-                      inv_sqrt_iterations,
-                      inv_order,
+                      inv_shrink_spacings,
+                      inv_smooth_sigmas,
+                      inv_step_cut_factor,
+                      inv_pad,
+                      inv_use_root,
                       cluster_client,
                       compressor):
 
@@ -279,10 +312,21 @@ def _align_local_data(fix_image: ImageData,
                     f'{mov_image} to {fix_image}')
     else:
         deform_ok = False
-        logger.warn('Fix image or moving image has no data or ' +
-                    'the distributed alignment failed')
+        logger.warning('Fix image or moving image has no data or ' +
+                       'the distributed alignment failed')
 
     if deform_ok and transform and inv_transform_path:
+        if len(inv_iterations) == 0:
+            raise ValueError(f'Invalid inverse iterations: {inv_iterations}')
+        
+        if (len(inv_iterations) != len(inv_shrink_spacings) and
+            len(inv_iterations) != len(inv_smooth_sigmas)):
+            raise ValueError((
+                'Inverse iterations, inverse shrink spacings '
+                'and inverse smooth sigmas must all have the same length '
+                f'{inv_iterations} vs {inv_shrink_spacings} vs {inv_smooth_sigmas} '
+            ))
+
         inv_transform = io_utility.create_dataset(
             inv_transform_path,
             inv_transform_subpath,
@@ -306,9 +350,13 @@ def _align_local_data(fix_image: ImageData,
             inv_transform,
             cluster_client,
             overlap_factor=processing_overlap_factor,
+            step=inv_step,
             iterations=inv_iterations,
-            sqrt_order=inv_order,
-            sqrt_iterations=inv_sqrt_iterations,
+            shrink_spacings=inv_shrink_spacings,
+            smooth_sigmas=inv_smooth_sigmas,
+            step_cut_factor=inv_step_cut_factor,
+            pad=inv_pad,
+            use_root=inv_use_root,
         )
     else:
         if not inv_transform_path:
@@ -372,15 +420,23 @@ def main():
 
     reg_inputs = extract_registration_input_args(args, local_descriptor)
 
+    inv_shrink_spacings = (args.inv_shrink_spacings 
+                            if (args.inv_shrink_spacings is not None and
+                                len(args.inv_shrink_spacings) > 0)
+                            else (None,) * len(args.inv_iterations))
     _run_local_alignment(
         reg_inputs,
         args.align_config,
         global_affine,
         processing_size=args.local_processing_size,
         processing_overlap=args.local_processing_overlap_factor,
+        inv_step=args.inv_step,
         inv_iterations=args.inv_iterations,
-        inv_sqrt_iterations=args.inv_sqrt_iterations,
-        inv_order=args.inv_order,
+        inv_shrink_spacings=inv_shrink_spacings,
+        inv_smooth_sigmas=args.inv_smooth_sigmas,
+        inv_step_cut_factor=args.inv_step_cut_factor,
+        inv_pad=args.inv_pad,
+        inv_use_root=args.inv_use_root,
         dask_scheduler_address=args.dask_scheduler,
         dask_config_file=args.dask_config,
         worker_cpus=args.worker_cpus,

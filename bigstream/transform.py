@@ -531,7 +531,6 @@ def invert_displacement_vector_field(
         if add_handler:
             logger.addHandler(logging.StreamHandler(stream=sys.stdout))
         logger.setLevel(logging.DEBUG)
-        print(logger.handlers)
 
     # initialize inverse as negative root
     root = field
@@ -726,7 +725,6 @@ def displacement_field_composition_square_root(
         if add_handler:
             logger.addHandler(logging.StreamHandler(stream=sys.stdout))
         logger.setLevel(logging.DEBUG)
-        print(logger.handlers)
 
     # pad input
     if pad > 0:

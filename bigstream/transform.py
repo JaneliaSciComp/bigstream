@@ -164,6 +164,7 @@ def apply_transform_to_coordinates(
     transform_list,
     transform_spacing=None,
     transform_origin=None,
+    **kwargs,
 ):
     """
     Move a set of coordinates through a list of transforms
@@ -191,6 +192,8 @@ def apply_transform_to_coordinates(
         If None, all origins are assumed to be (0, 0, 0, ...); otherwise, follows
         the same logic as transform_spacing. Origins given for affine transforms
         are ignored.
+
+    **kwargs : passed to scipy.ndimage.map_coordinates
 
     Returns
     -------
@@ -229,7 +232,8 @@ def apply_transform_to_coordinates(
 
             # interpolate position field at coordinates, reformat, return
             ndims = transform.shape[-1]
-            interp = lambda x: map_coordinates(x, coordinates, mode='nearest')
+            if 'mode' not in kwargs.keys(): kwargs['mode'] = 'nearest'
+            interp = lambda x: map_coordinates(x, coordinates, **kwargs)
             dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()
             coordinates = coordinates.transpose() * spacing + dX
             if origin is not None: coordinates += origin

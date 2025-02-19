@@ -6,6 +6,7 @@ from bigstream.configure_irm import interpolator_switch
 import os
 import sys
 from scipy.ndimage import map_coordinates, zoom, gaussian_filter
+from scipy.spatial.transform import Rotation
 
 
 logger = logging.getLogger(__name__)

@@ -1080,9 +1080,11 @@ def affine_align(
         logger.info(f'{context} Registration succeeded')
         return bst.affine_transform_to_matrix(transform)
     else:
-        logger.warn(f'{context} Optimization failed to improve metric')
-        logger.info(f'METRIC VALUES initial: {context} ',
-                    f'{initial_metric_value} final: {final_metric_value}')
+        logger.warning(f'{context} Optimization failed to improve metric')
+        logger.info((
+            f'METRIC VALUES initial: {context} '
+            f'{initial_metric_value} final: {final_metric_value}'
+        ))
         logger.info(f'{context} Returning default')
         return default
 

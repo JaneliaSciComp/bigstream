@@ -379,7 +379,6 @@ def distributed_apply_transform_to_coordinates(
             blocks_points_indexes.append(point_indexes)
         else:
             logger.info(f'No point added to block {block_index}')
-    original_points_indexes = np.concatenate(blocks_points_indexes, axis=0)
     # transform all partitions and return
     logger.info(f'Apply transform to {len(blocks_indexes)} blocks')
     futures = cluster_client.map(
@@ -388,11 +387,13 @@ def distributed_apply_transform_to_coordinates(
         blocks_slices,
         blocks_origins,
         blocks_points,
+        blocks_points_indexes,
         coords_spacing=coords_spacing,
         transform_list=transform_list,
     )
 
-    future_results = []
+    results_from_futures = []
+    coord_indices_list = []
     for f, r in as_completed(futures, with_results=True):
         if f.cancelled():
             exc = f.exception()
@@ -400,12 +401,19 @@ def distributed_apply_transform_to_coordinates(
             tb = f.traceback()
             traceback.print_tb(tb)
         else:
-            future_results.append(r)
-
-    transform_results = np.concatenate(future_results, axis=0)
+            warped_coords, coord_indices = r
+            results_from_futures.append(warped_coords)
+            coord_indices_list.append(coord_indices)
+    # assemble original indices
+    original_points_indexes = np.concatenate(coord_indices_list, axis=0)
+    premuted_results = np.concatenate(results_from_futures, axis=0)
+    logger.info((
+        f'Shape of transformed results: {premuted_results.shape}, '
+        f'original point indexes: {len(original_points_indexes)} '
+    ))
     # maintain the same order for the warped results
-    results = np.empty_like(transform_results)
-    results[original_points_indexes] = transform_results
+    results = np.empty_like(premuted_results)
+    results[original_points_indexes] = premuted_results
     return results
 
 
@@ -413,6 +421,7 @@ def _transform_coords(block_index,
                       block_slice_coords,
                       block_origin,
                       coord_indexed_values,
+                      coord_indices,
                       coords_spacing=None,
                       transform_list=[]):
     # read relevant region of transform
@@ -468,7 +477,7 @@ def _transform_coords(block_index,
         f'max warped coord {max_warped_coord} '
     ))
 
-    return warped_coord_indexed_values
+    return warped_coord_indexed_values, coord_indices
 
 
 def distributed_invert_displacement_vector_field(

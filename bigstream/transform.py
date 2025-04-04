@@ -228,7 +228,7 @@ def apply_transform_to_coordinates(
 
             # interpolate position field at coordinates, reformat, return
             ndims = transform.shape[-1]
-            interp = lambda x: map_coordinates(x, coordinates, mode='nearest')
+            interp = lambda x: map_coordinates(x, coordinates, mode='constant', cval=0.0)
             dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()
             coordinates = coordinates.transpose() * spacing + dX
             if origin is not None: coordinates += origin

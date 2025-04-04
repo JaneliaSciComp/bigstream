@@ -363,8 +363,10 @@ def distributed_apply_transform_to_coordinates(
         block_slice_coords = tuple(slice(x, y) for x, y in zip(block_start, block_stop))
         lower_bound = min_coord + phys_blocksize * np.array(block_index)
         upper_bound = lower_bound + phys_blocksize
-        logger.info(f'Get points for block {block_index}: {block_slice_coords}' +
-                    f'from {lower_bound} to {upper_bound}')
+        logger.info((
+            f'Get points for block {block_index}: {block_slice_coords} '
+            f'from {lower_bound} to {upper_bound}'
+        ))
         not_too_low = np.all(coordinates[:, 0:3] >= lower_bound, axis=1)
         not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
         point_indexes = np.nonzero(not_too_low * not_too_high)[0]
@@ -379,6 +381,7 @@ def distributed_apply_transform_to_coordinates(
             logger.info(f'No point added to block {block_index}')
     original_points_indexes = np.concatenate(blocks_points_indexes, axis=0)
     # transform all partitions and return
+    logger.info(f'Apply transform to {len(blocks_indexes)} blocks')
     futures = cluster_client.map(
         _transform_coords,
         blocks_indexes,
@@ -388,7 +391,18 @@ def distributed_apply_transform_to_coordinates(
         coords_spacing=coords_spacing,
         transform_list=transform_list,
     )
-    transform_results = np.concatenate(cluster_client.gather(futures), axis=0)
+
+    future_results = []
+    for f, r in as_completed(futures, with_results=True):
+        if f.cancelled():
+            exc = f.exception()
+            logger.error(f'Block exception: {exc}')
+            tb = f.traceback()
+            traceback.print_tb(tb)
+        else:
+            future_results.append(r)
+
+    transform_results = np.concatenate(future_results, axis=0)
     # maintain the same order for the warped results
     results = np.empty_like(transform_results)
     results[original_points_indexes] = transform_results
@@ -402,10 +416,12 @@ def _transform_coords(block_index,
                       coords_spacing=None,
                       transform_list=[]):
     # read relevant region of transform
-    logger.info(f'Apply block {block_index} transform ' +
-                f'block origin {block_origin}' +
-                f'block slice coords {block_slice_coords}' +
-                f'to {len(coord_indexed_values)} points')
+    logger.info((
+        f'Apply block {block_index} transform '
+        f'block origin {block_origin} '
+        f'block slice coords {block_slice_coords} '
+        f'to {len(coord_indexed_values)} points of shape {coord_indexed_values.shape}'
+    ))
 
     points_coords = coord_indexed_values[:, 0:3]
     points_values = coord_indexed_values[:, 3:]
@@ -445,10 +461,12 @@ def _transform_coords(block_index,
     min_warped_coord = np.min(warped_coord_indexed_values[:, 0:3], axis=0)
     max_warped_coord = np.max(warped_coord_indexed_values[:, 0:3], axis=0)
 
-    logger.info(f'Finished block: {block_index}' +
-                f'- warped {warped_coord_indexed_values.shape} coords' +
-                f'min warped coord {min_warped_coord}' +
-                f'max warped coord {max_warped_coord}')
+    logger.info((
+        f'Finished block: {block_index} '
+        f'- warped {warped_coord_indexed_values.shape} coords, '
+        f'min warped coord {min_warped_coord} - '
+        f'max warped coord {max_warped_coord} '
+    ))
 
     return warped_coord_indexed_values
 

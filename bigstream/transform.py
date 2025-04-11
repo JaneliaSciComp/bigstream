@@ -231,11 +231,11 @@ def apply_transform_to_coordinates(
             ndims = transform.shape[-1]
             interp = lambda x: map_coordinates(x, coordinates, mode='nearest')
             dX = []
-            for i in  range(ndims):
+            for i in range(ndims):
                 if transform[..., i]:
                     dX.append(interp(transform[..., i]))
                 else:
-                    dx.append(interp([0])
+                    dX.append(interp([0])
             coordinates = coordinates.transpose() * spacing + dX
             if origin is not None: coordinates += origin
 

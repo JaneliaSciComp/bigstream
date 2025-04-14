@@ -232,19 +232,13 @@ def apply_transform_to_coordinates(
             dX = []
             for i in range(ndims):
                 transform_shape = transform[..., i].shape
-                logger.info(f'!!!!!!!! TRANSFORM SHAPE {i} -> {transform[..., i].shape}')
                 if np.array(transform_shape).all():
-                    dXVal = interp(transform[..., i])
-                    logger.info(f'!!!!!!!! Interpolated value {i} -> {dXVal}')
                     # all dimensions are non zero
-                    dX.append(dXVal)
+                    dX.append(interp(transform[..., i]))
                 else:
-                    dXVal = 0
-                    logger.info(f'!!!!!!!! 0 Interpolated value {i} {transform_shape} -> {dXVal}')
                     # set dX[i] = 0
                     dX.append(0)
 
-            logger.info(f'!!!!!!!! DX value {dX}')
             coordinates = coordinates.transpose() * spacing + np.array(dX).transpose()
             if origin is not None: coordinates += origin
 

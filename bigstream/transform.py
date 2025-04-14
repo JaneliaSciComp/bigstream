@@ -231,11 +231,14 @@ def apply_transform_to_coordinates(
             interp = lambda x: map_coordinates(x, coordinates, mode='nearest')
             dX = []
             for i in range(ndims):
-                logger.info(f'!!!!!!!! TRANSFORM SHAPE {transform[..., i].shape}')
-                if transform[..., i].all():
+                transform_shape = transform[..., i].shape
+                logger.info(f'!!!!!!!! TRANSFORM SHAPE {i} -> {transform[..., i].shape}')
+                if np.array(transform_shape).all():
+                    # all dimensions are non zero
                     dX.append(interp(transform[..., i]))
                 else:
-                    dX.append(interp([0]))
+                    # set dX = vec(0)
+                    dX.append([0] * len(transform_shape))
             coordinates = coordinates.transpose() * spacing + np.array(dX).transpose()
             if origin is not None: coordinates += origin
 

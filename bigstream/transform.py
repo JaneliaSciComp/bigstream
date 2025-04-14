@@ -239,8 +239,12 @@ def apply_transform_to_coordinates(
                     # all dimensions are non zero
                     dX.append(dXVal)
                 else:
-                    # set dX = vec(0)
-                    dX.append([0] * len(transform_shape))
+                    dXVal = 0
+                    logger.info(f'!!!!!!!! 0 Interpolated value {i} {transform_shape} -> {dXVal}')
+                    # set dX[i] = 0
+                    dX.append(0)
+
+            logger.info(f'!!!!!!!! DX value {dX}')
             coordinates = coordinates.transpose() * spacing + np.array(dX).transpose()
             if origin is not None: coordinates += origin
 

@@ -235,7 +235,7 @@ def apply_transform_to_coordinates(
                     dX.append(interp(transform[..., i]))
                 else:
                     dX.append(interp([0]))
-            coordinates = coordinates.transpose() * spacing + dX
+            coordinates = coordinates.transpose() * spacing + np.array(dX).transpose()
             if origin is not None: coordinates += origin
 
     return coordinates

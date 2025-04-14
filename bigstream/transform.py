@@ -234,8 +234,10 @@ def apply_transform_to_coordinates(
                 transform_shape = transform[..., i].shape
                 logger.info(f'!!!!!!!! TRANSFORM SHAPE {i} -> {transform[..., i].shape}')
                 if np.array(transform_shape).all():
+                    dXVal = interp(transform[..., i])
+                    logger.info(f'!!!!!!!! Interpolated value {i} -> {dXVal}')
                     # all dimensions are non zero
-                    dX.append(interp(transform[..., i]))
+                    dX.append(dXVal)
                 else:
                     # set dX = vec(0)
                     dX.append([0] * len(transform_shape))

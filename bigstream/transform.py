@@ -231,7 +231,7 @@ def apply_transform_to_coordinates(
             interp = lambda x: map_coordinates(x, coordinates, mode='nearest')
             dX = []
             for i in range(ndims):
-                if transform[..., i]:
+                if transform[..., i].all():
                     dX.append(interp(transform[..., i]))
                 else:
                     dX.append(interp([0]))

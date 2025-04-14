@@ -234,7 +234,7 @@ def apply_transform_to_coordinates(
                 if transform[..., i]:
                     dX.append(interp(transform[..., i]))
                 else:
-                    dX.append(interp([0])
+                    dX.append(interp([0]))
             coordinates = coordinates.transpose() * spacing + dX
             if origin is not None: coordinates += origin
 

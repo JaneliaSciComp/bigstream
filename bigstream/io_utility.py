@@ -197,87 +197,103 @@ def _is_ome_zarr(data_container_attrs: dict | None) -> bool:
         return False
 
     # test if multiscales attribute exists - if it does assume OME-ZARR
+    bioformats_layout = data_container_attrs.get("bioformats2raw.layout", None)
     multiscales = data_container_attrs.get('multiscales', [])
-    return not (multiscales == [])
+    return bioformats_layout == 3 or not (multiscales == [])
 
 
-def _open_ome_zarr(data_container, data_container_attrs, data_subpath,
-                   data_subpath_pattern=None,
-                   block_coords=None):
-    ome_zarr_metadata = ImageAttrs(**data_container_attrs)
-    multiscale_metadata = ome_zarr_metadata.multiscales[0]
-    dataset_metadata = None
-
+def _find_ome_multiscales(data_container, data_subpath):
+    logger.info(f'Find OME multiscales group within {data_subpath}')
     dataset_subpath_arg = data_subpath if data_subpath is not None else ''
     dataset_comps = [c for c in dataset_subpath_arg.split('/') if c]
 
+    dataset_comps_index = 0
+    while dataset_comps_index < len(dataset_comps):
+        group_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
+        dataset_item = data_container[group_subpath]
+        dataset_item_attrs = dataset_item.attrs.asdict()
+        if dataset_item_attrs.get('multiscales', []) == []:
+            dataset_comps_index = dataset_comps_index + 1
+        else:
+            logger.debug(f'Found multiscales at {group_subpath}: {dataset_item_attrs}')
+            # found a group that has attributes which contain multiscales list
+            return dataset_item, '/'.join(dataset_comps[dataset_comps_index:]), dataset_item_attrs
+
+    return None, None, {}
+
+
+def _open_ome_zarr(data_container, data_subpath,
+                   data_timeindex=None, data_channels=None, block_coords=None):
+    multiscales_group, dataset_subpath, multiscales_attrs  = _find_ome_multiscales(data_container, data_subpath)
+
+    if multiscales_group is None:
+        a = (data_container[data_subpath]
+             if data_subpath and data_subpath != '.'
+             else data_container)
+        ba = a[block_coords] if block_coords is not None else a
+        return ba, a.attrs.asdict()
+
+    logger.info((
+        f'Open dataset {dataset_subpath}, timeindex: {data_timeindex}, '
+        f'channels: {data_channels}, block_coords {block_coords} '
+    ))
+
+    dataset_comps = [c for c in dataset_subpath.split('/') if c]
+    ome_metadata = ImageAttrs(**multiscales_attrs)
+    multiscale_metadata = ome_metadata.multiscales[0]
+    dataset_metadata = None
     # lookup the dataset by path
     for ds in multiscale_metadata.datasets:
         current_ds_path_comps = [c for c in ds.path.split('/') if c]
-        if (len(current_ds_path_comps) < len(dataset_comps) and
+        logger.debug((
+            f'Compare current dataset path: {ds.path} ({current_ds_path_comps}) '
+            f'with {dataset_subpath} ({dataset_comps}) '
+        ))
+        if (len(current_ds_path_comps) <= len(dataset_comps) and
             tuple(current_ds_path_comps) == tuple(dataset_comps[-len(current_ds_path_comps):])):
-            # found a dataset that has a path matching a suffix of the data_subpath arg
+            # found a dataset that has a path matching a suffix of the dataset_subpath arg
             dataset_metadata = ds
             # drop the matching suffix
             dataset_comps = dataset_comps[-len(current_ds_path_comps):]
-            logger.debug((
+            logger.info((
                 f'Found dataset: {dataset_metadata.path}, '
-                f'remaining components: {dataset_comps}'
+                f'remaining dataset components: {dataset_comps}'
             ))
             break
 
-    dataset_comps_pattern = (list(data_subpath_pattern) 
-                             if data_subpath_pattern else [])
-    ch = None
-    timeindex = None
-    dataset_axes = multiscale_metadata.axes
-
-    for comp_index, comp in enumerate(dataset_comps_pattern):
-        if (comp == 't' and
-            any(a.type == 'time' for a in dataset_axes)):
-            # if the time is present in the dataset subpath selector
-            # and it is in the nd-array too - get the index to be processed
-            logger.debug(f'Extract timeindex from {dataset_comps[comp_index]}')
-            timeindex = _extract_numeric_comp(dataset_comps[comp_index])
-        elif (comp == 'c' and
-            any(a.type == 'channel' for a in dataset_axes)):
-            # if the channel is present in the dataset subpath selector
-            # and the nd-array is a multi-channel array get the channel to be processed
-            logger.debug(f'Extract channel from {dataset_comps[comp_index]}')
-            ch = _extract_numeric_comp(dataset_comps[comp_index])
-        elif comp == 's' and dataset_metadata is None:
-            # scale selector is in the path and dataset was not found
-            # using the existing datasets paths
-            logger.debug(f'Extract dataset index from {dataset_comps[comp_index]}')
-            dataset_index = _extract_numeric_comp(dataset_comps[comp_index])
+    if dataset_metadata is None:
+        # could not find a dataset using the subpath 
+        # look at the last subpath component and get the dataset index from there
+        # e.g., if the subpath looks like:
+        #       '/s<n>' => datasets[n] if n < len(datasets) otherwise datasets[0]
+        dataset_index_comp = dataset_comps[-1]
+        logger.info(f'No dataset was found using {dataset_subpath} - try to use: {dataset_index_comp}')
+        dataset_index = _extract_numeric_comp(dataset_index_comp)
+        if dataset_index < len(multiscale_metadata.datasets):
             dataset_metadata = multiscale_metadata.datasets[dataset_index]
         else:
-            # this dataset component can be anything
-            continue
+            dataset_metadata = multiscale_metadata.datasets[0]
 
-    if dataset_metadata is None:
-        dataset_metadata = multiscale_metadata.datasets[0]
-        logger.info(f'No dataset was found so far - use the first one: {dataset_metadata.path}')
-
+    dataset_axes = multiscale_metadata.axes
     dataset_path = dataset_metadata.path
-
-    a = data_container[dataset_path]
+    logger.debug(f'Get array using array path: {dataset_path}:{data_timeindex}:{data_channels}')
+    a = multiscales_group[dataset_path]
     # a is potentially a 5-dim array: [timepoint?, channel?, z, y, x]
     if block_coords is not None:
-        ba = _get_array_selector(dataset_axes, timeindex, ch)(a)[block_coords]
+        ba = _get_array_selector(dataset_axes, data_timeindex, data_channels)(a)[block_coords]
     else:
-        ba = _get_array_selector(dataset_axes, timeindex, ch)(a)
-    data_container_attrs.update({
+        ba = _get_array_selector(dataset_axes, data_timeindex, data_channels)(a)
+    multiscales_attrs.update({
         'dataset_path': dataset_path,
         'axes': dataset_axes,
-        'timeindex': timeindex,
-        'channel': ch,
+        'timeindex': data_timeindex,
+        'channels': data_channels,
         'coordinateTransformations': dataset_metadata.coordinateTransformations
     })
-    return ba, data_container_attrs
+    return ba, multiscales_attrs
 
 
-def _get_array_selector(axes, timeindex, ch):
+def _get_array_selector(axes, timeindex: int|None, ch:int | list[int] | None):
     selector = []
     selection_exists = False
     for a in axes:
@@ -288,15 +304,14 @@ def _get_array_selector(axes, timeindex, ch):
             else:
                 selector.append(slice(None, None))
         elif a.type == 'channel':
-            if ch is not None:
+            if ch is None or ch == []:
+                selector.append(slice(None, None))
+            else:
                 selector.append(ch)
                 selection_exists = True
-            else:
-                selector.append(slice(None, None))
         else:
             selector.append(slice(None, None))
-
-    return lambda a: a.get_basic_selection(tuple(selector)) if selection_exists else a
+    return lambda a: a[tuple(selector)] if selection_exists else a
 
 
 def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
@@ -312,9 +327,11 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         else:
             a = data_container[zarr_subpath] if zarr_subpath else data_container
             dataset_attrs = a.attrs.asdict()
-            dataset_attrs.update({'dataType': a.dtype,
-                         'dimensions': a.shape,
-                         'blockSize': a.chunks})
+            dataset_attrs.update({
+                'dataType': a.dtype,
+                'dimensions': a.shape,
+                'blockSize': a.chunks,
+            })
             logger.info(f'{data_path}:{data_subpath} attrs: {dataset_attrs}')
         
         return dataset_attrs

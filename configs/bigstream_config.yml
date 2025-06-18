@@ -38,6 +38,7 @@ local_align:
   steps: [affine, deform]
   block_size: [128, 128, 128]
   block_overlap: 0.5
+  transform_overlap: 0.1
   affine:
     alignment_spacing: 2.0
     shrink_factors: [1]

@@ -131,7 +131,8 @@ def open(container_path, subpath,
         return None, {}
 
 
-def prepare_attrs(dataset_path,
+def prepare_attrs(container_path,
+                  dataset_path,
                   axes=None,
                   coordinateTransformations=None,
                   **additional_attrs):
@@ -152,18 +153,17 @@ def prepare_attrs(dataset_path,
                 translations = t.translation
 
         dataset = Dataset.build(path=dataset_scale_subpath, scale=scales, translation=translations)
-        print('!!!!!!!!!!! AXES ', axes)
-        print('!!!!!!!!!!! DATASET ', dataset)
         ome_attrs = {
             'multiscales': [
                 {
+                    'name': os.path.basename(container_path),
                     'axes': axes,
-                    'datasets': (dataset.dict(),),
+                    'datasets': (dataset.dict(exclude_none=True),),
+                    'version': '0.4',
                 }
             ]
         }
         ome_attrs.update(additional_attrs)
-        print('!!!!!!!!!!! OME ATTRS ', ome_attrs)
         return ome_attrs
     
 
@@ -326,7 +326,6 @@ def _open_ome_zarr(data_container, data_subpath,
     a = multiscales_group[dataset_path]
     # a is potentially a 5-dim array: [timepoint?, channel?, z, y, x]
     if block_coords is not None:
-        print('!!!!!! REaD BLOCK COORDS: ', block_coords)
         ba = _get_array_selector(dataset_axes, data_timeindex, data_channels, block_coords)(a)
     else:
         ba = _get_array_selector(dataset_axes, data_timeindex, data_channels, None)(a)
@@ -369,7 +368,6 @@ def _get_array_selector(axes, timeindex: int | None,
     else:
         selector.extend(spatial_selection)
 
-    print('!!!!!! SELECTOR: ', timeindex, ch, selection_exists, selector)    
     return lambda a: a[tuple(selector)] if selection_exists else a
 
 

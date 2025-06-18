@@ -10,28 +10,29 @@ from dask.distributed import as_completed, MultiLock
 from itertools import product
 
 from .align import alignment_pipeline
-from .image_data import as_image_data
+from .image_data import (ImageData, as_image_data, get_spatial_values)
 from .io_utility import read_block as io_utility_read_block
 
 
 logger = logging.getLogger(__name__)
 
 
-def _prepare_compute_block_transform_params(block_info,
-                                            fix_shape=None,
-                                            mov_shape=None,
-                                            fix_spacing=None,
-                                            mov_spacing=None,
-                                            fix_fullmask_shape=None,
-                                            mov_fullmask_shape=None,
-                                            static_transform_list=[]):
+def _prepare_compute_block_spatial_transform_params(block_info,
+                                                    fix_shape=None,
+                                                    mov_shape=None,
+                                                    fix_spacing=None,
+                                                    mov_spacing=None,
+                                                    fix_fullmask_shape=None,
+                                                    mov_fullmask_shape=None,
+                                                    static_transform_list=[]):
 
-    logger.info(f'Prepare block coords {block_info}')
-
+    logger.debug(f'Prepare block coords {block_info}')
     block_index, fix_block_coords, fix_block_neighbors = block_info
+    print('!!!!!! BLOCK INDEX ', block_index, fix_spacing)
+    print('!!!!!! BLOCK COORDS ', fix_block_coords)
     (fix_block_voxel_coords,
-     fix_block_phys_coords) = _get_block_corner_coords(fix_block_coords,
-                                                       fix_spacing)
+     fix_block_phys_coords) = _get_spatial_block_corner_coords(fix_block_coords,
+                                                               fix_spacing)
     logger.debug(f'Block index: {block_index} - ' +
                  f'corner physical coords: {fix_block_phys_coords}')
 
@@ -41,7 +42,7 @@ def _prepare_compute_block_transform_params(block_info,
     mov_block_phys_coords = np.copy(fix_block_phys_coords)
     # traverse current transformations in reverse order
     for transform in static_transform_list[::-1]:
-        mov_block_phys_coords, block_transform = _get_moving_block_coords(
+        mov_block_phys_coords, block_transform = _get_spatial_moving_block_coords(
             fix_shape,
             fix_spacing,
             fix_block_voxel_coords[0],
@@ -52,7 +53,7 @@ def _prepare_compute_block_transform_params(block_info,
         updated_block_transform_list.append(block_transform)
 
     block_transform_list = updated_block_transform_list[::-1]  # reverse it
-
+    print('!!!!! BLOCK TRANSFORMS ', block_transform_list, mov_spacing)
     # get moving image crop, read moving data
     mov_block_coords = np.round(
         mov_block_phys_coords / mov_spacing).astype(int)
@@ -131,28 +132,39 @@ def _read_blocks_for_processing(blocks_info,
             mov_mask_block)
 
 
-def _read_block(block_coords, image_data):
-    image_repr = as_image_data(image_data)
+def _read_block(block_coords, image_data,
+                image_timeindex=None, image_channels=None):
+    image_repr = as_image_data(image_data, image_timeindex=image_timeindex,
+                               image_channels=image_channels)
     if image_repr is not None:
-        return io_utility_read_block(block_coords,
-                                     image=image_repr.image_array,
-                                     image_path=image_repr.image_path,
-                                     image_subpath=image_repr.image_subpath)
+        b = io_utility_read_block(
+            block_coords,
+            image=image_repr.image_array,
+            image_path=image_repr.image_path,
+            image_subpath=image_repr.image_subpath,
+            image_timeindex=image_repr.image_timeindex,
+            image_channel=image_repr.image_channels,
+        ).astype('uint16')
+        return b
 
 
 # get image block corners both in voxel and physical units
-def _get_block_corner_coords(block_slice_coords, voxel_spacing):
+def _get_spatial_block_corner_coords(block_slice_coords, voxel_spacing):
+    """
+    The method returns corner coo
+    """
     block_coords_list = []
     for corner in list(product([0, 1], repeat=3)):
         a = [x.stop-1 if y else x.start
              for x, y in zip(block_slice_coords, corner)]
         block_coords_list.append(a)
+
     block_corners_voxel_units = np.array(block_coords_list)
     block_corners_phys_units = block_corners_voxel_units * voxel_spacing
     return block_corners_voxel_units, block_corners_phys_units
 
 
-def _get_moving_block_coords(fix_shape,
+def _get_spatial_moving_block_coords(fix_shape,
                              fix_spacing,
                              fix_block_min_voxel_coords,
                              fix_block_max_voxel_coords,
@@ -206,11 +218,13 @@ def _compute_block_transform(compute_transform_params,
      fix_mask_block, # this can be a mask descriptor
      mov_mask_block, # this can be a mask descriptor
      ) = compute_transform_params
-    logger.debug(f'Compute block transform' +
-                 f'{block_index}: {block_coords}, {new_origin_phys}' +
-                 f'fix shape: {fix_block.shape}, ' +
-                 f'mov_shape: {mov_block.shape}' +
-                 f'using {len(static_block_transform_list)} transforms')
+    logger.debug((
+        'Compute block transform '
+        f'{block_index}: {block_coords}, {new_origin_phys} '
+        f'fix shape: {fix_block.shape}, '
+        f'mov_shape: {mov_block.shape} '
+        f'using {len(static_block_transform_list)} transforms '
+    ))
     # run alignment pipeline
     # some pipeline algorithms use "fancy indexing" (list of tuples)
     # which is not supported yet by dask arrays
@@ -229,8 +243,10 @@ def _compute_block_transform(compute_transform_params,
             transform, fix_block.shape, spacing=fix_spacing,
         )
     # Finished computing transformation for current block_index
-    logger.info(f'Finished block alignment for ' +
-                f'{block_index}:{block_coords} -> {transform.shape}')
+    logger.info((
+        'Finished block alignment for '
+        f'{block_index}:{block_coords} -> {transform.shape} '
+    ))
 
     weights = _get_transform_weights(block_index, 
                                      block_size,
@@ -328,10 +344,8 @@ def _get_transform_weights(block_index,
 
 
 def distributed_alignment_pipeline(
-    fix_image,
-    mov_image,
-    fix_spacing,
-    mov_spacing,
+    fix_image:ImageData,
+    mov_image:ImageData,
     steps,
     blocksize,
     cluster_client,
@@ -363,16 +377,6 @@ def distributed_alignment_pipeline(
         a global affine alignment wherein the moving image has
         been resampled onto the fixed image voxel grid.
 
-    fix_spacing : 1d array
-        The spacing in physical units (e.g. mm or um) between voxels
-        of the fixed image.
-        Length must equal `fix.ndim`
-
-    mov_spacing : 1d array
-        The spacing in physical units (e.g. mm or um) between voxels
-        of the moving image.
-        Length must equal `mov.ndim`
-
     steps : list of tuples in this form [(str, dict), (str, dict), ...]
         For each tuple, the str specifies which alignment to run. The options are:
         'random' : run `random_affine_search`
@@ -384,7 +388,7 @@ def distributed_alignment_pipeline(
         for their specific step only.
 
     blocksize : tuple
-        Partition or block size for distributing the work
+        Spatial Partition or block size for distributing the work
 
     cluster_client : Dask cluster client proxy
         the cluster must exists before this method is invoked
@@ -444,41 +448,50 @@ def distributed_alignment_pipeline(
     logger.info(f'Run distributed alignment with: {steps}')
 
     # determine fixed image slices for blocking
-    fix_shape_arr = fix_image.shape_arr
-    mov_shape_arr = mov_image.shape_arr
+    # For 4-D or 5-D images we only use the spatial dimensions
+    # to partition the work
+    fix_spatial_dims = fix_image.spatial_dims
+    mov_spatial_dims = mov_image.spatial_dims
+    fix_spacing = get_spatial_values(fix_image.voxel_spacing)
+    mov_spacing = get_spatial_values(mov_image.voxel_spacing)
     # fix/mov mask shape gets set only the corresponding masks
     # refer to an image array (either ImageData or ndarray)
     fix_mask_image = as_image_data(fix_mask)
     mov_mask_image = as_image_data(mov_mask)
-    fix_mask_shape_arr = (fix_mask_image.shape_arr
-                          if fix_mask_image is not None
-                          else None)
-    mov_mask_shape_arr = (mov_mask_image.shape_arr
-                          if mov_mask_image is not None
-                          else None)
+    fix_mask_spatial_dims = (fix_mask_image.spatial_dims
+                             if fix_mask_image is not None
+                             else None)
+    mov_mask_spatial_dims = (mov_mask_image.spatial_dims
+                             if mov_mask_image is not None
+                             else None)
+
+    # from here on we only use spatial coordinates
+    # except for the block reading where we also use the 
+    # image_timeindex and the image_channel if available
 
     block_partition_size = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix_shape_arr) / block_partition_size).astype(int)
+    print('!!!!!!!! block partition  size ', block_partition_size)
+    nblocks = np.ceil(np.array(fix_spatial_dims) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
-    logger.info(f'Partition {fix_shape_arr} into {nblocks} using' +
+    logger.info(f'Partition {fix_spatial_dims} into {nblocks} using' +
                 f'{block_partition_size} blocksize and {overlaps} overlaps')
     fix_blocks_ids = []
     fix_blocks_coords = []
     fix_blocks_neighbors = []
-    for (i, j, k) in np.ndindex(*nblocks):
-        start = block_partition_size * (i, j, k) - overlaps
+    for bi in np.ndindex(*nblocks):
+        start = block_partition_size * bi - overlaps
         stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
-        stop = np.minimum(fix_shape_arr, stop)
+        stop = np.minimum(fix_spatial_dims, stop)
         block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
         if fix_mask is not None:
-            logger.info(f'Use mask for block {(i, j, k)}')
-            mask_start = block_partition_size * (i, j, k)
+            logger.info(f'Use mask for block {bi}')
+            mask_start = block_partition_size * bi
             mask_stop = mask_start + block_partition_size
             if fix_mask_image is not None:
-                ratio = fix_mask_shape_arr / fix_shape_arr
+                ratio = fix_mask_spatial_dims / fix_spatial_dims
             else:
                 ratio = 1
             mask_start = np.round(ratio * mask_start).astype(int)
@@ -489,25 +502,27 @@ def distributed_alignment_pipeline(
                 # mask is provided as an image
                 fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
                 foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
-                logger.debug(f'Block {(i, j, k)} fg ratio: {foreground_ratio}')
+                logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
                 if foreground_ratio < foreground_percentage:
-                    logger.debug(f'Ignore ndarray masked block {(i, j, k)}')
+                    logger.debug(f'Ignore ndarray masked block {bi}')
                     foreground = False
             elif isinstance(fix_mask, (tuple, list)):
                 # mask is provided as a tuple
                 fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
                 fix_mask_crop = np.isin(fix_mask_crop, fix_mask, invert=True).astype(np.uint8)
                 foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
-                logger.debug(f'Block {(i, j, k)} fg ratio: {foreground_ratio}')
+                logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
                 if foreground_ratio < foreground_percentage:
-                    logger.debug(f'Ignore tuple masked block {(i, j, k)}')
+                    logger.debug(f'Ignore tuple masked block {bi}')
                     foreground = False
 
         if foreground:
-            fix_blocks_ids.append((i, j, k,))
+            fix_blocks_ids.append(bi)
             fix_blocks_coords.append(block_slice)
 
-    neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=fix_image.ndim)))
+    print('!!!!! BLOCK IDS ', fix_blocks_ids, fix_blocks_coords)
+    neighbor_offsets = np.array(list(product([-1, 0, 1],
+                                             repeat=fix_image.spatial_ndim)))
     for block_index in fix_blocks_ids:
         block_neighbors = { tuple(o): tuple(block_index + o) in fix_blocks_ids
                                       for o in neighbor_offsets }
@@ -521,16 +536,16 @@ def distributed_alignment_pipeline(
     block_align_steps = [(a, {**kwargs, **b}) for a, b in steps]
 
     logger.info(f'Prepare params for {len(fix_blocks_infos)} ' +
-                f'blocks for a {fix_shape_arr} volume')
+                f'blocks for a {fix_spatial_dims} volume')
 
     prepare_blocks_method = functools.partial(
-        _prepare_compute_block_transform_params,
-        fix_shape=fix_shape_arr,
-        mov_shape=mov_shape_arr,
+        _prepare_compute_block_spatial_transform_params,
+        fix_shape=fix_spatial_dims,
+        mov_shape=mov_spatial_dims,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
-        fix_fullmask_shape=fix_mask_shape_arr,
-        mov_fullmask_shape=mov_mask_shape_arr,
+        fix_fullmask_shape=fix_mask_spatial_dims,
+        mov_fullmask_shape=mov_mask_spatial_dims,
         static_transform_list=static_transform_list,
     )
 
@@ -559,7 +574,7 @@ def distributed_alignment_pipeline(
                 f'{len(block_transform_res)} blocks')
 
     res = _collect_results(block_transform_res)
-    logger.info(f'Distributed alignment completed successfully')
+    logger.info('Distributed alignment completed successfully')
     return res
 
 

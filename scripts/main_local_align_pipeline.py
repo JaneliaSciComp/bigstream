@@ -17,10 +17,7 @@ from bigstream.configure_dask import (ConfigureWorkerPlugin,
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
-from bigstream.image_data import ImageData
-
-
-logger = None # initialized in main as a result of calling configure_logging
+from bigstream.image_data import (ImageData, get_spatial_values)
 
 
 def _define_args(local_descriptor):
@@ -140,6 +137,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
 
     logger.info(f'Run local registration with: {reg_args}, {local_steps}')
 
+    print('!!!!!!! REG ARGS ', reg_args.__dict__, flush=True)
     (fix_image, fix_mask, mov_image, mov_mask) = get_input_images(reg_args)
     if mov_image.ndim != fix_image.ndim:
         # only check for ndim and not shape because as it happens 
@@ -275,19 +273,44 @@ def _align_local_data(fix_image: ImageData,
     logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
                 f'using {ut.get_number_of_cores()} cpus')
 
-    transform_downsampling = (list(fix_image.downsampling) + [1])[::-1]
-    transform_spacing = (list(fix_image.get_downsampled_voxel_resolution(False)) + [1])[::-1]
+    transform_downsampling = tuple(get_spatial_values(fix_image.downsampling)) + (1,)
+    print('!!!! VOXEL SPACING ', fix_image.voxel_spacing)
+    logger.info(f'Transform downsampling: {transform_downsampling}')
+    transform_spacing = tuple(get_spatial_values(fix_image.get_full_voxel_resolution())) + (1,)
+    logger.info(f'Transform spacing: {transform_spacing}')
+    print('!!!!!! TRANSFORM SPACING: ', transform_spacing)
     if transform_path:
+        # transform shape
+        transform_shape = fix_shape[-3:] + (3,)
+        logger.debug(f'Transform shape: {transform_shape}')
+        transform_axes = get_spatial_values(fix_image.get_attr('axes'))
+        if transform_axes is not None:
+            transform_axes.append({
+                'name': 'c',
+                'type': 'channel',
+            })
+            print('!!!!!!! TRANSFORM AXES ', transform_axes)
+        print('!!!!!!! TRANSFORM SPACING ', transform_spacing)
+        print('!!!!!!! TRANSFORM DOWNSAMPOLING ', transform_downsampling)
+        print('!!!!!! TRANSFORM BLOCK ', transform_blocksize)
+        transform_attrs = io_utility.prepare_attrs(
+            transform_subpath,
+            axes=transform_axes,
+            coordinateTransformations=fix_image.get_attr('coordinateTransformations'),
+            pixelResolution=transform_spacing,
+            downsamplingFactors=transform_downsampling,
+        )
+        transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (3,)
+        print('!!!!!! TRANSFORM ATTRS ', transform_attrs)
         transform = io_utility.create_dataset(
             transform_path,
             transform_subpath,
-            fix_shape + (fix_ndim,),
-            tuple(transform_blocksize) + (fix_ndim,),
+            transform_shape,
+            transform_output_chunksize,
             np.float32,
             overwrite=True,
             compressor=compressor,
-            pixelResolution=transform_spacing,
-            downsamplingFactors=transform_downsampling, 
+            **transform_attrs,
         )
     else:
         transform = None
@@ -297,9 +320,8 @@ def _align_local_data(fix_image: ImageData,
     if fix_image.has_data() and mov_image.has_data():
         deform_ok = distributed_alignment_pipeline(
             fix_image, mov_image,
-            fix_image.voxel_spacing, mov_image.voxel_spacing,
             steps,
-            processing_size, # parallelize on processing size
+            get_spatial_values(processing_size), # parallelize on processing size
             cluster_client,
             overlap_factor=processing_overlap_factor,
             fix_mask=fix_mask,

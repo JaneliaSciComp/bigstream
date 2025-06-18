@@ -8,7 +8,7 @@ import re
 import zarr
 import traceback
 
-from ome_zarr_models.v04.image import ImageAttrs
+from ome_zarr_models.v04.image import (Dataset, ImageAttrs)
 from tifffile import TiffFile
 
 
@@ -68,7 +68,32 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
         raise e
 
 
-def open(container_path, subpath, block_coords=None, container_type=None):
+def get_voxel_spacing(attrs: dict):
+    pr = None
+    if attrs.get('coordinateTransformations'):
+        scale_metadata = list(filter(lambda t: t.type == 'scale', attrs['coordinateTransformations']))
+        if len(scale_metadata) > 0:
+            # return voxel spacing as [time, ch, dz, dy, dx]
+            pr = np.array(scale_metadata[0].scale)
+        else:
+            pr = None
+    elif (attrs.get('downsamplingFactors')):
+        pr = (np.array(attrs['pixelResolution']) * 
+              np.array(attrs['downsamplingFactors']))
+    elif attrs.get('pixelResolution'):
+        pr_attr = attrs.get('pixelResolution')
+        if type(pr_attr) is list:
+            pr = np.array(pr_attr)
+        elif type(pr_attr) is dict:
+            if pr_attr.get('dimensions'):
+                pr = np.array(pr_attr['dimensions'])
+    logger.debug(f'Voxel spacing from attributes: {pr}')
+    return pr
+
+
+def open(container_path, subpath,
+         data_timeindex=None, data_channels=None,
+         block_coords=None, container_type=None):
     real_container_path = os.path.realpath(container_path)
     path_comps = os.path.splitext(container_path)
 
@@ -88,11 +113,17 @@ def open(container_path, subpath, block_coords=None, container_type=None):
           or os.path.exists(f'{real_container_path}/attributes.json')
           or container_type == 'n5'):
         logger.info(f'Open N5 {container_path} ({real_container_path})')
-        return _open_zarr(real_container_path, subpath, data_store_name='n5',
+        return _open_zarr(real_container_path, subpath,
+                          data_timeindex=data_timeindex,
+                          data_channels=data_channels,
+                          data_store_name='n5',
                           block_coords=block_coords)
     elif container_ext == '.zarr' or container_type == 'zarr':
         logger.info(f'Open Zarr {container_path} ({real_container_path})')
-        return _open_zarr(real_container_path, subpath, data_store_name='zarr',
+        return _open_zarr(real_container_path, subpath,
+                          data_timeindex=data_timeindex,
+                          data_channels=data_channels,
+                          data_store_name='zarr',
                           block_coords=block_coords)
     else:
         logger.error(f'Cannot handle {container_path} ' +
@@ -100,32 +131,41 @@ def open(container_path, subpath, block_coords=None, container_type=None):
         return None, {}
 
 
-def get_voxel_spacing(attrs: dict):
-    pr = None
-    if attrs.get('coordinateTransformations'):
-        scale_metadata = list(filter(lambda t: t.type == 'scale', attrs['coordinateTransformations']))
-        if len(scale_metadata) > 0:
-            # return voxel spacing as [dx, dy, dz]
-            pr = np.array(scale_metadata[0].scale[2:][::-1])
-
-    if attrs.get('pixelResolution'):
-        pr_attr = attrs.get('pixelResolution')
-        if type(pr_attr) is list:
-            pr = np.array(pr_attr)
-        elif type(pr_attr) is dict:
-            if pr_attr.get('dimensions'):
-                pr = np.array(pr_attr['dimensions'])
-
-    if pr is not None:
-        if attrs.get('downsamplingFactors'):
-            ds = np.array(attrs['downsamplingFactors'])
-        else:
-            ds = 1
-
-        return pr * ds
+def prepare_attrs(dataset_path,
+                  axes=None,
+                  coordinateTransformations=None,
+                  **additional_attrs):
+    if (coordinateTransformations is None or coordinateTransformations == []
+        or axes is None):
+        # coordinateTransformation is None or [] or no axes were provided
+        return {k: v for k, v in additional_attrs.items()}
     else:
-        return None
+        dataset_path_comps = [c for c in dataset_path.split('/') if c]
+        # take the last component of the dataset path to be the scale path
+        dataset_scale_subpath = dataset_path_comps.pop()
 
+        scales, translations = (1,) * len(axes), None
+        for t in coordinateTransformations:
+            if t.type == 'scale':
+                scales = t.scale
+            elif t.type == 'translation':
+                translations = t.translation
+
+        dataset = Dataset.build(path=dataset_scale_subpath, scale=scales, translation=translations)
+        print('!!!!!!!!!!! AXES ', axes)
+        print('!!!!!!!!!!! DATASET ', dataset)
+        ome_attrs = {
+            'multiscales': [
+                {
+                    'axes': axes,
+                    'datasets': (dataset.dict(),),
+                }
+            ]
+        }
+        ome_attrs.update(additional_attrs)
+        print('!!!!!!!!!!! OME ATTRS ', ome_attrs)
+        return ome_attrs
+    
 
 def read_attributes(container_path, subpath, container_type=None):
     real_container_path = os.path.realpath(container_path)
@@ -152,15 +192,21 @@ def read_attributes(container_path, subpath, container_type=None):
         return {}
 
 
-def read_block(block_coords, image=None, image_path=None, image_subpath=None):
+def read_block(block_coords, image=None, image_path=None, image_subpath=None,
+               image_timeindex=None, image_channel=None):
     if block_coords is None:
         return None
 
+    print('!!!!!!! USE IMAGE ', image, block_coords)
     if image is not None:
         return image[block_coords]
 
     if image_path is not None:
-        block, _ = open(image_path, image_subpath, block_coords=block_coords)
+        block, _ = open(image_path, image_subpath,
+                        data_timeindex=image_timeindex,
+                        data_channels=image_channel,
+                        block_coords=block_coords)
+        logger.debug(f'Read {block.shape} block at {block_coords}')
         return block
 
     # this is when there are block coords but no image nd-array or
@@ -169,7 +215,7 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None):
 
 
 def _open_zarr(data_path, data_subpath, data_store_name=None,
-               data_subpath_pattern=None,
+               data_timeindex=None, data_channels=None,
                block_coords=None):
     try:
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath)
@@ -179,8 +225,9 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
         data_container_attrs = data_container.attrs.asdict()
 
         if _is_ome_zarr(data_container_attrs):
-            return _open_ome_zarr(data_container, data_container_attrs, zarr_subpath, 
-                                  data_subpath_pattern=data_subpath_pattern,
+            return _open_ome_zarr(data_container, zarr_subpath,
+                                  data_timeindex=data_timeindex,
+                                  data_channels=data_channels,
                                   block_coords=block_coords)
         else:
             a = data_container[zarr_subpath] if zarr_subpath else data_container
@@ -280,12 +327,14 @@ def _open_ome_zarr(data_container, data_subpath,
     a = multiscales_group[dataset_path]
     # a is potentially a 5-dim array: [timepoint?, channel?, z, y, x]
     if block_coords is not None:
-        ba = _get_array_selector(dataset_axes, data_timeindex, data_channels)(a)[block_coords]
+        print('!!!!!! REaD BLOCK COORDS: ', block_coords)
+        ba = _get_array_selector(dataset_axes, data_timeindex, data_channels, block_coords)(a)
     else:
-        ba = _get_array_selector(dataset_axes, data_timeindex, data_channels)(a)
+        ba = _get_array_selector(dataset_axes, data_timeindex, data_channels, None)(a)
+    multiscales_attrs.update(a.attrs.asdict())
     multiscales_attrs.update({
         'dataset_path': dataset_path,
-        'axes': dataset_axes,
+        'axes': [a.dict() for a in dataset_axes],
         'timeindex': data_timeindex,
         'channels': data_channels,
         'coordinateTransformations': dataset_metadata.coordinateTransformations
@@ -293,9 +342,12 @@ def _open_ome_zarr(data_container, data_subpath,
     return ba, multiscales_attrs
 
 
-def _get_array_selector(axes, timeindex: int|None, ch:int | list[int] | None):
+def _get_array_selector(axes, timeindex: int | None, 
+                        ch:int | list[int] | None,
+                        block_coords: tuple | None):
     selector = []
     selection_exists = False
+    spatial_selection = []
     for a in axes:
         if a.type == 'time':
             if timeindex is not None:
@@ -310,7 +362,15 @@ def _get_array_selector(axes, timeindex: int|None, ch:int | list[int] | None):
                 selector.append(ch)
                 selection_exists = True
         else:
-            selector.append(slice(None, None))
+            spatial_selection.append(slice(None, None))
+
+    if block_coords is not None:
+        selector.extend(block_coords)
+        selection_exists = True
+    else:
+        selector.extend(spatial_selection)
+
+    print('!!!!!! SELECTOR: ', timeindex, ch, selection_exists, selector)    
     return lambda a: a[tuple(selector)] if selection_exists else a
 
 
@@ -323,17 +383,17 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         data_container_attrs = data_container.attrs.asdict()
 
         if _is_ome_zarr(data_container_attrs):
-            _, dataset_attrs = _open_ome_zarr(data_container, data_container_attrs, zarr_subpath)
+            a, dataset_attrs = _open_ome_zarr(data_container, zarr_subpath)
         else:
             a = data_container[zarr_subpath] if zarr_subpath else data_container
             dataset_attrs = a.attrs.asdict()
-            dataset_attrs.update({
-                'dataType': a.dtype,
-                'dimensions': a.shape,
-                'blockSize': a.chunks,
-            })
-            logger.info(f'{data_path}:{data_subpath} attrs: {dataset_attrs}')
-        
+
+        dataset_attrs.update({
+            'dataType': a.dtype,
+            'dimensions': a.shape,
+            'blockSize': a.chunks,
+        })
+        logger.info(f'{data_path}:{data_subpath} attrs: {dataset_attrs}')
         return dataset_attrs
     except Exception as e:
         logger.error(f'Error opening {data_path} : {data_subpath}, {e}')

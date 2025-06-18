@@ -1293,9 +1293,11 @@ def deformable_align(
         logger.info(f'{context} Registration succeeded')
         return params, field
     else:
-        logger.warn(f'{context} Optimization failed to improve metric')
-        logger.info(f'{context} METRIC VALUES initial: {initial_metric_value} ',
-                    f'final: {final_metric_value}')
+        logger.warning(f'{context} Optimization failed to improve metric')
+        logger.info((
+            f'{context} METRIC VALUES initial: {initial_metric_value} '
+            f'final: {final_metric_value}'
+        ))
         logger.info(f'{context} Returning default')
         return default
 

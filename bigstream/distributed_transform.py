@@ -9,6 +9,7 @@ from itertools import product
 
 from dask.distributed import as_completed
 
+from .image_data import ImageData, get_spatial_values
 from .io_utility import read_block as io_utility_read_block
 
 
@@ -16,8 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def distributed_apply_transform(
-    fix_image, mov_image,
-    fix_spacing, mov_spacing,
+    fix_image:ImageData, mov_image:ImageData,
     blocksize,
     transform_list,
     cluster_client,
@@ -37,14 +37,6 @@ def distributed_apply_transform(
 
     mov_image : ImageData
         The moving image data
-
-    fix_spacing : 1d array
-        The spacing in physical units (e.g. mm or um) between voxels
-        of the fixed image. Length must equal `fix.ndim`
-
-    mov_spacing : 1d array
-        The spacing in physical units (e.g. mm or um) between voxels
-        of the moving image. Length must equal `mov.ndim`
 
     blocksize : tuple
         The block partition size used for distributing the work
@@ -81,11 +73,13 @@ def distributed_apply_transform(
     """
 
     # get overlap and number of blocks
-    fix_shape_arr = fix_image.shape_arr
-    mov_shape_arr = mov_image.shape_arr
-    blocksize_array = np.array(blocksize)
-    nblocks = np.ceil(np.array(fix_shape_arr) / blocksize_array).astype(int)
-    overlaps = np.round(blocksize_array * overlap_factor).astype(int)
+    fix_spatial_dims = fix_image.spatial_dims
+    mov_spatial_dims = mov_image.spatial_dims
+    fix_spacing = get_spatial_values(fix_image.voxel_spacing)
+    mov_spacing = get_spatial_values(mov_image.voxel_spacing)
+    block_partition_size = np.array(get_spatial_values(blocksize))
+    nblocks = np.ceil(np.array(fix_spatial_dims) / block_partition_size).astype(int)
+    overlaps = np.round(block_partition_size * overlap_factor).astype(int)
 
     # ensure there's a 1:1 correspondence between transform spacing 
     # and transform list
@@ -104,35 +98,39 @@ def distributed_apply_transform(
 
     # prepare block coordinates
     logger.info(f'Apply distributed transform to {fix_image.shape} ' +
-          f'partitioned in {nblocks} blocks using {blocksize_array}')
+          f'partitioned in {nblocks} blocks using {block_partition_size}')
     blocks_coords = []
-    for (i, j, k) in np.ndindex(*nblocks):
-        start = blocksize_array * (i, j, k) - overlaps
-        stop = start + blocksize_array + 2 * overlaps
+    for bi in np.ndindex(*nblocks):
+        start = block_partition_size * bi - overlaps
+        stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
-        stop = np.minimum(fix_shape_arr, stop)
+        stop = np.minimum(fix_spatial_dims, stop)
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
         blocks_coords.append(block_coords)
 
     logger.info(f'Transform {len(blocks_coords)} blocks' +
-                f'with partition size {blocksize_array}')
+                f'with partition size {block_partition_size}')
 
     fix_block_reader = functools.partial(io_utility_read_block,
                                          image=fix_image.image_ndarray,
                                          image_path=fix_image.image_path,
-                                         image_subpath=fix_image.image_subpath)
+                                         image_subpath=fix_image.image_subpath,
+                                         image_timeindex=fix_image.image_timeindex,
+                                         image_channel=fix_image.image_channels)
     mov_block_reader = functools.partial(io_utility_read_block,
                                          image=mov_image.image_ndarray,
                                          image_path=mov_image.image_path,
-                                         image_subpath=mov_image.image_subpath)
+                                         image_subpath=mov_image.image_subpath,
+                                         image_timeindex=mov_image.image_timeindex,
+                                         image_channel=mov_image.image_channels)
     transform_block = functools.partial(
         _transform_single_block,
         fix_block_reader,
         mov_block_reader,
-        full_mov_shape=mov_shape_arr,
+        full_mov_shape=mov_spatial_dims,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
-        blocksize=blocksize_array,
+        blocksize=block_partition_size,
         blockoverlaps=overlaps,
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,
@@ -519,21 +517,22 @@ def distributed_invert_displacement_vector_field(
     """
 
     # get overlap and number of blocks
-    blocksize_array = np.array(blocksize)
-    overlap = np.round(blocksize_array * overlap_factor).astype(int)
+    block_partition_size = np.array(get_spatial_values(blocksize))
+    spatial_spacing = get_spatial_values(spacing)
+    overlaps = np.round(block_partition_size * overlap_factor).astype(int)
     nblocks = np.ceil(np.array(vectorfield_array.shape[:-1]) / 
-                      blocksize_array).astype(int)
+                      block_partition_size).astype(int)
 
     logger.info((
         'Prepare inverting blocks with '
-        f'partition size {blocksize_array} '
+        f'partition size {block_partition_size} '
         f'invert displacement args: {kwargs} '
     ))
     # store block coordinates in a dask array
     blocks_coords = []
-    for (i, j, k) in np.ndindex(*nblocks):
-        start = blocksize_array * (i, j, k) - overlap
-        stop = start + blocksize_array + 2 * overlap
+    for bi in np.ndindex(*nblocks):
+        start = block_partition_size * bi - overlaps
+        stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
         stop = np.minimum(vectorfield_array.shape[:-1], stop)
         coords = tuple(slice(x, y) for x, y in zip(start, stop))
@@ -544,9 +543,9 @@ def distributed_invert_displacement_vector_field(
         _invert_block,
         full_vectorfield=vectorfield_array,
         inv_vectorfield_result=inv_vectorfield_array,
-        spacing=spacing,
-        blocksize=blocksize_array,
-        blockoverlaps=overlap,
+        spacing=spatial_spacing,
+        blocksize=block_partition_size,
+        blockoverlaps=overlaps,
         **kwargs
     )
     logger.info(f'Submit Invert for {len(blocks_coords)} blocks')
@@ -565,19 +564,23 @@ def distributed_invert_displacement_vector_field(
 def _invert_block(block_coords,
                   full_vectorfield=None,
                   inv_vectorfield_result=None,
-                  spacing=None,
-                  blocksize=None,
-                  blockoverlaps=None,
+                  spacing=[],
+                  blocksize=[],
+                  blockoverlaps=[],
                   **kwargs):
     """
     Invert block function
     """
     logger.info((
         f'Invert block: {block_coords}, '
-        f'spacing: {spacing}, invert args: {kwargs} '
+        f'blocksize: {blocksize}, spacing: {spacing}, blockoverlaps: {blockoverlaps}'
+        f'invert args: {kwargs} '
     ))
 
+    print('!!!!!!! FULL VECTOR FIELD ', full_vectorfield.shape)
+    print('!!!!!!! INV BLOCK COORDS ', block_coords)
     block_vectorfield = full_vectorfield[block_coords]
+    print('!!!!!!! BLOCK SHAPE ', block_vectorfield.shape)
 
     inverse_block = bs_transform.invert_displacement_vector_field(
         block_vectorfield,

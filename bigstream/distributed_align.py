@@ -28,8 +28,6 @@ def _prepare_compute_block_spatial_transform_params(block_info,
 
     logger.debug(f'Prepare block coords {block_info}')
     block_index, fix_block_coords, fix_block_neighbors = block_info
-    print('!!!!!! BLOCK INDEX ', block_index, fix_spacing)
-    print('!!!!!! BLOCK COORDS ', fix_block_coords)
     (fix_block_voxel_coords,
      fix_block_phys_coords) = _get_spatial_block_corner_coords(fix_block_coords,
                                                                fix_spacing)
@@ -53,7 +51,6 @@ def _prepare_compute_block_spatial_transform_params(block_info,
         updated_block_transform_list.append(block_transform)
 
     block_transform_list = updated_block_transform_list[::-1]  # reverse it
-    print('!!!!! BLOCK TRANSFORMS ', block_transform_list, mov_spacing)
     # get moving image crop, read moving data
     mov_block_coords = np.round(
         mov_block_phys_coords / mov_spacing).astype(int)
@@ -465,12 +462,11 @@ def distributed_alignment_pipeline(
                              if mov_mask_image is not None
                              else None)
 
+    block_partition_size = np.array(get_spatial_values(blocksize))
+
     # from here on we only use spatial coordinates
     # except for the block reading where we also use the 
     # image_timeindex and the image_channel if available
-
-    block_partition_size = np.array(blocksize)
-    print('!!!!!!!! block partition  size ', block_partition_size)
     nblocks = np.ceil(np.array(fix_spatial_dims) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
     logger.info(f'Partition {fix_spatial_dims} into {nblocks} using' +
@@ -520,7 +516,6 @@ def distributed_alignment_pipeline(
             fix_blocks_ids.append(bi)
             fix_blocks_coords.append(block_slice)
 
-    print('!!!!! BLOCK IDS ', fix_blocks_ids, fix_blocks_coords)
     neighbor_offsets = np.array(list(product([-1, 0, 1],
                                              repeat=fix_image.spatial_ndim)))
     for block_index in fix_blocks_ids:

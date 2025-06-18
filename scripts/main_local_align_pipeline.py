@@ -274,14 +274,13 @@ def _align_local_data(fix_image: ImageData,
                 f'using {ut.get_number_of_cores()} cpus')
 
     transform_downsampling = tuple(get_spatial_values(fix_image.downsampling)) + (1,)
-    print('!!!! VOXEL SPACING ', fix_image.voxel_spacing)
     logger.info(f'Transform downsampling: {transform_downsampling}')
     transform_spacing = tuple(get_spatial_values(fix_image.get_full_voxel_resolution())) + (1,)
     logger.info(f'Transform spacing: {transform_spacing}')
+    transform_shape = get_spatial_values(fix_shape) + (3,)
     print('!!!!!! TRANSFORM SPACING: ', transform_spacing)
     if transform_path:
         # transform shape
-        transform_shape = fix_shape[-3:] + (3,)
         logger.debug(f'Transform shape: {transform_shape}')
         transform_axes = get_spatial_values(fix_image.get_attr('axes'))
         if transform_axes is not None:
@@ -289,10 +288,6 @@ def _align_local_data(fix_image: ImageData,
                 'name': 'c',
                 'type': 'channel',
             })
-            print('!!!!!!! TRANSFORM AXES ', transform_axes)
-        print('!!!!!!! TRANSFORM SPACING ', transform_spacing)
-        print('!!!!!!! TRANSFORM DOWNSAMPOLING ', transform_downsampling)
-        print('!!!!!! TRANSFORM BLOCK ', transform_blocksize)
         transform_attrs = io_utility.prepare_attrs(
             transform_subpath,
             axes=transform_axes,
@@ -301,7 +296,6 @@ def _align_local_data(fix_image: ImageData,
             downsamplingFactors=transform_downsampling,
         )
         transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (3,)
-        print('!!!!!! TRANSFORM ATTRS ', transform_attrs)
         transform = io_utility.create_dataset(
             transform_path,
             transform_subpath,
@@ -321,7 +315,7 @@ def _align_local_data(fix_image: ImageData,
         deform_ok = distributed_alignment_pipeline(
             fix_image, mov_image,
             steps,
-            get_spatial_values(processing_size), # parallelize on processing size
+            processing_size, # parallelize on processing size
             cluster_client,
             overlap_factor=processing_overlap_factor,
             fix_mask=fix_mask,
@@ -349,16 +343,15 @@ def _align_local_data(fix_image: ImageData,
                 f'{inv_iterations} vs {inv_shrink_spacings} vs {inv_smooth_sigmas} '
             ))
 
+        inv_transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (3,)
         inv_transform = io_utility.create_dataset(
             inv_transform_path,
             inv_transform_subpath,
-            fix_shape + (fix_ndim,),
-            tuple(inv_transform_blocksize) + (fix_ndim,),
+            transform_shape,
+            inv_transform_output_chunksize,
             np.float32,
             overwrite=True,
             compressor=compressor,
-            pixelResolution=transform_spacing,
-            downsamplingFactors=transform_downsampling,            
         )
         logger.info('Calculate inverse transformation' +
                     f'{inv_transform_path}:{inv_transform_subpath}' +

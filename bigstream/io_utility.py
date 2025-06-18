@@ -197,7 +197,6 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
     if block_coords is None:
         return None
 
-    print('!!!!!!! USE IMAGE ', image, block_coords)
     if image is not None:
         return image[block_coords]
 

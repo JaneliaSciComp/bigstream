@@ -12,6 +12,9 @@ from bigstream.distributed_transform import distributed_apply_transform
 from bigstream.image_data import ImageData
 
 
+logger = None
+
+
 def _define_args():
     args_parser = argparse.ArgumentParser(description='Apply transformation')
     args_parser.add_argument('--fix', '--fixed',

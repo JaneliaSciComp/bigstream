@@ -163,13 +163,12 @@ def distributed_apply_transform(
             traceback.print_tb(tb)
             res = False
 
-        finished_block_coords = r
+        logger.info(f'Completed to transform block: {r}')
 
-        logger.info(f'Completed to transform block: {finished_block_coords}')
     if res:
         logger.info('Distributed deform transform applied successfully')
     else:
-        logger.warn('Distributed deform transform applied with errors')
+        logger.warning('Distributed deform transform applied with errors')
 
 
 def _transform_single_block(fix_block_read_method,
@@ -310,13 +309,14 @@ def _transform_single_block(fix_block_read_method,
 
         logger.info((
             f'Finished deforming block at {block_coords}, '
-            f'moving slices: {mov_slices} '
-            f'to {final_block_coords}'))
-        return _write_block(final_block_coords, aligned_block,
-                            output=output)
+            f'moving coords: {mov_block_coords}, '
+            f'final coords: {final_block_coords} '))
+        written_coords = _write_block(final_block_coords, aligned_block,
+                                      output=output)
+        del fix_block, mov_block, aligned_block
+        return written_coords
     except Exception as e:
-        logger.error(f'Error trying to transform block {block_coords}: {e}')
-        traceback.print_tb(e)
+        logger.error(f'Error trying to transform block {block_coords}: {traceback.format_exc(e)}')
         raise e
 
 
@@ -594,6 +594,9 @@ def distributed_invert_displacement_vector_field(
             block_coords = r
             logger.info(f'Finished inverting block {block_coords}')
 
+    logger.info('Finished computing inverse vector field for all blocks')
+    return inv_vectorfield_array
+
 
 def _invert_block(block_coords,
                   full_vectorfield=[],
@@ -649,13 +652,17 @@ def _invert_block(block_coords,
         f'{block_coords}, {block_vectorfield.shape} -> '
         f'{inverse_block_coords}, {inverse_block.shape} '
     ))
-    return _write_block(inverse_block_coords, inverse_block,
-                        output=inv_vectorfield_result)
+    written_coords = _write_block(inverse_block_coords, inverse_block,
+                                  output=inv_vectorfield_result)
+    del block_vectorfield, inverse_block
+    return written_coords
 
 
 def _write_block(block_coords, block_data, output=None):
     if output is not None and block_data is not None:
-        logger.debug(f'Write {block_data.shape} block at {block_coords} to {output.shape}')
+        logger.debug(f'Write {block_data.shape} block at {block_coords} to {output}({output.shape})')
         output[block_coords] = block_data
+        logger.debug(f'Done writing {block_data.shape} block at {block_coords} to {output}({output.shape})')
+        return block_coords
 
-    return block_coords
+    return None

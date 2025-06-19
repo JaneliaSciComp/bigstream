@@ -5,12 +5,12 @@ import sys
 from logging.config import fileConfig
 
 
-def configure_logging(config_file, verbose, logger_name=None):
+def configure_logging(config_file, verbose):
     if config_file:
-        print(f'Configure logging using {config_file}, logger name: {logger_name}')
+        print(f'Configure logging using {config_file}')
         fileConfig(config_file)
     else:
-        print(f'Configure logging using basic config - verbose: {verbose}, logger name: {logger_name}')
+        print(f'Configure logging using basic config - verbose: {verbose}')
         log_level = logging.DEBUG if verbose else logging.INFO
         log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         logging.basicConfig(level=log_level,
@@ -19,7 +19,7 @@ def configure_logging(config_file, verbose, logger_name=None):
                             handlers=[
                                 logging.StreamHandler(stream=sys.stdout)
                             ])
-    return logging.getLogger(logger_name)
+    return logging.getLogger()
 
 
 def set_cpu_resources(cpus:int):

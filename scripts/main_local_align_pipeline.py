@@ -20,6 +20,9 @@ from bigstream.distributed_transform import (distributed_apply_transform,
 from bigstream.image_data import (ImageData, get_spatial_values)
 
 
+logger = None
+
+
 def _define_args(local_descriptor):
     args_parser = argparse.ArgumentParser(description='Registration pipeline')
 
@@ -220,13 +223,12 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     if dask_scheduler_address:
         cluster_client = Client(address=dask_scheduler_address)
     else:
-        cluster_client = Client(LocalCluster(n_workers=dask_workers))
-
+        cluster_client = Client(LocalCluster(n_workers=dask_workers,
+                                             threads_per_worker=worker_cpus))
     # create worker plugin
     worker_config = ConfigureWorkerPlugin(logging_config, verbose,
                                           worker_cpus=worker_cpus)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
-
     try:
         _align_local_data(
             fix_image,
@@ -321,7 +323,7 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=transform_spacing,
             downsamplingFactors=transform_downsampling,
         )
-        transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (3,)
+        transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
         transform = io_utility.create_dataset(
             transform_path,
             transform_subpath,
@@ -369,7 +371,7 @@ def _align_local_data(fix_image: ImageData,
                 f'{inv_iterations} vs {inv_shrink_spacings} vs {inv_smooth_sigmas} '
             ))
 
-        inv_transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (3,)
+        inv_transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
         inv_transform = io_utility.create_dataset(
             inv_transform_path,
             inv_transform_subpath,
@@ -399,6 +401,7 @@ def _align_local_data(fix_image: ImageData,
             pad=inv_pad,
             use_root=inv_use_root,
         )
+        del inv_transform
     else:
         if not inv_transform_path:
             logger.info('Skip the inverse because it is not set')
@@ -420,12 +423,17 @@ def _align_local_data(fix_image: ImageData,
             align_shape = (align_total_channels,) + fix_image.spatial_dims
         else:
             align_shape = (align_total_timeindexes, align_total_channels) + fix_image.spatial_dims
-        print('!!!!!!!!! ALIGN BLOCK SIZE ', align_shape, align_blocksize)
+        if len(align_blocksize) < len(align_shape):
+            # align_blocksize is not set, so use default block size
+            align_chunk_size = (1,) * (len(align_shape)- len(align_blocksize)) + tuple(get_spatial_values(align_blocksize))
+        else:
+            align_chunk_size = tuple(get_spatial_values(align_blocksize))
+        print('!!!!!!!!! ALIGN BLOCK SIZE ', align_shape, align_blocksize, align_chunk_size)
         align = io_utility.create_dataset(
             align_path,
             align_subpath,
             align_shape,
-            align_blocksize,
+            align_chunk_size,
             fix_image.dtype,
             overwrite=True,
             compressor=compressor,

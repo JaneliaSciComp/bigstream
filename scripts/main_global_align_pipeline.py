@@ -15,6 +15,9 @@ from bigstream.image_data import ImageData
 from bigstream.transform import apply_transform
 
 
+logger = None
+
+
 def _define_args(args_descriptor):
     args_parser = argparse.ArgumentParser(description='Registration pipeline')
 

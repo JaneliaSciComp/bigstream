@@ -10,6 +10,8 @@ from bigstream.distributed_transform import (
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
 
+logger = None
+
 
 def _define_args():
     args_parser = argparse.ArgumentParser(description='Apply transformation')

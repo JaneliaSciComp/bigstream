@@ -141,8 +141,8 @@ def _read_block(block_coords, image_data,
             image_subpath=image_repr.image_subpath,
             image_timeindex=image_repr.image_timeindex,
             image_channel=image_repr.image_channels,
-        ).astype('uint16')
-        return b
+        )
+        return b.byteswap().newbyteorder('<')
 
 
 # get image block corners both in voxel and physical units

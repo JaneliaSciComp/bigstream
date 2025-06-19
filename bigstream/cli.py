@@ -173,6 +173,26 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('align-subpath'),
                       dest=args_descriptor.argdest('align_subpath'),
                       help='Alignment subpath')
+    args.add_argument(args_descriptor.argflag('align-total-timeindexes'),
+                      dest=args_descriptor.argdest('align_total_timeindexes'),
+                      type=int,
+                      default=None,
+                      help='Aligned volume total number of time indexes')
+    args.add_argument(args_descriptor.argflag('align-total-channels'),
+                      dest=args_descriptor.argdest('align_total_channels'),
+                      type=int,
+                      default=None,
+                      help='Aligned volume total number of channels')
+    args.add_argument(args_descriptor.argflag('align-timeindex'),
+                      dest=args_descriptor.argdest('align_timeindex'),
+                      type=int,
+                      default=None,
+                      help='Aligned volume time index')
+    args.add_argument(args_descriptor.argflag('align-channel'),
+                      dest=args_descriptor.argdest('align_channel'),
+                      type=int,
+                      default=None,
+                      help='Aligned volume channel')
 
     args.add_argument(args_descriptor.argflag('transform-blocksize'),
                       dest=args_descriptor.argdest('transform_blocksize'),
@@ -257,10 +277,14 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'align_dir', registration_args)
     _extract_arg(args, args_descriptor, 'align_name', registration_args)
     _extract_arg(args, args_descriptor, 'align_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'align_total_timeindexes', registration_args)
+    _extract_arg(args, args_descriptor, 'align_total_channels', registration_args)
+    _extract_arg(args, args_descriptor, 'align_timeindex', registration_args)
+    _extract_arg(args, args_descriptor, 'align_channel', registration_args)
     _extract_arg(args, args_descriptor, 'align_blocksize', registration_args)
     _extract_arg(args, args_descriptor, 'registration_steps', registration_args)
     registration_inputs = RegistrationInputs()
-    registration_inputs.__dict__ = registration_args
+    registration_inputs.__dict__.update(registration_args)
     return registration_inputs
 
 

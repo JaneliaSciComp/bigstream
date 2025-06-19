@@ -23,6 +23,8 @@ def distributed_apply_transform(
     cluster_client,
     overlap_factor=0.5,
     aligned_data=None,
+    aligned_data_timeindex=None,
+    aligned_data_channel=None,
     transform_spacing=None,
     **kwargs,
 ):
@@ -71,7 +73,11 @@ def distributed_apply_transform(
         If aligned_data is not None this will be the output
         Otherwise it returns a numpy array.
     """
-
+    logger.info((
+        f'Distributed transform a {mov_image.shape} image '
+        'using {blocksize} blocks '
+        f'with {len(transform_list)} transforms '
+    ))
     # get overlap and number of blocks
     fix_spatial_dims = fix_image.spatial_dims
     mov_spatial_dims = mov_image.spatial_dims
@@ -108,8 +114,10 @@ def distributed_apply_transform(
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
         blocks_coords.append(block_coords)
 
-    logger.info(f'Transform {len(blocks_coords)} blocks' +
-                f'with partition size {block_partition_size}')
+    logger.info((
+        f'Transform {len(blocks_coords)} blocks '
+        f'with partition size {block_partition_size} '
+    ))
 
     fix_block_reader = functools.partial(io_utility_read_block,
                                          image=fix_image.image_ndarray,
@@ -135,6 +143,8 @@ def distributed_apply_transform(
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,
         output=aligned_data,
+        output_timeindex=aligned_data_timeindex,
+        output_channel=aligned_data_channel,
         *kwargs,
     )
 
@@ -165,27 +175,33 @@ def distributed_apply_transform(
 def _transform_single_block(fix_block_read_method,
                             mov_block_read_method,
                             block_coords,
-                            full_mov_shape=None,
-                            fix_spacing=None,
-                            mov_spacing=None,
-                            blocksize=None,
-                            blockoverlaps=None,
+                            full_mov_shape=(),
+                            fix_spacing=[],
+                            mov_spacing=[],
+                            blocksize=[],
+                            blockoverlaps=[],
                             transform_list=[],
                             transform_spacing_list=[],
                             output=None,
+                            output_timeindex=None,
+                            output_channel=None,
                             **additional_transform_args):
     """
     Block transform function
     """
     fix_origin = fix_spacing * [s.start for s in block_coords]
-    logger.debug(f'Transform block: {block_coords}' +
-                 f'using {len(transform_list)} transforms' +
-                 f'Block origin: {fix_origin}' +
-                 f'Spacing(fix/mov): {fix_spacing}/{mov_spacing}' +
-                 f'Blocksize: {blocksize}, overlaps: {blockoverlaps}')
+    logger.debug((
+        f'Transform block: {block_coords} from a full {full_mov_shape} image '
+        f'using {len(transform_list)} transforms; '
+        f'transform spacing: {transform_spacing_list} '
+        f'Block origin: {fix_origin} '
+        f'Spacing(fix/mov): {fix_spacing}/{mov_spacing} '
+        f'Blocksize: {blocksize}, overlaps: {blockoverlaps} '
+    ))
     # fetch fixed image slices and read fix
     logger.debug(f'Read fix block from {block_coords}')
-    fix_block = fix_block_read_method(block_coords);
+    # read the fix block and 
+    fix_block = fix_block_read_method(block_coords).byteswap().newbyteorder('<')
 
     # read relevant region of transforms
     applied_transform_list = []
@@ -233,7 +249,7 @@ def _transform_single_block(fix_block_read_method,
         mov_origin = mov_spacing * [s.start for s in mov_slices]
 
         logger.debug(f'Read moving block from {mov_slices}')
-        mov_block = mov_block_read_method(mov_slices)
+        mov_block = mov_block_read_method(mov_slices).byteswap().newbyteorder('<')
 
         # resample
         logger.debug(f'Apply {len(transform_list)} transforms ' +
@@ -250,8 +266,17 @@ def _transform_single_block(fix_block_read_method,
             mov_origin=mov_origin,
             **additional_transform_args,
         )
-        # crop out overlap
         final_block_coords_list = []
+        # append proper timeindex and channel
+        if output_timeindex is not None and len(output.shape) > 3:
+            final_block_coords_list.append(
+                slice(output_timeindex, output_timeindex+1)
+            )
+        if output_channel is not None and len(output.shape) > 3:
+            final_block_coords_list.append(
+                slice(output_channel, output_channel+1)
+            )
+        # crop out overlap
         for axis in range(aligned_block.ndim):
             # left side
             slc = [slice(None),]*aligned_block.ndim
@@ -276,8 +301,17 @@ def _transform_single_block(fix_block_read_method,
             final_block_coords_list.append(slice(start, stop))
         # convert the coords to a tuple
         final_block_coords = tuple(final_block_coords_list)
-        logger.info(f'Finished deforming {block_coords}, {mov_slices}' +
-                    f'-> {final_block_coords}')
+        # reshape the aligned block if needed
+        if aligned_block.ndim < len(final_block_coords):
+            # add missing dimensions
+            missing_dims = len(final_block_coords) - aligned_block.ndim
+            aligned_block = aligned_block.reshape(
+                (1,)*missing_dims + aligned_block.shape)
+
+        logger.info((
+            f'Finished deforming block at {block_coords}, '
+            f'moving slices: {mov_slices} '
+            f'to {final_block_coords}'))
         return _write_block(final_block_coords, aligned_block,
                             output=output)
     except Exception as e:
@@ -562,8 +596,8 @@ def distributed_invert_displacement_vector_field(
 
 
 def _invert_block(block_coords,
-                  full_vectorfield=None,
-                  inv_vectorfield_result=None,
+                  full_vectorfield=[],
+                  inv_vectorfield_result=[],
                   spacing=[],
                   blocksize=[],
                   blockoverlaps=[],
@@ -577,10 +611,7 @@ def _invert_block(block_coords,
         f'invert args: {kwargs} '
     ))
 
-    print('!!!!!!! FULL VECTOR FIELD ', full_vectorfield.shape)
-    print('!!!!!!! INV BLOCK COORDS ', block_coords)
     block_vectorfield = full_vectorfield[block_coords]
-    print('!!!!!!! BLOCK SHAPE ', block_vectorfield.shape)
 
     inverse_block = bs_transform.invert_displacement_vector_field(
         block_vectorfield,
@@ -623,8 +654,8 @@ def _invert_block(block_coords,
 
 
 def _write_block(block_coords, block_data, output=None):
-    if output is not None:
-        logger.debug(f'Write {block_data.shape} block at {block_coords}')
+    if output is not None and block_data is not None:
+        logger.debug(f'Write {block_data.shape} block at {block_coords} to {output.shape}')
         output[block_coords] = block_data
 
     return block_coords

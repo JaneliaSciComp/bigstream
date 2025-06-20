@@ -225,7 +225,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         cluster_client = Client(LocalCluster(n_workers=dask_workers,
                                              threads_per_worker=worker_cpus))
     # create worker plugin
-    worker_config = ConfigureWorkerPlugin(logging_config, verbose,
+    worker_config = ConfigureWorkerPlugin(logging_config,
+                                          verbose,
                                           worker_cpus=worker_cpus)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
     try:

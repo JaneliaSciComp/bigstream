@@ -415,7 +415,7 @@ def _align_local_data(fix_image: ImageData,
         align_shape = fix_image.shape
         if len(align_blocksize) < len(align_shape):
             # align_blocksize is not set, so use default block size
-            align_chunk_size = (1,) * (len(align_shape)- len(align_blocksize)) + tuple(get_spatial_values(align_blocksize))
+            align_chunk_size = (1,) * (len(align_shape)-len(align_blocksize)) + tuple(get_spatial_values(align_blocksize))
         else:
             align_chunk_size = tuple(get_spatial_values(align_blocksize))
         align = io_utility.create_dataset(

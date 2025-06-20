@@ -45,8 +45,12 @@ class ImageData:
     
     def read_image(self):
         if self.image_path:
-            self.image_ndarray, self.image_attrs = img_open(self.image_path,
-                                                            self.image_subpath)
+            imgarray, self.image_attrs = img_open(self.image_path,
+                                                  self.image_subpath,
+                                                  data_timeindex=self.image_timeindex,
+                                                  data_channels=self.image_channels)
+            # Bigstrea algorithms do not support big-endian data
+            self.image_ndarray = imgarray.byteswap().newbyteorder('<')
 
     @property
     def attrs(self):

@@ -11,7 +11,7 @@ from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            get_input_images)
 from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
-from bigstream.image_data import ImageData
+from bigstream.image_data import ImageData, get_spatial_values
 from bigstream.transform import apply_transform
 
 
@@ -68,11 +68,15 @@ def _run_global_align(regArgs:RegistrationInputs, align_config, compressor):
     if fix.has_data() and mov.has_data():
         # calculate and apply the global transform
         affine, aligned = _align_global_data(fix, fix_mask, mov, mov_mask, global_steps)
+        logger.debug(f'Global affine: {affine}')
         # save the global transform
         _save_global_transform(regArgs, affine)
         # save global aligned volume
         return _save_aligned_volume(
-            regArgs, aligned,
+            regArgs,
+            aligned,
+            mov.get_attr('axes'),
+            mov.get_attr('coordinateTransformations'),
             mov.get_attr('pixelResolution'),
             mov.get_attr('downsamplingFactors'),
             compressor,
@@ -102,10 +106,13 @@ def _align_global_data(fix_image, fix_mask,
         mov_mask = mov_mask
 
     logger.info(f'Calculate global transform using: {steps}')
+    fix_spacing = get_spatial_values(fix_image.voxel_spacing)
+    mov_spacing = get_spatial_values(mov_image.voxel_spacing)
+
     affine = alignment_pipeline(fix_image.image_array,
                                 mov_image.image_array,
-                                fix_image.voxel_spacing,
-                                mov_image.voxel_spacing,
+                                fix_spacing,
+                                mov_spacing,
                                 steps,
                                 fix_mask=fix_mask,
                                 mov_mask=mov_mask)
@@ -114,8 +121,8 @@ def _align_global_data(fix_image, fix_mask,
     # apply transform
     aligned = apply_transform(fix_image.image_array,
                               mov_image.image_array,
-                              fix_image.voxel_spacing,
-                              mov_image.voxel_spacing,
+                              fix_spacing,
+                              mov_spacing,
                               transform_list=[affine,])
 
     return affine, aligned
@@ -166,29 +173,48 @@ def _save_global_transform(args, transform):
 
 def _save_aligned_volume(reg_args:RegistrationInputs,
                          aligned_array,
+                         axes,
+                         coordinateTransformations,
                          pixel_resolution,
                          downsampling,
                          compressor):
     align_path = reg_args.align_path()
     if align_path:
+        align_attrs = io_utility.prepare_attrs(
+            align_path,
+            reg_args.align_subpath,
+            axes=axes,
+            coordinateTransformations=coordinateTransformations,
+            pixelResolution=pixel_resolution,
+            downsamplingFactors=downsampling,
+        )
+        align_shape = aligned_array.shape
+
         if reg_args.align_blocksize:
             align_blocksize = reg_args.align_blocksize[::-1]
         else:
-            align_blocksize = (128,) * aligned_array.ndim
+            align_blocksize = (128,) * len(align_shape)
 
+        if len(align_blocksize) < len(align_shape):
+            # align_blocksize is not set, so use default block size
+            align_chunk_size = (1,) * (len(align_shape)-len(align_blocksize)) + align_blocksize
+        else:
+            align_chunk_size = align_blocksize
         logger.info(f'Save global aligned volume to {align_path} ' +
                     f'with blocksize {align_blocksize}')
 
         return io_utility.create_dataset(
             align_path,
             reg_args.align_dataset(),
-            aligned_array.shape,
-            align_blocksize,
+            align_shape,
+            align_chunk_size,
             aligned_array.dtype,
             data=aligned_array,
+            overwrite=False,
             compressor=compressor,
-            pixelResolution=pixel_resolution,
-            downsamplingFactors=downsampling,
+            for_timeindex=reg_args.align_timeindex,
+            for_channel=reg_args.align_channel,
+            **align_attrs,
         )
     else:
         logger.info('Skip saving global aligned volume')

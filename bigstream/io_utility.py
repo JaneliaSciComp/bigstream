@@ -165,14 +165,20 @@ def prepare_attrs(container_path,
                   axes=None,
                   coordinateTransformations=None,
                   **additional_attrs):
-    if (coordinateTransformations is None or coordinateTransformations == []
+    if (coordinateTransformations is None
+        or coordinateTransformations == []
         or axes is None):
         # coordinateTransformation is None or [] or no axes were provided
         return {k: v for k, v in additional_attrs.items()}
     else:
-        dataset_path_comps = [c for c in dataset_path.split('/') if c]
-        # take the last component of the dataset path to be the scale path
-        dataset_scale_subpath = dataset_path_comps.pop()
+        if dataset_path:
+            dataset_path_comps = [c for c in dataset_path.split('/') if c]
+            # take the last component of the dataset path to be the scale path
+            dataset_scale_subpath = dataset_path_comps.pop()
+        else:
+            # No subpath was provided - I am using '.', but
+            # this may be problematic - I don't know yet how to handle it properly
+            dataset_scale_subpath = '.'
 
         scales, translations = (1,) * len(axes), None
         for t in coordinateTransformations:

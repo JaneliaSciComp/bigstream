@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                    data=None, overwrite=False,
+                   for_timeindex=None, for_channel=None,
                    compressor=None,
                    **kwargs):
     try:
@@ -56,6 +57,31 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                     overwrite=overwrite,
                     compressor=codec,
                     data=data)
+            i = 0
+            resized_shape = ()
+            to_resize = False
+            if for_timeindex is not None:
+                if shape[i] <= for_timeindex:
+                    resized_shape = resized_shape + (for_timeindex + 1,)
+                    to_resize = True
+                else:
+                    resized_shape = resized_shape + (shape[i],)
+                i = i + 1
+            if for_channel is not None:
+                if shape[i] <= for_channel:
+                    resized_shape = resized_shape + (for_channel + 1,)
+                    to_resize = True
+                else:
+                    resized_shape = resized_shape + (shape[i],)
+                i = i + 1
+
+            if to_resize:
+                while i < len(shape):
+                    resized_shape = resized_shape + (shape[i],)
+                    i = i + 1
+                logger.info(f'Resize {container_path}:{container_subpath} to {resized_shape}')
+                dataset.resize(resized_shape)
+
             # set additional attributes
             dataset.attrs.update((k, v) for k,v in kwargs.items() if v)
             return dataset
@@ -335,7 +361,7 @@ def _open_ome_zarr(data_container, data_subpath,
     multiscales_attrs.update(a.attrs.asdict())
     multiscales_attrs.update({
         'dataset_path': dataset_path,
-        'axes': [a.dict() for a in dataset_axes],
+        'axes': [a.dict(exclude_none=True) for a in dataset_axes],
         'timeindex': data_timeindex,
         'channels': data_channels,
         'coordinateTransformations': dataset_metadata.coordinateTransformations

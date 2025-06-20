@@ -150,7 +150,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
 
     logger.info(f'Run local registration with: {reg_args}, {local_steps}')
 
-    print('!!!!!!! REG ARGS ', reg_args.__dict__, flush=True)
     (fix_image, fix_mask, mov_image, mov_mask) = get_input_images(reg_args)
     if mov_image.ndim != fix_image.ndim:
         # only check for ndim and not shape because as it happens 
@@ -247,8 +246,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             inv_transform_blocksize,
             reg_args.align_path(),
             align_subpath,
-            reg_args.align_total_timeindexes,
-            reg_args.align_total_channels,
             reg_args.align_timeindex,
             reg_args.align_channel,
             align_blocksize,
@@ -283,8 +280,6 @@ def _align_local_data(fix_image: ImageData,
                       inv_transform_blocksize,
                       align_path,
                       align_subpath,
-                      align_total_timeindexes,
-                      align_total_channels,
                       align_timeindex,
                       align_channel,
                       align_blocksize,
@@ -417,26 +412,22 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=mov_image.get_attr('pixelResolution'),
             downsamplingFactors=mov_image.get_attr('downsamplingFactors'),
         )
-        if align_total_timeindexes is None and align_total_channels is None:
-            align_shape = fix_image.shape
-        elif align_total_timeindexes is None:
-            align_shape = (align_total_channels,) + fix_image.spatial_dims
-        else:
-            align_shape = (align_total_timeindexes, align_total_channels) + fix_image.spatial_dims
+        align_shape = fix_image.shape
         if len(align_blocksize) < len(align_shape):
             # align_blocksize is not set, so use default block size
             align_chunk_size = (1,) * (len(align_shape)- len(align_blocksize)) + tuple(get_spatial_values(align_blocksize))
         else:
             align_chunk_size = tuple(get_spatial_values(align_blocksize))
-        print('!!!!!!!!! ALIGN BLOCK SIZE ', align_shape, align_blocksize, align_chunk_size)
         align = io_utility.create_dataset(
             align_path,
             align_subpath,
             align_shape,
             align_chunk_size,
             fix_image.dtype,
-            overwrite=True,
+            overwrite=False,
             compressor=compressor,
+            for_timeindex=align_timeindex,
+            for_channel=align_channel,
             **align_attrs,
         )
         logger.info(f'Apply affine transform {global_affine_transforms}' +

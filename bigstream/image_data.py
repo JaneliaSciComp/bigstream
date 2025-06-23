@@ -43,14 +43,20 @@ class ImageData:
         if self.image_path:
             self.image_attrs = read_attributes(self.image_path, self.image_subpath)
     
-    def read_image(self):
+    def read_image(self, convert_to_little_endian=True):
         if self.image_path:
-            imgarray, self.image_attrs = img_open(self.image_path,
-                                                  self.image_subpath,
-                                                  data_timeindex=self.image_timeindex,
-                                                  data_channels=self.image_channels)
-            # Bigstrea algorithms do not support big-endian data
-            self.image_ndarray = imgarray.byteswap().newbyteorder('<')
+            imgarray, self.image_attrs = img_open(
+                self.image_path,
+                self.image_subpath,
+                data_timeindex=self.image_timeindex,
+                data_channels=self.image_channels
+            )
+            imgdtype = imgarray.dtype
+            if convert_to_little_endian and imgdtype.byteorder == '>':
+                # Bigstream algorithms do not support big-endian data
+                self.image_ndarray = imgarray.byteswap().newbyteorder('<')
+            else:
+                self.image_ndarray = imgarray
 
     @property
     def attrs(self):

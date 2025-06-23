@@ -311,11 +311,23 @@ def _align_local_data(fix_image: ImageData,
                 'name': 'c',
                 'type': 'channel',
             })
+        coordinate_transformations = fix_image.get_attr('coordinateTransformations')
+        if coordinate_transformations is not None:
+            new_transforms = []
+            for ct in coordinate_transformations:
+                cttype = ct['type']
+                tx = ct[cttype]
+                chtx = tx[1]
+                new_transforms.append({
+                    'type': cttype,
+                    ct['type']: get_spatial_values(tx) + [chtx],
+                })
+            coordinate_transformations = new_transforms
         transform_attrs = io_utility.prepare_attrs(
             transform_path,
             transform_subpath,
             axes=transform_axes,
-            coordinateTransformations=fix_image.get_attr('coordinateTransformations'),
+            coordinateTransformations=coordinate_transformations,
             pixelResolution=transform_spacing,
             downsamplingFactors=transform_downsampling,
         )
@@ -367,6 +379,14 @@ def _align_local_data(fix_image: ImageData,
                 f'{inv_iterations} vs {inv_shrink_spacings} vs {inv_smooth_sigmas} '
             ))
 
+        inv_transform_attrs = io_utility.prepare_attrs(
+            inv_transform_path,
+            inv_transform_subpath,
+            axes=transform_axes,
+            coordinateTransformations=coordinate_transformations,
+            pixelResolution=transform_spacing,
+            downsamplingFactors=transform_downsampling,
+        )
         inv_transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
         inv_transform = io_utility.create_dataset(
             inv_transform_path,
@@ -376,6 +396,7 @@ def _align_local_data(fix_image: ImageData,
             np.float32,
             overwrite=True,
             compressor=compressor,
+            **inv_transform_attrs,
         )
         logger.info('Calculate inverse transformation' +
                     f'{inv_transform_path}:{inv_transform_subpath}' +

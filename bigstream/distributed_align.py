@@ -142,7 +142,9 @@ def _read_block(block_coords, image_data,
             image_timeindex=image_repr.image_timeindex,
             image_channel=image_repr.image_channels,
         )
-        return b.byteswap().newbyteorder('<')
+        if b.dtype.byteorder == '>':
+            b = b.byteswap().newbyteorder('<')
+        return b
 
 
 # get image block corners both in voxel and physical units

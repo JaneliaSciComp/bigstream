@@ -200,7 +200,9 @@ def _transform_single_block(fix_block_read_method,
     # fetch fixed image slices and read fix
     logger.debug(f'Read fix block from {block_coords}')
     # read the fix block and 
-    fix_block = fix_block_read_method(block_coords).byteswap().newbyteorder('<')
+    fix_block = fix_block_read_method(block_coords)
+    if fix_block.dtype.byteorder == '>':
+        fix_block = fix_block.byteswap().newbyteorder('<')
 
     # read relevant region of transforms
     applied_transform_list = []
@@ -248,7 +250,9 @@ def _transform_single_block(fix_block_read_method,
         mov_origin = mov_spacing * [s.start for s in mov_slices]
 
         logger.debug(f'Read moving block from {mov_slices}')
-        mov_block = mov_block_read_method(mov_slices).byteswap().newbyteorder('<')
+        mov_block = mov_block_read_method(mov_slices)
+        if mov_block.dtype.byteorder == '>':
+            mov_block = mov_block.byteswap().newbyteorder('<')
 
         # resample
         logger.debug(f'Apply {len(transform_list)} transforms ' +

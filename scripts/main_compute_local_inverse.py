@@ -17,7 +17,8 @@ logger = None # initialized in main as a result of calling configure_logging
 
 def _define_args():
     args_parser = argparse.ArgumentParser(description='Compute inverse deformation vector')
-    args_parser.add_argument('--transform-dir', dest='transform_dir',
+    args_parser.add_argument('--transform-dir', '--transform_dir',
+                             dest='transform_dir',
                              required=True,
                              help='Transform directory')
     args_parser.add_argument('--transform-name', dest='transform_name',

@@ -40,6 +40,7 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             codec = (None if compressor is None 
                      else codecs.get_codec(dict(id=compressor)))
             if data is None and overwrite:
+                dataset_shape = shape
                 dataset = container_root.create_dataset(
                     container_subpath,
                     shape=shape,
@@ -49,9 +50,17 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                     compressor=codec,
                     data=data)
             else:
+                if container_subpath in container_root:
+                    dataset_shape = container_root[container_subpath].shape
+                    logger.info((
+                        f'Dataset {container_path}:{container_subpath} '
+                        f'already exists with shape {dataset_shape} '
+                    ))
+                else:
+                    dataset_shape = shape
                 dataset = container_root.require_dataset(
                     container_subpath,
-                    shape=shape,
+                    shape=dataset_shape,
                     chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
@@ -61,14 +70,14 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             resized_shape = ()
             to_resize = False
             if for_timeindex is not None:
-                if shape[i] <= for_timeindex:
+                if dataset_shape[i] <= for_timeindex:
                     resized_shape = resized_shape + (for_timeindex + 1,)
                     to_resize = True
                 else:
                     resized_shape = resized_shape + (shape[i],)
                 i = i + 1
             if for_channel is not None:
-                if shape[i] <= for_channel:
+                if dataset_shape[i] <= for_channel:
                     resized_shape = resized_shape + (for_channel + 1,)
                     to_resize = True
                 else:
@@ -76,8 +85,8 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                 i = i + 1
 
             if to_resize:
-                while i < len(shape):
-                    resized_shape = resized_shape + (shape[i],)
+                while i < len(dataset_shape):
+                    resized_shape = resized_shape + (dataset_shape[i],)
                     i = i + 1
                 logger.info(f'Resize {container_path}:{container_subpath} to {resized_shape}')
                 dataset.resize(resized_shape)
@@ -100,10 +109,10 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
 def get_voxel_spacing(attrs: dict):
     pr = None
     if attrs.get('coordinateTransformations'):
-        scale_metadata = list(filter(lambda t: t.type == 'scale', attrs['coordinateTransformations']))
+        scale_metadata = list(filter(lambda t: t.get('type') == 'scale', attrs['coordinateTransformations']))
         if len(scale_metadata) > 0:
             # return voxel spacing as [time, ch, dz, dy, dx]
-            pr = np.array(scale_metadata[0].scale)
+            pr = np.array(scale_metadata[0]['scale'])
         else:
             pr = None
     elif (attrs.get('downsamplingFactors')):
@@ -182,10 +191,10 @@ def prepare_attrs(container_path,
 
         scales, translations = (1,) * len(axes), None
         for t in coordinateTransformations:
-            if t.type == 'scale':
-                scales = t.scale
-            elif t.type == 'translation':
-                translations = t.translation
+            if t['type'] == 'scale':
+                scales = t['scale']
+            elif t['type'] == 'translation':
+                translations = t['translation']
 
         dataset = Dataset.build(path=dataset_scale_subpath, scale=scales, translation=translations)
         ome_attrs = {
@@ -269,7 +278,7 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
             return ba, a.attrs.asdict()
 
     except Exception as e:
-        logger.error(f'Error opening {data_path} : {data_subpath}: {traceback.format_exc(e)}')
+        logger.exception(f'Error opening {data_path} : {data_subpath}')
         raise e
 
 
@@ -314,7 +323,7 @@ def _open_ome_zarr(data_container, data_subpath,
         ba = a[block_coords] if block_coords is not None else a
         return ba, a.attrs.asdict()
 
-    logger.info((
+    logger.debug((
         f'Open dataset {dataset_subpath}, timeindex: {data_timeindex}, '
         f'channels: {data_channels}, block_coords {block_coords} '
     ))
@@ -336,7 +345,7 @@ def _open_ome_zarr(data_container, data_subpath,
             dataset_metadata = ds
             # drop the matching suffix
             dataset_comps = dataset_comps[-len(current_ds_path_comps):]
-            logger.info((
+            logger.debug((
                 f'Found dataset: {dataset_metadata.path}, '
                 f'remaining dataset components: {dataset_comps}'
             ))
@@ -370,7 +379,7 @@ def _open_ome_zarr(data_container, data_subpath,
         'axes': [a.dict(exclude_none=True) for a in dataset_axes],
         'timeindex': data_timeindex,
         'channels': data_channels,
-        'coordinateTransformations': dataset_metadata.coordinateTransformations
+        'coordinateTransformations': [ct.dict(exclude_none=True) for ct in dataset_metadata.coordinateTransformations]
     })
     return ba, multiscales_attrs
 
@@ -403,8 +412,19 @@ def _get_array_selector(axes, timeindex: int | None,
     else:
         selector.extend(spatial_selection)
 
-    return lambda a: a[tuple(selector)] if selection_exists else a
+    def _selector(a):
+        if selection_exists:
+            try:
+                # try to select the data using the selector
+                return a[tuple(selector)]
+            except Exception  as e:
+                logger.exception(f'Error selecting data with selector {selector}')
+                raise e
+        else:
+            # no selection was made, so return the whole array
+            return a
 
+    return _selector
 
 def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
     try:

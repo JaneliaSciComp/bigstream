@@ -9,7 +9,7 @@ from bigstream.configure_bigstream import (configure_logging)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
 from bigstream.distributed_transform import distributed_apply_transform
-from bigstream.image_data import ImageData
+from bigstream.image_data import ImageData, get_spatial_values
 
 
 logger = None
@@ -23,6 +23,16 @@ def _define_args():
     args_parser.add_argument('--fix-subpath', '--fixed-subpath',
                              dest='fixed_subpath',
                              help='Fixed image subpath')
+    args_parser.add_argument('--fix-timeindex', '--fixed-timeindex',
+                             dest='fixed_timeindex',
+                             type=int,
+                             default=None,
+                             help='Fixed image time index')
+    args_parser.add_argument('--fix-channel', '--fixed-channel',
+                             dest='fixed_channel',
+                             type=int,
+                             default=None,
+                             help='Fixed image channel')
     args_parser.add_argument('--fix-spacing', '--fixed-spacing',
                              dest='fixed_spacing',
                              type=floattuple,
@@ -34,12 +44,22 @@ def _define_args():
     args_parser.add_argument('--mov-subpath', '--moving-subpath',
                              dest='moving_subpath',
                              help='Moving image subpath')
+    args_parser.add_argument('--mov-timeindex', '--moving-timeindex',
+                             dest='moving_timeindex',
+                             type=int,
+                             default=None,
+                             help='Moving image time index')
+    args_parser.add_argument('--mov-channel', '--moving-channel',
+                             dest='moving_channel',
+                             type=int,
+                             default=None,
+                             help='Moving image channel')
     args_parser.add_argument('--mov-spacing', '--moving-spacing',
                              dest='moving_spacing',
                              type=floattuple,
                              help='Moving image voxel spacing')
 
-    args_parser.add_argument('--affine-transformations',
+    args_parser.add_argument('--affine-transform', '--affine-transformations',
                              dest='affine_transformations',
                              type=stringlist,
                              help='Affine transformations')
@@ -49,10 +69,10 @@ def _define_args():
     args_parser.add_argument('--local-transform-subpath',
                              dest='local_transform_subpath',
                              help='Local transformation dataset to be applied')
-    args_parser.add_argument('--transform-spacing',
-                             dest='transform_spacing',
+    args_parser.add_argument('--local-transform-spacing',
+                             dest='local_transform_spacing',
                              type=floattuple,
-                             help='Transform spacing')
+                             help='Local transform spacing')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -60,6 +80,16 @@ def _define_args():
     args_parser.add_argument('--output-subpath',
                              dest='output_subpath',
                              help='Subpath for the warped output')
+    args_parser.add_argument('--output-timeindex',
+                             dest='output_timeindex',
+                             type=int,
+                             default=None,
+                             help='Output image time index')
+    args_parser.add_argument('--output-channel',
+                             dest='output_channel',
+                             type=int,
+                             default=None,
+                             help='Output image channel')
     args_parser.add_argument('--output-chunk-size',
                              dest='output_chunk_size',
                              default=128,
@@ -71,7 +101,7 @@ def _define_args():
                              help='Output chunk size as a tuple.')
     args_parser.add_argument('--blocks-overlap-factor',
                              dest='blocks_overlap_factor',
-                             default=0.5,
+                             default=0.1,
                              type=float,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
 
@@ -83,6 +113,10 @@ def _define_args():
                              type=str, default=None,
                              help='YAML file containing dask configuration')
 
+    args_parser.add_argument('--local-dask-workers', '--local_dask_workers',
+                             dest='local_dask_workers',
+                             type=int,
+                             help='Number of workers when using a local cluster')
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
                              type=int, default=0,
                              help='Number of cpus allocated to a dask worker')
@@ -111,12 +145,23 @@ def _run_apply_transform(args):
     mov_subpath = args.moving_subpath if args.moving_subpath else fix_subpath
     output_subpath = args.output_subpath if args.output_subpath else mov_subpath
 
-    fix_data = ImageData(args.fixed, fix_subpath)
-    mov_data = ImageData(args.moving, mov_subpath)
+    fix_data = ImageData(
+        args.fixed,
+        fix_subpath,
+        image_timeindex=args.fixed_timeindex,
+        image_channels=args.fixed_channel,
+    )
+    mov_data = ImageData(
+        args.moving,
+        mov_subpath,
+        image_timeindex=args.moving_timeindex,
+        image_channels=args.moving_channel,
+    )
     if args.fixed_spacing:
-        fix_data.voxel_spacing = np.array(args.fixed_spacing)[::-1] # xyz -> zyx
+        fix_data.voxel_spacing = args.fixed_spacing[::-1] # xyz -> zyx
+
     if args.moving_spacing:
-        mov_data.voxel_spacing = np.array(args.moving_spacing)[::-1] # xyz -> zyx
+        mov_data.voxel_spacing = args.moving_spacing[::-1] # xyz -> zyx
     elif args.fixed_spacing:
         mov_data.voxel_spacing = fix_data.voxel_spacing
 
@@ -124,43 +169,54 @@ def _run_apply_transform(args):
     logger.info(f'Moving volume: {mov_data}')
 
     local_deform_data = ImageData(args.local_transform, args.local_transform_subpath)
-    if args.transform_spacing:
-        local_deform_data.voxel_spacing = np.array((1,) + args.transform_spacing)[::-1]
+    print('!!!!!!! DEFORM DATA:', local_deform_data, local_deform_data.voxel_spacing)
+    if args.local_transform_spacing:
+        local_deform_data.voxel_spacing = args.local_transform_spacing[::-1]
 
-    if local_deform_data.voxel_spacing is None:
-        local_deform_data.voxel_spacing = np.array((1,) + tuple(fix_data.voxel_spacing[::-1]))[::-1]
-    # deform spacing axes are: v,x,y,z in reverse so z,y,x,v
-
-    logger.info(f'Local transform spacing for {local_deform_data} -> ' +
-                f'{local_deform_data.voxel_spacing}')
-
-    transform_spacing = ()
     if (args.output_blocksize is not None and
         len(args.output_blocksize) > 0):
         output_blocks = args.output_blocksize[::-1] # make it zyx
     else:
         # default to output_chunk_size
-        output_blocks = (args.output_chunk_size,) * fix_data.ndim
+        output_blocks = (args.output_chunk_size,) * fix_data.spatial_ndim
 
     if args.output:
-        output_dataarray = io_utility.create_dataset(
+        output_attrs = io_utility.prepare_attrs(
             args.output,
             output_subpath,
-            fix_data.shape,
-            output_blocks,
-            fix_data.dtype,
-            compressor=args.compression,
+            axes=mov_data.get_attr('axes'),
+            coordinateTransformations=mov_data.get_attr('coordinateTransformations'),
             pixelResolution=mov_data.get_attr('pixelResolution'),
             downsamplingFactors=mov_data.get_attr('downsamplingFactors'),
         )
+        output_shape = fix_data.shape
+        if len(output_blocks) < len(output_shape):
+            # align_blocksize is not set, so use default block size
+            output_chunk_size = (1,) * (len(output_shape)-len(output_blocks)) + tuple(get_spatial_values(output_blocks))
+        else:
+            output_chunk_size = tuple(get_spatial_values(output_blocks))
 
+        output_dataarray = io_utility.create_dataset(
+            args.output,
+            output_subpath,
+            output_shape,
+            output_chunk_size,
+            fix_data.dtype,
+            compressor=args.compression,
+            for_timeindex=args.output_timeindex,
+            for_channel=args.output_channel,
+            **output_attrs,
+        )
+
+        transforms_spacing = ()
+        # read affine transformations
         if args.affine_transformations:
             logger.info(f'Affine transformations arg: {args.affine_transformations}')
             applied_affines = [args.affine_transformations]
             affine_transforms_list = [np.loadtxt(tfile)
                                       for tfile in args.affine_transformations]
-            affine_spacing = (1.,) * mov_data.ndim
-            transform_spacing = transform_spacing + (affine_spacing,)
+            affine_spacing = (1.,) * mov_data.spatial_ndim
+            transforms_spacing = transforms_spacing + (affine_spacing,)
         else:
             applied_affines = []
             affine_transforms_list = []
@@ -168,38 +224,42 @@ def _run_apply_transform(args):
         logger.info(f'Check if {local_deform_data} has data')
         if local_deform_data.has_data():
             logger.info(f'Read image for {local_deform_data}')
-            local_deform_data.read_image()
+            local_deform_data.read_image(convert_to_little_endian=False)
             all_transforms = affine_transforms_list + [local_deform_data.image_array]
             applied_transforms = applied_affines + [f'{local_deform_data}']
-            transform_spacing = transform_spacing + (local_deform_data.voxel_spacing[:local_deform_data.ndim-1],)
+            transforms_spacing = transforms_spacing + (local_deform_data.voxel_spacing[:local_deform_data.spatial_ndim],)
         else:
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines
 
-        logger.info(f'Apply {applied_transforms} to ' +
-                    f'{mov_data} -> {args.output}:{output_subpath} ' +
-                    f'transform spacing: {transform_spacing}')
+        logger.info((
+            f'Apply {applied_transforms} to '
+            f'{mov_data} -> {args.output}:{output_subpath} '
+            f'transform spacing: {transforms_spacing} '
+        ))
 
         # open a dask client
         load_dask_config(args.dask_config)
-        worker_config = ConfigureWorkerPlugin(args.logging_config,
-                                              args.verbose,
-                                              worker_cpus=args.worker_cpus)
         if args.dask_scheduler:
             cluster_client = Client(address=args.dask_scheduler)
         else:
             cluster_client = Client(LocalCluster())
+
+        worker_config = ConfigureWorkerPlugin(args.logging_config,
+                                              args.verbose,
+                                              worker_cpus=args.worker_cpus)
         cluster_client.register_plugin(worker_config, name='WorkerConfig')
         try:
             distributed_apply_transform(
                 fix_data, mov_data,
-                fix_data.voxel_spacing, mov_data.voxel_spacing,
                 output_blocks, # use block chunk size for distributing the work
                 all_transforms, # transform_list
                 cluster_client,
                 overlap_factor=args.blocks_overlap_factor,
                 aligned_data=output_dataarray,
-                transform_spacing=transform_spacing,
+                aligned_data_timeindex=args.output_timeindex,
+                aligned_data_channel=args.output_channel,
+                transform_spacing=transforms_spacing,
             )
         finally:
             cluster_client.close()

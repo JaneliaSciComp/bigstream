@@ -25,10 +25,10 @@ def _define_args():
                              help='Transform container name')
     args_parser.add_argument('--transform-subpath', dest='transform_subpath',
                              help='Transform dataset subpath')
-    args_parser.add_argument('--transform-spacing',
-                             dest='transform_spacing',
+    args_parser.add_argument('--local-transform-spacing', '--transform-spacing',
+                             dest='local_transform_spacing',
                              type=floattuple,
-                             help='Transform spacing')
+                             help='Local transform spacing')
 
     args_parser.add_argument('--inv-transform-dir', dest='inv_transform_dir',
                              help='Inverse transform directory')
@@ -45,7 +45,7 @@ def _define_args():
     args_parser.add_argument('--processing-overlap-factor',
                              dest='processing_overlap_factor',
                              type=float,
-                             default=0.5,
+                             default=0.1,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
 
     args_parser.add_argument('--inv-step',
@@ -92,6 +92,10 @@ def _define_args():
                              type=str, default=None,
                              help='YAML file containing dask configuration')
 
+    args_parser.add_argument('--local-dask-workers', '--local_dask_workers',
+                             dest='local_dask_workers',
+                             type=int,
+                             help='Number of workers when using a local cluster')
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
                              type=int, default=0,
                              help='Number of cpus allocated to a dask worker')
@@ -118,9 +122,12 @@ def _run_compute_inverse(args):
     transform_path = (f'{args.transform_dir}/{args.transform_name}'
                       if args.transform_name
                       else args.transform_dir)
-    deform_field = ImageData(transform_path, args.transform_subpath)
-    if args.transform_spacing:
-        deform_field.voxel_spacing = np.array((1,) + args.transform_spacing)[::-1]
+    local_deform_field = ImageData(transform_path, args.transform_subpath)
+    if args.local_transform_spacing:
+        # in case the transform spacing arg has the channel dimension - truncate it
+        local_deform_spacing = args.local_transform_spacing[::-1][:3]  # xyz -> zyx
+    else:
+        local_deform_spacing = local_deform_field.voxel_spacing[:3]
 
     inv_transform_dir = (args.inv_transform_dir
                          if args.inv_transform_dir
@@ -137,49 +144,54 @@ def _run_compute_inverse(args):
         inv_transform_subpath == args.transform_subpath):
         raise ValueError(f'Inverse transform overrides the direct transform')
 
-    deform_blocksize = deform_field.get_attr('blockSize')
-
+    deform_blocksize = local_deform_field.get_attr('blockSize')
     inv_transform_blocksize=(args.inv_transform_blocksize[::-1]
                              if args.inv_transform_blocksize
                              else deform_blocksize[0:-1])
-    transform_spacing = tuple(args.transform_spacing[::-1]
-                              if args.transform_spacing
-                              else deform_field.voxel_spacing[0:-1])
 
-    transform_downsampling = deform_field.downsampling[0:-1]
-    persisted_downsampling = list(deform_field.downsampling)[::-1]
-
-    pixel_resolution = np.array(transform_spacing) / transform_downsampling
-    persisted_pixel_resolution = [1] + list(pixel_resolution[::-1])
-
+    inv_transform_attrs = io_utility.prepare_parent_group_attrs(
+        inv_transform_path,
+        inv_transform_subpath,
+        axes=local_deform_field.get_attr('axes'),
+        coordinateTransformations=local_deform_field.get_attr('coordinateTransformations'),
+    )
+    voxel_resolution = local_deform_field.voxel_spacing
+    # get the downsampling as it is in the direct deformation
+    voxel_downsampling = local_deform_field.get_attr('downsamplingFactors')
+    print('!!!!!! INV VOXEL ATTRS: ', voxel_resolution, voxel_downsampling)
     inv_deform_field = io_utility.create_dataset(
         inv_transform_path,
         inv_transform_subpath,
-        deform_field.shape,
+        local_deform_field.shape,
         tuple(inv_transform_blocksize) + (len(inv_transform_blocksize),),
-        np.float32,
+        local_deform_field.dtype,
         overwrite=True,
         compressor=args.compression,
-        pixelResolution=persisted_pixel_resolution,
-        downsamplingFactors=persisted_downsampling,
+        parent_attrs=inv_transform_attrs,
+        pixelResolution=(list(voxel_resolution)
+                            if voxel_resolution is not None
+                            else None),
+        downsamplingFactors=voxel_downsampling,
     )
 
     # open a dask client
     load_dask_config(args.dask_config)
-    worker_config = ConfigureWorkerPlugin(args.logging_config,
-                                          args.verbose,
-                                          worker_cpus=args.worker_cpus)
     if args.dask_scheduler:
         cluster_client = Client(address=args.dask_scheduler)
     else:
-        cluster_client = Client(LocalCluster())
+        cluster_client = Client(LocalCluster(n_workers=args.local_dask_workers,
+                                             threads_per_worker=args.worker_cpus))
+    # create worker plugin
+    worker_config = ConfigureWorkerPlugin(args.logging_config,
+                                          args.verbose,
+                                          worker_cpus=args.worker_cpus)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
     try:
         logger.info('Calculate inverse transformation' +
                     f'{inv_transform_path}:{inv_transform_subpath}' +
                     f'from {transform_path}:{args.transform_subpath}')
         # read the image because distributed_invert method expects a zarr array
-        deform_field.read_image()
+        local_deform_field.read_image()
 
         if len(args.inv_iterations) == 0:
             raise ValueError(f'Invalid inverse iterations: {args.inv_iterations}')
@@ -196,9 +208,10 @@ def _run_compute_inverse(args):
                 'and inverse smooth sigmas must all have the same length '
                 f'{args.inv_iterations} vs {inv_shrink_spacings} vs {args.inv_smooth_sigmas} '
             ))
+        print('!!!!!! INV TRANSFORM BLOCKSIZE: ', inv_transform_blocksize)
         distributed_invert_displacement_vector_field(
-            deform_field.image_array,
-            np.array(transform_spacing),
+            local_deform_field.image_array,
+            local_deform_spacing,
             inv_transform_blocksize, # use blocksize for partitioning the work
             inv_deform_field,
             cluster_client,

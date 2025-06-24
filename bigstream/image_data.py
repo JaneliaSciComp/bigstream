@@ -26,8 +26,8 @@ class ImageData:
         subpath = self.image_subpath if self.image_subpath else ''
 
         return (
-            f'{image_path}:{subpath}:{self.image_timeindex}:{self.image_channels} '
-            f'{self.shape} {self.voxel_spacing} {self.downsampling} '
+            f'{image_path}:{subpath}:{self.image_timeindex}:{self.image_channels}, '
+            f'shape: {self.shape}, voxel_spacing: {self.voxel_spacing} '
         )
 
     def __getitem__(self, key):
@@ -74,10 +74,10 @@ class ImageData:
 
     @property
     def shape(self):
-        if self.image_ndarray:
-            return self.image_ndarray.shape
-        elif self.image_attrs:
+        if self.image_attrs:
             return self._shape_from_attrs(self.image_attrs)               
+        elif self.image_ndarray is not None:
+            return self.image_ndarray.shape
         else:
             return ()
     
@@ -115,6 +115,17 @@ class ImageData:
         return len(dims) if dims is not None else 0
 
     @property
+    def voxel_downsampling(self):
+        if self.image_downsampling is not None:
+            return self.image_downsampling
+        elif self.attrs:
+            downsampling_from_attrs = self.attrs.get('downsamplingFactors')
+            if downsampling_from_attrs is not None:
+                return np.array(downsampling_from_attrs[::-1])
+
+        return np.ones(len(self.shape))
+
+    @property
     def voxel_spacing(self):
         if self.image_voxel_spacing is not None:
             # no rotation or scaling here
@@ -133,33 +144,6 @@ class ImageData:
     def voxel_spacing(self, value):
         self.image_voxel_spacing = np.array(value)
 
-    @property
-    def downsampling(self):
-        """
-        Return the image downsampling as TCZYX
-        """
-        image_downsampling = None
-        if self.image_downsampling is not None:
-            image_downsampling = self.image_downsampling
-        elif self.attrs and self.attrs.get('downsamplingFactors'):
-            # convert the downsampling factors to tczyx
-            image_downsampling = np.array(self.attrs.get('downsamplingFactors'))[::-1]
-        if image_downsampling is None:
-            image_downsampling = np.array((1,) * self.ndim)
-
-        return image_downsampling
-
-    @downsampling.setter
-    def downsampling(self, value):
-        self.image_downsampling = value
-
-    def get_full_voxel_resolution(self):
-        voxel_spacing = self.voxel_spacing
-        if voxel_spacing is not None:
-            return self.voxel_spacing / self.downsampling
-        else:
-            return None
-
 
 def as_image_data(image_data, image_timeindex=None, image_channels=None):
     if isinstance(image_data, ImageData):
@@ -177,9 +161,14 @@ def as_image_data(image_data, image_timeindex=None, image_channels=None):
         return None
 
 
-def get_spatial_values(values):
+def get_spatial_values(values, reverse_axes=False):
     if values is None:
         return None
+
     if len(values) > 3:
-        return values[-3:]
-    return values
+        if reverse_axes:
+            return values[:3]
+        else:
+            return values[-3:]
+
+    return values if not reverse_axes else values[::-1]

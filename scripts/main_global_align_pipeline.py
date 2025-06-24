@@ -1,8 +1,8 @@
 import argparse
 import numpy as np
+import os
 import bigstream.io_utility as io_utility
 
-from os.path import exists
 from bigstream.align import alignment_pipeline
 from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            define_registration_input_args,
@@ -71,14 +71,16 @@ def _run_global_align(regArgs:RegistrationInputs, align_config, compressor):
         logger.debug(f'Global affine: {affine}')
         # save the global transform
         _save_global_transform(regArgs, affine)
+
         # save global aligned volume
         return _save_aligned_volume(
             regArgs,
+            fix,
             aligned,
             mov.get_attr('axes'),
             mov.get_attr('coordinateTransformations'),
-            mov.get_attr('pixelResolution'),
-            mov.get_attr('downsamplingFactors'),
+            mov.voxel_spacing,
+            mov.voxel_downsampling,
             compressor,
         )
     else:
@@ -140,9 +142,13 @@ def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor):
                                   mov_image.voxel_spacing,
                                   transform_list=[affine,])
         _save_aligned_volume(
-            reg_args, aligned,
-            mov_image.get_attr('pixelResolution'),
-            mov_image.get_attr('downsamplingFactors'),
+            reg_args,
+            fix_image,
+            aligned,
+            mov_image.get_attr('axes'),
+            mov_image.get_attr('coordinateTransformations'),
+            mov_image.voxel_spacing,
+            mov_image.voxel_downsampling,
             compressor,
         )
     else:
@@ -153,6 +159,8 @@ def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor):
 def _save_global_transform(args, transform):
     transform_file = args.transform_path()
     if transform_file:
+        transform_location = os.path.dirname(transform_file)
+        os.makedirs(transform_location, exist_ok=True)
         logger.info(f'Save global transformation to {transform_file}')
         np.savetxt(transform_file, transform)
     else:
@@ -172,37 +180,47 @@ def _save_global_transform(args, transform):
 
 
 def _save_aligned_volume(reg_args:RegistrationInputs,
+                         fix_image,
                          aligned_array,
                          axes,
                          coordinateTransformations,
-                         pixel_resolution,
+                         voxel_resolution,
                          downsampling,
                          compressor):
     align_path = reg_args.align_path()
     if align_path:
-        align_attrs = io_utility.prepare_attrs(
+        align_attrs = io_utility.prepare_parent_group_attrs(
             align_path,
             reg_args.align_subpath,
             axes=axes,
             coordinateTransformations=coordinateTransformations,
-            pixelResolution=pixel_resolution,
-            downsamplingFactors=downsampling,
         )
-        align_shape = aligned_array.shape
+        fix_shape = fix_image.shape
 
         if reg_args.align_blocksize:
             align_blocksize = reg_args.align_blocksize[::-1]
         else:
-            align_blocksize = (128,) * len(align_shape)
+            align_blocksize = (128,) * fix_image.spatial_ndim
 
-        if len(align_blocksize) < len(align_shape):
+        if len(aligned_array.shape) < len(fix_shape):
+            align_shape = (1,) * (len(fix_shape) - len(aligned_array.shape)) + aligned_array.shape
+            logger.info(f'Reshape align ndarray to: {align_shape}')
+            aligned_array = aligned_array.reshape(align_shape)
+        else:
+            align_shape = aligned_array.shape
+
+        if len(align_blocksize) < len(fix_shape):
             # align_blocksize is not set, so use default block size
-            align_chunk_size = (1,) * (len(align_shape)-len(align_blocksize)) + align_blocksize
+            align_chunk_size = (1,) * (len(fix_shape)-len(align_blocksize)) + align_blocksize
         else:
             align_chunk_size = align_blocksize
-        logger.info(f'Save global aligned volume to {align_path} ' +
-                    f'with blocksize {align_blocksize}')
 
+        logger.info(f'Save global aligned volume to {align_path} ' +
+                    f'with blocksize {align_chunk_size}')
+
+        print('!!!!! FIX ATTRS:', fix_image.attrs)
+        print('!!!!! ALIGN SHAPE:', align_shape)
+        print('!!!!! DATA SHAPE:', aligned_array.shape) 
         return io_utility.create_dataset(
             align_path,
             reg_args.align_dataset(),
@@ -214,7 +232,13 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             compressor=compressor,
             for_timeindex=reg_args.align_timeindex,
             for_channel=reg_args.align_channel,
-            **align_attrs,
+            parent_attrs=align_attrs,
+            pixelResolution=(list(voxel_resolution)
+                             if voxel_resolution is not None
+                             else None),
+            downsamplingFactors=(list(downsampling)
+                                 if downsampling is not None
+                                 else None),
         )
     else:
         logger.info('Skip saving global aligned volume')
@@ -238,7 +262,7 @@ def main():
     if args.reuse_existing_transform:
         # try to read the global transform
         logger.info(f'Global transform file: {global_transform_file}')
-        if global_transform_file and exists(global_transform_file):
+        if global_transform_file and os.path.exists(global_transform_file):
             logger.info(f'Read global transform from {global_transform_file}')
             global_transform = np.loadtxt(global_transform_file)
 

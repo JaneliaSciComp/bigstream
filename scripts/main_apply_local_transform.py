@@ -69,7 +69,7 @@ def _define_args():
     args_parser.add_argument('--local-transform-subpath',
                              dest='local_transform_subpath',
                              help='Local transformation dataset to be applied')
-    args_parser.add_argument('--local-transform-spacing',
+    args_parser.add_argument('--local-transform-spacing', '--transform-spacing',
                              dest='local_transform_spacing',
                              type=floattuple,
                              help='Local transform spacing')
@@ -168,10 +168,12 @@ def _run_apply_transform(args):
     logger.info(f'Fixed volume: {fix_data}')
     logger.info(f'Moving volume: {mov_data}')
 
-    local_deform_data = ImageData(args.local_transform, args.local_transform_subpath)
-    print('!!!!!!! DEFORM DATA:', local_deform_data, local_deform_data.voxel_spacing)
+    local_deform_field = ImageData(args.local_transform, args.local_transform_subpath)
     if args.local_transform_spacing:
-        local_deform_data.voxel_spacing = args.local_transform_spacing[::-1]
+        # in case the transform spacing arg has the channel dimension - truncate it
+        local_deform_spacing = args.local_transform_spacing[::-1][:fix_data.spatial_ndim]  # xyz -> zyx
+    else:
+        local_deform_spacing = local_deform_field.voxel_spacing[:fix_data.spatial_ndim]
 
     if (args.output_blocksize is not None and
         len(args.output_blocksize) > 0):
@@ -181,13 +183,11 @@ def _run_apply_transform(args):
         output_blocks = (args.output_chunk_size,) * fix_data.spatial_ndim
 
     if args.output:
-        output_attrs = io_utility.prepare_attrs(
+        output_attrs = io_utility.prepare_parent_group_attrs(
             args.output,
             output_subpath,
             axes=mov_data.get_attr('axes'),
             coordinateTransformations=mov_data.get_attr('coordinateTransformations'),
-            pixelResolution=mov_data.get_attr('pixelResolution'),
-            downsamplingFactors=mov_data.get_attr('downsamplingFactors'),
         )
         output_shape = fix_data.shape
         if len(output_blocks) < len(output_shape):
@@ -196,6 +196,8 @@ def _run_apply_transform(args):
         else:
             output_chunk_size = tuple(get_spatial_values(output_blocks))
 
+        voxel_resolution = mov_data.voxel_spacing
+        voxel_downsampling = mov_data.voxel_downsampling
         output_dataarray = io_utility.create_dataset(
             args.output,
             output_subpath,
@@ -205,10 +207,15 @@ def _run_apply_transform(args):
             compressor=args.compression,
             for_timeindex=args.output_timeindex,
             for_channel=args.output_channel,
-            **output_attrs,
+            parent_attrs=output_attrs,
+            pixelResolution=(list(voxel_resolution)
+                             if voxel_resolution is not None
+                             else None),
+            downsamplingFactors=(list(voxel_downsampling)
+                                 if voxel_downsampling is not None
+                                 else None),
         )
 
-        transforms_spacing = ()
         # read affine transformations
         if args.affine_transformations:
             logger.info(f'Affine transformations arg: {args.affine_transformations}')
@@ -216,18 +223,19 @@ def _run_apply_transform(args):
             affine_transforms_list = [np.loadtxt(tfile)
                                       for tfile in args.affine_transformations]
             affine_spacing = (1.,) * mov_data.spatial_ndim
-            transforms_spacing = transforms_spacing + (affine_spacing,)
+            transforms_spacings = (affine_spacing,) * len(applied_affines)
         else:
             applied_affines = []
             affine_transforms_list = []
+            transforms_spacings = ()
 
-        logger.info(f'Check if {local_deform_data} has data')
-        if local_deform_data.has_data():
-            logger.info(f'Read image for {local_deform_data}')
-            local_deform_data.read_image(convert_to_little_endian=False)
-            all_transforms = affine_transforms_list + [local_deform_data.image_array]
-            applied_transforms = applied_affines + [f'{local_deform_data}']
-            transforms_spacing = transforms_spacing + (local_deform_data.voxel_spacing[:local_deform_data.spatial_ndim],)
+        logger.info(f'Check if {local_deform_field} has data')
+        if local_deform_field.has_data():
+            logger.info(f'Read image for {local_deform_field}')
+            local_deform_field.read_image(convert_to_little_endian=False)
+            all_transforms = affine_transforms_list + [local_deform_field.image_array]
+            applied_transforms = applied_affines + [f'{local_deform_field}']
+            transforms_spacings = transforms_spacings + (local_deform_spacing,)
         else:
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines
@@ -235,7 +243,7 @@ def _run_apply_transform(args):
         logger.info((
             f'Apply {applied_transforms} to '
             f'{mov_data} -> {args.output}:{output_subpath} '
-            f'transform spacing: {transforms_spacing} '
+            f'transform spacing: {transforms_spacings} '
         ))
 
         # open a dask client
@@ -259,7 +267,7 @@ def _run_apply_transform(args):
                 aligned_data=output_dataarray,
                 aligned_data_timeindex=args.output_timeindex,
                 aligned_data_channel=args.output_channel,
-                transform_spacing=transforms_spacing,
+                transform_spacing=transforms_spacings,
             )
         finally:
             cluster_client.close()

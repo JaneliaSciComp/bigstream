@@ -297,12 +297,13 @@ def _align_local_data(fix_image: ImageData,
     logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
                 f'using {ut.get_number_of_cores()} cpus')
 
-    transform_downsampling = tuple(get_spatial_values(fix_image.downsampling)) + (1,)
+    transform_downsampling = tuple(get_spatial_values(fix_image.voxel_downsampling)) + (1,)
     logger.info(f'Transform downsampling: {transform_downsampling}')
-    transform_spacing = tuple(get_spatial_values(fix_image.get_full_voxel_resolution())) + (1,)
-    logger.info(f'Transform spacing: {transform_spacing}')
+    transform_voxel_spacing = tuple(get_spatial_values(fix_image.voxel_spacing)) + (1,)
+    logger.info(f'Transform voxel spacing: {transform_voxel_spacing}')
     transform_shape = tuple(fix_image.spatial_dims) + (3,)
     logger.info(f'Transform shape: {fix_image.spatial_dims} => {transform_shape}')
+
     if transform_path:
         # transform shape
         transform_axes = get_spatial_values(fix_image.get_attr('axes'))
@@ -323,13 +324,11 @@ def _align_local_data(fix_image: ImageData,
                     ct['type']: get_spatial_values(tx) + [chtx],
                 })
             coordinate_transformations = new_transforms
-        transform_attrs = io_utility.prepare_attrs(
+        transform_attrs = io_utility.prepare_parent_group_attrs(
             transform_path,
             transform_subpath,
             axes=transform_axes,
             coordinateTransformations=coordinate_transformations,
-            pixelResolution=transform_spacing,
-            downsamplingFactors=transform_downsampling,
         )
         transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
         transform = io_utility.create_dataset(
@@ -340,7 +339,9 @@ def _align_local_data(fix_image: ImageData,
             np.float32,
             overwrite=True,
             compressor=compressor,
-            **transform_attrs,
+            parent_attrs=transform_attrs,
+            pixelResolution=transform_voxel_spacing,
+            downsamplingFactors=transform_downsampling,
         )
     else:
         transform = None
@@ -379,13 +380,11 @@ def _align_local_data(fix_image: ImageData,
                 f'{inv_iterations} vs {inv_shrink_spacings} vs {inv_smooth_sigmas} '
             ))
 
-        inv_transform_attrs = io_utility.prepare_attrs(
+        inv_transform_attrs = io_utility.prepare_parent_group_attrs(
             inv_transform_path,
             inv_transform_subpath,
             axes=transform_axes,
             coordinateTransformations=coordinate_transformations,
-            pixelResolution=transform_spacing,
-            downsamplingFactors=transform_downsampling,
         )
         inv_transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
         inv_transform = io_utility.create_dataset(
@@ -396,7 +395,9 @@ def _align_local_data(fix_image: ImageData,
             np.float32,
             overwrite=True,
             compressor=compressor,
-            **inv_transform_attrs,
+            parent_attrs=inv_transform_attrs,
+            pixelResolution=transform_voxel_spacing,
+            downsamplingFactors=transform_downsampling,
         )
         logger.info('Calculate inverse transformation' +
                     f'{inv_transform_path}:{inv_transform_subpath}' +
@@ -426,13 +427,11 @@ def _align_local_data(fix_image: ImageData,
     if (deform_ok or len(global_affine_transforms) > 0) and align_path:
         # Apply local transformation only if 
         # highres aligned output name is set
-        align_attrs = io_utility.prepare_attrs(
+        align_attrs = io_utility.prepare_parent_group_attrs(
             align_path,
             align_subpath,
             axes=mov_image.get_attr('axes'),
             coordinateTransformations=mov_image.get_attr('coordinateTransformations'),
-            pixelResolution=mov_image.get_attr('pixelResolution'),
-            downsamplingFactors=mov_image.get_attr('downsamplingFactors'),
         )
         align_shape = fix_image.shape
         if len(align_blocksize) < len(align_shape):
@@ -440,6 +439,8 @@ def _align_local_data(fix_image: ImageData,
             align_chunk_size = (1,) * (len(align_shape)-len(align_blocksize)) + tuple(get_spatial_values(align_blocksize))
         else:
             align_chunk_size = tuple(get_spatial_values(align_blocksize))
+        voxel_resolution = mov_image.voxel_spacing
+        voxel_downsampling = mov_image.voxel_downsampling
         align = io_utility.create_dataset(
             align_path,
             align_subpath,
@@ -450,7 +451,13 @@ def _align_local_data(fix_image: ImageData,
             compressor=compressor,
             for_timeindex=align_timeindex,
             for_channel=align_channel,
-            **align_attrs,
+            parent_attrs=align_attrs,
+            pixelResolution=(list(voxel_resolution)
+                             if voxel_resolution is not None
+                             else None),
+            downsamplingFactors=(list(voxel_downsampling)
+                                 if voxel_downsampling is not None
+                                 else None),
         )
         logger.info(f'Apply affine transform {global_affine_transforms}' +
                     f'and local transform {transform_path}:{transform_subpath}' +
@@ -461,7 +468,7 @@ def _align_local_data(fix_image: ImageData,
             deform_transforms = []
         affine_spacings = [(1.,) * mov_image.spatial_ndim for i in range(len(global_affine_transforms))]
         transform_spacing = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing)])
-        logger.debug(f'Used transforms spacings: {transform_spacing}')
+        print(f'!!!!!!!!!!!!!Used transforms spacings: {transform_spacing}')
 
         distributed_apply_transform(
             fix_image, mov_image,

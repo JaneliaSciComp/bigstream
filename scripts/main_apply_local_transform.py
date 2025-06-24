@@ -251,7 +251,8 @@ def _run_apply_transform(args):
         if args.dask_scheduler:
             cluster_client = Client(address=args.dask_scheduler)
         else:
-            cluster_client = Client(LocalCluster())
+            cluster_client = Client(LocalCluster(n_workers=args.local_dask_workers,
+                                                 threads_per_worker=args.worker_cpus))
 
         worker_config = ConfigureWorkerPlugin(args.logging_config,
                                               args.verbose,

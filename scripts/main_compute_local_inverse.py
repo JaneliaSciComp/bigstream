@@ -158,7 +158,6 @@ def _run_compute_inverse(args):
     voxel_resolution = local_deform_field.voxel_spacing
     # get the downsampling as it is in the direct deformation
     voxel_downsampling = local_deform_field.get_attr('downsamplingFactors')
-    print('!!!!!! INV VOXEL ATTRS: ', voxel_resolution, voxel_downsampling)
     inv_deform_field = io_utility.create_dataset(
         inv_transform_path,
         inv_transform_subpath,

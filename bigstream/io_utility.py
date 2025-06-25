@@ -136,6 +136,7 @@ def _update_dataset_attrs(root_container, dataset,
 def get_voxel_spacing(attrs: dict):
     pr = None
     if attrs.get('coordinateTransformations'):
+        # this is the OME-ZARR format
         scale_metadata = list(filter(lambda t: t.get('type') == 'scale', attrs['coordinateTransformations']))
         if len(scale_metadata) > 0:
             # return voxel spacing as [time, ch, dz, dy, dx]
@@ -143,15 +144,20 @@ def get_voxel_spacing(attrs: dict):
         else:
             pr = None
     elif (attrs.get('downsamplingFactors')):
+        # N5 at scale > S0
         pr = (np.array(attrs['pixelResolution']) * 
               np.array(attrs['downsamplingFactors']))
+        pr = pr[::-1]  # zyx order
     elif attrs.get('pixelResolution'):
+        # N5 at scale S0
         pr_attr = attrs.get('pixelResolution')
         if type(pr_attr) is list:
             pr = np.array(pr_attr)
+            pr = pr[::-1]  # zyx order
         elif type(pr_attr) is dict:
             if pr_attr.get('dimensions'):
                 pr = np.array(pr_attr['dimensions'])
+                pr = pr[::-1]  # zyx order
     logger.debug(f'Voxel spacing from attributes: {pr}')
     return pr
 
@@ -288,10 +294,9 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
                data_timeindex=None, data_channels=None,
                block_coords=None):
     try:
-        zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath)
-        data_container = zarr.open(store=_get_data_store(zarr_container_path,
-                                                         data_store_name),
-                                   mode='r')
+        zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
+        data_store = _get_data_store(zarr_container_path, data_store_name)
+        data_container = zarr.open(store=data_store, mode='r')
         data_container_attrs = data_container.attrs.asdict()
 
         if _is_ome_zarr(data_container_attrs):
@@ -398,10 +403,10 @@ def _open_ome_zarr(data_container, data_subpath,
         dataset_index_comp = dataset_comps[-1]
         logger.info(f'No dataset was found using {dataset_subpath} - try to use: {dataset_index_comp}')
         dataset_index = _extract_numeric_comp(dataset_index_comp)
-        if dataset_index < len(multiscale_metadata.datasets):
-            dataset_metadata = multiscale_metadata.datasets[dataset_index]
+        if dataset_index < len(multiscale_metadata.get('datasets', [])):
+            dataset_metadata = multiscale_metadata['datasets'][dataset_index]
         else:
-            dataset_metadata = multiscale_metadata.datasets[0]
+            dataset_metadata = multiscale_metadata['datasets'][0]
 
     dataset_axes = multiscale_metadata.get('axes')
     dataset_path = dataset_metadata.get('path')
@@ -471,10 +476,10 @@ def _get_array_selector(axes, timeindex: int | None,
 
 def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
     try:
-        zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath)
-        data_container = zarr.open(store=_get_data_store(zarr_container_path,
-                                                         data_store_name),
-                                   mode='r')
+        zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
+        data_store = _get_data_store(zarr_container_path, data_store_name)
+        print('!!!!!!! DATA STORE:', data_store, zarr_container_path, zarr_subpath)
+        data_container = zarr.open(store=data_store, mode='r')
         data_container_attrs = data_container.attrs.asdict()
 
         if _is_ome_zarr(data_container_attrs):
@@ -496,11 +501,16 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         raise e
 
 
-def _adjust_data_paths(data_path, data_subpath):
+def _adjust_data_paths(data_path, data_subpath, data_store_name):
     """
     This methods adjusts the container and dataset paths such that
     the container paths always contains a .attrs file
     """
+    if data_store_name == 'n5' or data_path.endswith('.n5') or data_path.endswith('.N5'):
+        # N5 container path is the same as the data_path
+        # and the subpath is the dataset path
+        return data_path, data_subpath
+
     dataset_path_arg = data_subpath if data_subpath is not None else ''
     dataset_comps = [c for c in dataset_path_arg.split('/') if c]
     dataset_comps_index = 0

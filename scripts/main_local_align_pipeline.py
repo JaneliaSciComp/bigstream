@@ -1,10 +1,10 @@
 import argparse
 import numpy as np
+import os
 import bigstream.io_utility as io_utility
 import bigstream.utility as ut
 
 from dask.distributed import (Client, LocalCluster)
-from os.path import exists
 
 from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            define_registration_input_args,
@@ -17,7 +17,9 @@ from bigstream.configure_dask import (ConfigureWorkerPlugin,
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
-from bigstream.image_data import (ImageData, get_spatial_values)
+from bigstream.image_data import (ImageData, get_spatial_values,
+                                  calc_full_voxel_resolution_attr,
+                                  calc_downsampling_attr)
 
 
 logger = None
@@ -340,8 +342,9 @@ def _align_local_data(fix_image: ImageData,
             overwrite=True,
             compressor=compressor,
             parent_attrs=transform_attrs,
-            pixelResolution=transform_voxel_spacing,
-            downsamplingFactors=transform_downsampling,
+            pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
+                                                            transform_downsampling),
+            downsamplingFactors=calc_downsampling_attr(transform_downsampling),
         )
     else:
         transform = None
@@ -396,14 +399,17 @@ def _align_local_data(fix_image: ImageData,
             overwrite=True,
             compressor=compressor,
             parent_attrs=inv_transform_attrs,
-            pixelResolution=transform_voxel_spacing,
-            downsamplingFactors=transform_downsampling,
+            pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
+                                                            transform_downsampling),
+            downsamplingFactors=calc_downsampling_attr(transform_downsampling),
         )
-        logger.info('Calculate inverse transformation' +
-                    f'{inv_transform_path}:{inv_transform_subpath}' +
-                    f'from {transform_path}:{transform_subpath}' +
-                    f'for local alignment of {mov_image}' +
-                    f'to reference {fix_image}')
+        logger.info((
+            'Calculate inverse transformation '
+            f'{inv_transform_path}:{inv_transform_subpath} '
+            f'from {transform_path}:{transform_subpath} '
+            f'for local alignment of {mov_image} '
+            f'to reference {fix_image} '
+        ))
         distributed_invert_displacement_vector_field(
             transform,
             fix_image.voxel_spacing,
@@ -439,8 +445,6 @@ def _align_local_data(fix_image: ImageData,
             align_chunk_size = (1,) * (len(align_shape)-len(align_blocksize)) + tuple(get_spatial_values(align_blocksize))
         else:
             align_chunk_size = tuple(get_spatial_values(align_blocksize))
-        voxel_resolution = mov_image.voxel_spacing
-        voxel_downsampling = mov_image.voxel_downsampling
         align = io_utility.create_dataset(
             align_path,
             align_subpath,
@@ -452,12 +456,9 @@ def _align_local_data(fix_image: ImageData,
             for_timeindex=align_timeindex,
             for_channel=align_channel,
             parent_attrs=align_attrs,
-            pixelResolution=(list(voxel_resolution)
-                             if voxel_resolution is not None
-                             else None),
-            downsamplingFactors=(list(voxel_downsampling)
-                                 if voxel_downsampling is not None
-                                 else None),
+            pixelResolution=calc_full_voxel_resolution_attr(mov_image.voxel_spacing,
+                                                            mov_image.voxel_downsampling),
+            downsamplingFactors=calc_downsampling_attr(mov_image.voxel_downsampling),
         )
         logger.info(f'Apply affine transform {global_affine_transforms}' +
                     f'and local transform {transform_path}:{transform_subpath}' +
@@ -468,7 +469,7 @@ def _align_local_data(fix_image: ImageData,
             deform_transforms = []
         affine_spacings = [(1.,) * mov_image.spatial_ndim for i in range(len(global_affine_transforms))]
         transform_spacing = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing)])
-        print(f'!!!!!!!!!!!!!Used transforms spacings: {transform_spacing}')
+        logger.info(f'Transforms spacings: {transform_spacing}')
 
         distributed_apply_transform(
             fix_image, mov_image,
@@ -500,7 +501,7 @@ def main():
     logger.info(f'Local registration: {args}')
 
     global_affine = None
-    if args.global_affine and exists(args.global_affine):
+    if args.global_affine and os.path.exists(args.global_affine):
         logger.info(f'Read global affine from {args.global_affine}')
         global_affine = np.loadtxt(args.global_affine)
 

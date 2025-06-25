@@ -8,12 +8,12 @@ class ImageData:
 
     def __init__(self, image_path=None, image_subpath=None,
                  image_arraydata=None, image_attrs=None,
-                 image_timeindex=None, image_channels=None,
+                 image_timeindex=None, image_channel=None,
                  read_attrs=True):
         self.image_path = image_path
         self.image_subpath = image_subpath
         self.image_timeindex = image_timeindex
-        self.image_channels = image_channels
+        self.image_channel = image_channel
         self.image_ndarray = image_arraydata
         self.image_voxel_spacing = None
         self.image_downsampling = None
@@ -26,7 +26,7 @@ class ImageData:
         subpath = self.image_subpath if self.image_subpath else ''
 
         return (
-            f'{image_path}:{subpath}:{self.image_timeindex}:{self.image_channels}, '
+            f'{image_path}:{subpath}:{self.image_timeindex}:{self.image_channel}, '
             f'shape: {self.shape}, voxel_spacing: {self.voxel_spacing} '
         )
 
@@ -49,7 +49,7 @@ class ImageData:
                 self.image_path,
                 self.image_subpath,
                 data_timeindex=self.image_timeindex,
-                data_channels=self.image_channels
+                data_channels=self.image_channel
             )
             imgdtype = imgarray.dtype
             if convert_to_little_endian and imgdtype.byteorder == '>':
@@ -151,12 +151,12 @@ def as_image_data(image_data, image_timeindex=None, image_channels=None):
     elif isinstance(image_data, np.ndarray):
         return ImageData(image_arraydata=image_data, read_attrs=False,
                          image_timeindex=image_timeindex,
-                         image_channels=image_channels)
+                         image_channel=image_channels)
     elif isinstance(image_data, zarr.core.Array):
         return ImageData(image_arraydata=image_data,
                          image_attrs=image_data.attrs,
                          image_timeindex=image_timeindex,
-                         image_channels=image_channels)
+                         image_channel=image_channels)
     else:
         return None
 
@@ -172,3 +172,23 @@ def get_spatial_values(values, reverse_axes=False):
             return values[-3:]
 
     return values if not reverse_axes else values[::-1]
+
+
+def calc_full_voxel_resolution_attr(voxel_spacing, downsampling):
+    """
+    Calculate voxel resolution in order to store it in the dataset attribute.
+    """
+    if voxel_spacing is None:
+        return None
+
+    if downsampling is None:
+        return list(voxel_spacing)[::-1]
+
+    return list(np.array(voxel_spacing) / downsampling)[::-1]
+
+
+def calc_downsampling_attr(downsampling):
+    if downsampling is None:
+        return downsampling
+
+    return list(downsampling)[::-1]

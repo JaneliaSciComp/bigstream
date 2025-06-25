@@ -124,13 +124,13 @@ def distributed_apply_transform(
                                          image_path=fix_image.image_path,
                                          image_subpath=fix_image.image_subpath,
                                          image_timeindex=fix_image.image_timeindex,
-                                         image_channel=fix_image.image_channels)
+                                         image_channel=fix_image.image_channel)
     mov_block_reader = functools.partial(io_utility_read_block,
                                          image=mov_image.image_ndarray,
                                          image_path=mov_image.image_path,
                                          image_subpath=mov_image.image_subpath,
                                          image_timeindex=mov_image.image_timeindex,
-                                         image_channel=mov_image.image_channels)
+                                         image_channel=mov_image.image_channel)
     transform_block = functools.partial(
         _transform_single_block,
         fix_block_reader,

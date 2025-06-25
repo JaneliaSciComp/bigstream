@@ -9,7 +9,9 @@ from bigstream.configure_bigstream import (configure_logging)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
 from bigstream.distributed_transform import distributed_apply_transform
-from bigstream.image_data import ImageData, get_spatial_values
+from bigstream.image_data import (ImageData, get_spatial_values,
+                                  calc_full_voxel_resolution_attr,
+                                  calc_downsampling_attr)
 
 
 logger = None
@@ -149,13 +151,13 @@ def _run_apply_transform(args):
         args.fixed,
         fix_subpath,
         image_timeindex=args.fixed_timeindex,
-        image_channels=args.fixed_channel,
+        image_channel=args.fixed_channel,
     )
     mov_data = ImageData(
         args.moving,
         mov_subpath,
         image_timeindex=args.moving_timeindex,
-        image_channels=args.moving_channel,
+        image_channel=args.moving_channel,
     )
     if args.fixed_spacing:
         fix_data.voxel_spacing = args.fixed_spacing[::-1] # xyz -> zyx
@@ -196,8 +198,8 @@ def _run_apply_transform(args):
         else:
             output_chunk_size = tuple(get_spatial_values(output_blocks))
 
-        voxel_resolution = mov_data.voxel_spacing
-        voxel_downsampling = mov_data.voxel_downsampling
+        voxel_resolution =
+        voxel_downsampling = 
         output_dataarray = io_utility.create_dataset(
             args.output,
             output_subpath,
@@ -208,12 +210,9 @@ def _run_apply_transform(args):
             for_timeindex=args.output_timeindex,
             for_channel=args.output_channel,
             parent_attrs=output_attrs,
-            pixelResolution=(list(voxel_resolution)
-                             if voxel_resolution is not None
-                             else None),
-            downsamplingFactors=(list(voxel_downsampling)
-                                 if voxel_downsampling is not None
-                                 else None),
+            pixelResolution=calc_full_voxel_resolution_attr(mov_data.voxel_spacing,
+                                                            mov_data.voxel_downsampling),
+            downsamplingFactors=calc_downsampling_attr(mov_data.voxel_downsampling),
         )
 
         # read affine transformations

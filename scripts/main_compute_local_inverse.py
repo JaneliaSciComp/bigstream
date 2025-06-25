@@ -9,7 +9,9 @@ from bigstream.configure_bigstream import (configure_logging)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
 from bigstream.distributed_transform import (distributed_invert_displacement_vector_field)
-from bigstream.image_data import ImageData
+from bigstream.image_data import (ImageData,
+                                  calc_full_voxel_resolution_attr,
+                                  calc_downsampling_attr)
 
 
 logger = None # initialized in main as a result of calling configure_logging
@@ -155,9 +157,6 @@ def _run_compute_inverse(args):
         axes=local_deform_field.get_attr('axes'),
         coordinateTransformations=local_deform_field.get_attr('coordinateTransformations'),
     )
-    voxel_resolution = local_deform_field.voxel_spacing
-    # get the downsampling as it is in the direct deformation
-    voxel_downsampling = local_deform_field.get_attr('downsamplingFactors')
     inv_deform_field = io_utility.create_dataset(
         inv_transform_path,
         inv_transform_subpath,
@@ -167,10 +166,9 @@ def _run_compute_inverse(args):
         overwrite=True,
         compressor=args.compression,
         parent_attrs=inv_transform_attrs,
-        pixelResolution=(list(voxel_resolution)
-                            if voxel_resolution is not None
-                            else None),
-        downsamplingFactors=voxel_downsampling,
+        pixelResolution=calc_full_voxel_resolution_attr(local_deform_field.voxel_spacing,
+                                                        local_deform_field.voxel_downsampling),
+        downsamplingFactors=calc_downsampling_attr(local_deform_field.voxel_downsampling),
     )
 
     # open a dask client

@@ -286,13 +286,13 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
     fix = ImageData(
         args.fix, args.fix_subpath,
         image_timeindex=args.fix_timeindex,
-        image_channels=args.fix_channel,
+        image_channel=args.fix_channel,
     )
     logger.info(f'Open fix vol {fix} for registration')
     mov = ImageData(
         args.mov, args.mov_subpath,
         image_timeindex=args.mov_timeindex,
-        image_channels=args.mov_channel,
+        image_channel=args.mov_channel,
     )
     logger.info(f'Open moving vol {mov} for registration')
     # get voxel spacing for fix and moving volume

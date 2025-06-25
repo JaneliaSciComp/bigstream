@@ -140,7 +140,7 @@ def _read_block(block_coords, image_data,
             image_path=image_repr.image_path,
             image_subpath=image_repr.image_subpath,
             image_timeindex=image_repr.image_timeindex,
-            image_channel=image_repr.image_channels,
+            image_channel=image_repr.image_channel,
         )
         if b.dtype.byteorder == '>':
             b = b.byteswap().newbyteorder('<')

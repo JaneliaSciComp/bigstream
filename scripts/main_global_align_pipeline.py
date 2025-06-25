@@ -11,7 +11,8 @@ from bigstream.cli import (CliArgsHelper, RegistrationInputs,
                            get_input_images)
 from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
-from bigstream.image_data import ImageData, get_spatial_values
+from bigstream.image_data import (ImageData, get_spatial_values,
+                                  calc_full_voxel_resolution_attr, calc_downsampling_attr)
 from bigstream.transform import apply_transform
 
 
@@ -215,12 +216,12 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
         else:
             align_chunk_size = align_blocksize
 
-        logger.info(f'Save global aligned volume to {align_path} ' +
-                    f'with blocksize {align_chunk_size}')
-
-        print('!!!!! FIX ATTRS:', fix_image.attrs)
-        print('!!!!! ALIGN SHAPE:', align_shape)
-        print('!!!!! DATA SHAPE:', aligned_array.shape) 
+        logger.info((
+            f'Save global aligned volume to {align_path} '
+            f'shape: {align_shape} '
+            f'blocksize {align_chunk_size} '
+            f'attrs: {align_attrs} '
+        ))
         return io_utility.create_dataset(
             align_path,
             reg_args.align_dataset(),
@@ -233,12 +234,9 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             for_timeindex=reg_args.align_timeindex,
             for_channel=reg_args.align_channel,
             parent_attrs=align_attrs,
-            pixelResolution=(list(voxel_resolution)
-                             if voxel_resolution is not None
-                             else None),
-            downsamplingFactors=(list(downsampling)
-                                 if downsampling is not None
-                                 else None),
+            pixelResolution=calc_full_voxel_resolution_attr(voxel_resolution,
+                                                            downsampling),
+            downsamplingFactors=calc_downsampling_attr(downsampling),
         )
     else:
         logger.info('Skip saving global aligned volume')

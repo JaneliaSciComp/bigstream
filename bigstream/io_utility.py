@@ -129,7 +129,6 @@ def _update_dataset_attrs(root_container, dataset,
         parent_container = root_container
 
     parent_container.attrs.update(parent_attrs)
-    print('!!!!! DATASET ATTRS ', dataset.attrs, dataset_attrs)
     dataset.attrs.update(dataset_attrs)
 
 
@@ -328,14 +327,12 @@ def _find_ome_multiscales(data_container, data_subpath):
     logger.info(f'Find OME multiscales group within {data_subpath}')
     dataset_subpath_arg = data_subpath if data_subpath is not None else ''
     dataset_comps = [c for c in dataset_subpath_arg.split('/') if c]
-    print('!!!!!!! dataset_comps:', data_container, data_subpath, dataset_comps)
 
     dataset_comps_index = 0
     while dataset_comps_index < len(dataset_comps):
         group_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         dataset_item = data_container[group_subpath]
         dataset_item_attrs = dataset_item.attrs.asdict()
-        print('!!!!!!! dataset_item_attrs:', group_subpath, dataset_item_attrs)
         if dataset_item_attrs.get('multiscales', []) == []:
             dataset_comps_index = dataset_comps_index + 1
         else:
@@ -355,7 +352,6 @@ def _open_ome_zarr(data_container, data_subpath,
                    data_timeindex=None, data_channels=None, block_coords=None):
     multiscales_group, dataset_subpath, multiscales_attrs  = _find_ome_multiscales(data_container, data_subpath)
 
-    print('!!!!! MULTISCALES GROUP:', data_subpath, multiscales_group)
     if multiscales_group is None:
         a = (data_container[data_subpath]
              if data_subpath and data_subpath != '.'
@@ -372,7 +368,6 @@ def _open_ome_zarr(data_container, data_subpath,
     # ome_metadata = ImageAttrs.construct(**multiscales_attrs)
     multiscale_metadata = multiscales_attrs.get('multiscales', [])[0]
     # pprint.pprint(ome_metadata)
-    print('!!!!!! MS META ', dataset_comps, multiscale_metadata)
     dataset_metadata = None
     # lookup the dataset by path
     for ds in multiscale_metadata.get('datasets', []):
@@ -478,7 +473,6 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
     try:
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
         data_store = _get_data_store(zarr_container_path, data_store_name)
-        print('!!!!!!! DATA STORE:', data_store, zarr_container_path, zarr_subpath)
         data_container = zarr.open(store=data_store, mode='r')
         data_container_attrs = data_container.attrs.asdict()
 

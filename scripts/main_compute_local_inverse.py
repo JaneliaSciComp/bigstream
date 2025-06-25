@@ -205,7 +205,6 @@ def _run_compute_inverse(args):
                 'and inverse smooth sigmas must all have the same length '
                 f'{args.inv_iterations} vs {inv_shrink_spacings} vs {args.inv_smooth_sigmas} '
             ))
-        print('!!!!!! INV TRANSFORM BLOCKSIZE: ', inv_transform_blocksize)
         distributed_invert_displacement_vector_field(
             local_deform_field.image_array,
             local_deform_spacing,

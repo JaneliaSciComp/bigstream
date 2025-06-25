@@ -8,7 +8,7 @@ import re
 import zarr
 import traceback
 
-from ome_zarr_models.v04.image import (Dataset, ImageAttrs)
+from ome_zarr_models.v04.image import Dataset
 from tifffile import TiffFile
 
 
@@ -427,7 +427,7 @@ def _open_ome_zarr(data_container, data_subpath,
     return ba, multiscales_attrs
 
 
-def _get_array_selector(axes, timeindex: int | None, 
+def _get_array_selector(axes, timeindex: int | None,
                         ch:int | list[int] | None,
                         block_coords: tuple | None):
     selector = []
@@ -513,7 +513,8 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
     while dataset_comps_index < len(dataset_comps):
         container_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         container_path = f'{data_path}/{container_subpath}'
-        if os.path.exists(f'{container_path}/.zattrs'):
+        if (os.path.exists(f'{container_path}/.zattrs') or
+            os.path.exists(f'{container_path}/attributes.json')):
             break
         dataset_comps_index = dataset_comps_index + 1
 

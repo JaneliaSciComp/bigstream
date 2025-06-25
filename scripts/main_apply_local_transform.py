@@ -198,8 +198,6 @@ def _run_apply_transform(args):
         else:
             output_chunk_size = tuple(get_spatial_values(output_blocks))
 
-        voxel_resolution =
-        voxel_downsampling = 
         output_dataarray = io_utility.create_dataset(
             args.output,
             output_subpath,
@@ -257,6 +255,7 @@ def _run_apply_transform(args):
                                               args.verbose,
                                               worker_cpus=args.worker_cpus)
         cluster_client.register_plugin(worker_config, name='WorkerConfig')
+
         try:
             distributed_apply_transform(
                 fix_data, mov_data,

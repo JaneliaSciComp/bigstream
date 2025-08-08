@@ -11,7 +11,7 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     include_package_data=True,
     install_requires=[
-        'numpy>=1.20.3',
+        'numpy>=1.20.3,<2',
         'scipy>=1.9.1',
         'opencv-python>=4.5.5.64',
         'bokeh>=2.4.3',

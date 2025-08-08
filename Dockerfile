@@ -1,5 +1,5 @@
 # Create final image
-FROM ghcr.io/janeliascicomp/dask:2025.5.1-py12-ol9
+FROM ghcr.io/janeliascicomp/zarr-tools:dask2025.5.1-py12-ol9
 ARG TARGETPLATFORM
 
 RUN dnf install -y \

@@ -137,7 +137,7 @@ def distributed_apply_transform(
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,
         output=aligned_data,
-        *kwargs,
+        **kwargs,
     )
 
     # apply transformation to all blocks

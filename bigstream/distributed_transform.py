@@ -145,7 +145,7 @@ def distributed_apply_transform(
         output=aligned_data,
         output_timeindex=aligned_data_timeindex,
         output_channel=aligned_data_channel,
-        *kwargs,
+        **kwargs,
     )
 
     # apply transformation to all blocks

@@ -211,11 +211,13 @@ def prepare_parent_group_attrs(container_path,
 
     if dataset_path:
         dataset_path_comps = [c for c in dataset_path.split('/') if c]
+        logger.info(f'Lookup dataset path: {dataset_path} in {dataset_path_comps}')
         # take the last component of the dataset path to be the scale path
         dataset_scale_subpath = dataset_path_comps.pop()
     else:
         # No subpath was provided - I am using '.', but
         # this may be problematic - I don't know yet how to handle it properly
+        logger.info('No dataset was provided - will use "." for dataset subpath')
         dataset_scale_subpath = '.'
 
     scales, translations = None, None

@@ -192,7 +192,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
     if align_path:
         align_attrs = io_utility.prepare_parent_group_attrs(
             align_path,
-            reg_args.align_subpath,
+            reg_args.align_dataset(),
             axes=axes,
             coordinateTransformations=coordinateTransformations,
         )

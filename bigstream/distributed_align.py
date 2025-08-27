@@ -471,8 +471,10 @@ def distributed_alignment_pipeline(
     # image_timeindex and the image_channel if available
     nblocks = np.ceil(np.array(fix_spatial_dims) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
-    logger.info(f'Partition {fix_spatial_dims} into {nblocks} using' +
-                f'{block_partition_size} blocksize and {overlaps} overlaps')
+    logger.info((
+        f'Partition {fix_spatial_dims} into {nblocks} using '
+        f'{block_partition_size} blocksize and {overlaps} overlaps'
+    ))
     fix_blocks_ids = []
     fix_blocks_coords = []
     fix_blocks_neighbors = []

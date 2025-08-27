@@ -28,7 +28,7 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
         container_ext = path_comps[1]
 
         if container_ext == '.zarr':
-            store = zarr.NestedDirectoryStore(real_container_path)
+            store = zarr.DirectoryStore(real_container_path, dimension_separator='/')
         else:
             store = zarr.N5Store(real_container_path)
         if container_subpath:
@@ -531,7 +531,7 @@ def _get_data_store(data_path, data_store_name):
     if data_store_name is None or data_store_name == 'n5':
         return zarr.N5Store(data_path)
     else:
-        return zarr.NestedDirectoryStore(data_path)
+        return zarr.DirectoryStore(data_path, dimension_separator='/')
 
 
 

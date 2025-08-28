@@ -2,8 +2,8 @@ import logging
 import pydantic.v1.utils as pu
 import yaml
 
-from .configure_bigstream import default_bigstream_config_str
-from .image_data import ImageData
+from bigstream.configure_bigstream import default_bigstream_config_str
+from bigstream.image_data import ImageData
 
 
 logger = logging.getLogger(__name__)

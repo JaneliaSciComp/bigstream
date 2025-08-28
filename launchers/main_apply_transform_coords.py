@@ -4,8 +4,7 @@ import bigstream.io_utility as io_utility
 
 from dask.distributed import (Client, LocalCluster)
 from bigstream.configure_bigstream import (configure_logging)
-from bigstream.distributed_transform import (
-    distributed_apply_transform_to_coordinates)
+from bigstream.distributed_transform import (distributed_apply_transform_to_coordinates)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
 from bigstream.image_data import get_spatial_values

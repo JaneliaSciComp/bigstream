@@ -119,12 +119,30 @@ def distributed_apply_transform(
         f'with partition size {block_partition_size} '
     ))
 
+    logger.info((
+        'Create fix block reader for: '
+        '{'
+        f'image_path: {fix_image.image_path}, '
+        f'image_subpath: {fix_image.image_subpath}, '
+        f'image_timeindex: {fix_image.image_timeindex}, '
+        f'image_channel: {fix_image.image_channel}, '
+        '}'
+    ))
     fix_block_reader = functools.partial(io_utility_read_block,
                                          image=fix_image.image_ndarray,
                                          image_path=fix_image.image_path,
                                          image_subpath=fix_image.image_subpath,
                                          image_timeindex=fix_image.image_timeindex,
                                          image_channel=fix_image.image_channel)
+    logger.info((
+        'Create moving block reader for: '
+        '{'
+        f'image_path: {mov_image.image_path}, '
+        f'image_subpath: {mov_image.image_subpath}, '
+        f'image_timeindex: {mov_image.image_timeindex}, '
+        f'image_channel: {mov_image.image_channel}, '
+        '}'
+    ))
     mov_block_reader = functools.partial(io_utility_read_block,
                                          image=mov_image.image_ndarray,
                                          image_path=mov_image.image_path,

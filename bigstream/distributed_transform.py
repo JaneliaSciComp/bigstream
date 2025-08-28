@@ -255,11 +255,14 @@ def _transform_single_block(fix_block_read_method,
             mov_block = mov_block.byteswap().newbyteorder('<')
 
         # resample
-        logger.debug(f'Apply {len(transform_list)} transforms ' +
-                     f'to {block_coords}' +
-                     f'fix origin: {fix_origin}, ' +
-                     f'mov origin: {mov_origin},' +
-                     f'transform origin: {transform_origin}')
+        logger.info((
+            f'Apply {len(transform_list)} transforms '
+            f'to a fix/mov block of shapes: {fix_block.shape}/{mov_block.shape}, '
+            f'fix block coords: {block_coords} '
+            f'fix origin: {fix_origin}, '
+            f'mov origin: {mov_origin}, '
+            f'transform origin: {transform_origin} '
+        ))
         aligned_block = bs_transform.apply_transform(
             fix_block, mov_block,
             fix_spacing, mov_spacing,

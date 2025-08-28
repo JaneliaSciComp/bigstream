@@ -4,16 +4,15 @@ import os
 import bigstream.io_utility as io_utility
 
 from bigstream.align import alignment_pipeline
-from bigstream.cli import (CliArgsHelper, RegistrationInputs,
-                           define_registration_input_args,
-                           extract_align_pipeline,
-                           extract_registration_input_args,
-                           get_input_images)
 from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
 from bigstream.image_data import (ImageData, get_spatial_values,
                                   calc_full_voxel_resolution_attr, calc_downsampling_attr)
 from bigstream.transform import apply_transform
+
+from .cli import (CliArgsHelper, RegistrationInputs,
+                  define_registration_input_args, extract_align_pipeline,
+                  extract_registration_input_args, get_input_images)
 
 
 logger = None

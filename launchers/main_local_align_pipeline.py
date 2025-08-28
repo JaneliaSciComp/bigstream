@@ -6,11 +6,6 @@ import bigstream.utility as ut
 
 from dask.distributed import (Client, LocalCluster)
 
-from bigstream.cli import (CliArgsHelper, RegistrationInputs,
-                           define_registration_input_args,
-                           extract_align_pipeline,
-                           extract_registration_input_args,
-                           inttuple, floattuple, get_input_images)
 from bigstream.configure_bigstream import (configure_logging)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
@@ -20,6 +15,11 @@ from bigstream.distributed_transform import (distributed_apply_transform,
 from bigstream.image_data import (ImageData, get_spatial_values,
                                   calc_full_voxel_resolution_attr,
                                   calc_downsampling_attr)
+
+from .cli import (CliArgsHelper, RegistrationInputs,
+                  define_registration_input_args, extract_align_pipeline,
+                  extract_registration_input_args, get_input_images,
+                  inttuple, floattuple)
 
 
 logger = None

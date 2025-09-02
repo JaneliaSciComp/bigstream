@@ -276,7 +276,25 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
         return None
 
     if image is not None:
-        return image[block_coords]
+        if len(block_coords) == len(image.shape)
+            return image[block_coords]
+        else:
+            block_selector = []
+            if len(image.shape) - len(block_coords) >= 2:
+                # image has 2 additional dimensions - so it's very likely timepoints are present
+                if image_timeindex is not None:
+                    block_selector.append(image_timeindex)
+                else:
+                    block_selector.append(slice(None))
+            if len(image.shape) - len(block_coords) >= 1:
+                # image has at least one extra dimension - very likely channel is present
+                if image_channel is None or image_channel == []:
+                    # this is very likely to result in an error further down
+                    block_selector.append(slice(None))
+                else:
+                    block_selector.append(image_channel)
+            block_selector.extend(block_coords)
+            return image[tuple(block_selector)]
 
     if image_path is not None:
         block, _ = open(image_path, image_subpath,

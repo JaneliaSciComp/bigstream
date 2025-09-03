@@ -157,8 +157,10 @@ def as_image_data(image_data, image_timeindex=None, image_channels=None):
                          image_attrs=image_data.attrs,
                          image_timeindex=image_timeindex,
                          image_channel=image_channels)
-    else:
+    elif image_data is None:
         return None
+    else:
+        raise ValueError(f'image data cannot be created from {type(image_data)}')
 
 
 def get_spatial_values(values, reverse_axes=False):

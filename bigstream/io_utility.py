@@ -276,7 +276,7 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
         return None
 
     if image is not None:
-        if len(block_coords) == len(image.shape)
+        if len(block_coords) == len(image.shape):
             return image[block_coords]
         else:
             block_selector = []

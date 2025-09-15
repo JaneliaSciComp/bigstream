@@ -222,7 +222,7 @@ def apply_transform_to_coordinates(
             assert (transform_spacing is not None), error_message
 
             # handle multiple spacings and origins
-            spacing = transform_spacing
+            spacing = transform_spacing[::-1]  # iterating through transforms in reverse
             origin = transform_origin
             if isinstance(spacing, tuple): spacing = spacing[iii]
             if isinstance(origin, tuple): origin = origin[iii]

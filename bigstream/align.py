@@ -877,7 +877,7 @@ def random_affine_search(
         scores[iii] = score_affine(bst.physical_parameters_to_affine_matrix_3d(ppp, center))
         if scores[iii] < current_best_score:
             current_best_score = scores[iii]
-            logger.debug('Best score found {iii} : {current_best_score}')
+            logger.debug(f'Best score found {iii} : {current_best_score}')
 
     # return top results
     partition_indx = np.argpartition(scores, nreturn)[:nreturn]
@@ -899,6 +899,7 @@ def affine_align(
     mov_origin=None,
     static_transform_list=[],
     default=None,
+    final_metric_check=True,
     context='',
     **kwargs,
 ):
@@ -982,6 +983,13 @@ def affine_align(
 
     default : 4x4 array (default: identity matrix)
         If the optimization fails, print error message but return this value
+
+    final_metric_check : bool (default: True)
+        The metric function is checked before and after alignment. If this flag is
+        True then the function will only return the optimized transform if the final metric
+        value is better than the initial metric value. Otherwise it will return the default.
+        If this flag is False, then the optimized transform is returned regardless.
+
 
     **kwargs : any additional arguments
         Passed to `configure_irm`
@@ -1076,15 +1084,15 @@ def affine_align(
 
     # if registration improved metric return result
     # otherwise return default
-    if final_metric_value < initial_metric_value:
-        logger.info(f'{context} Registration succeeded')
-        return bst.affine_transform_to_matrix(transform)
-    else:
-        logger.warn(f'{context} Optimization failed to improve metric')
-        logger.info(f'METRIC VALUES initial: {context} ',
-                    f'{initial_metric_value} final: {final_metric_value}')
+    if final_metric_check and final_metric_value > initial_metric_value:
+        logger.warning(f'{context} Optimization failed to improve metric')
+        logger.info((f'METRIC VALUES initial: {context} ',
+                    f'{initial_metric_value} final: {final_metric_value}'))
         logger.info(f'{context} Returning default')
         return default
+    else:
+        logger.info(f'{context} Registration succeeded')
+        return bst.affine_transform_to_matrix(transform)
 
 
 def deformable_align(
@@ -1101,6 +1109,7 @@ def deformable_align(
     mov_origin=None,
     static_transform_list=[],
     default=None,
+    final_metric_check=True,
     context='',
     **kwargs,
 ):
@@ -1188,6 +1197,12 @@ def deformable_align(
         print an error but also return this object. If None
         the parameters and displacement field for an identity
         transform are returned.
+
+    final_metric_check : bool (default: True)
+        The metric function is checked before and after alignment. If this flag is
+        True then the function will only return the optimized transform if the final metric
+        value is better than the initial metric value. Otherwise it will return the default.
+        If this flag is False, then the optimized transform is returned regardless.
 
     **kwargs : any additional arguments
         Passed to `configure_irm`
@@ -1281,7 +1296,13 @@ def deformable_align(
 
     # if registration improved metric return result
     # otherwise return default
-    if final_metric_value < initial_metric_value:
+    if final_metric_check and final_metric_value > initial_metric_value:
+        logger.warning(f'{context} Optimization failed to improve metric')
+        logger.info((f'{context} METRIC VALUES initial: {initial_metric_value} ',
+                     f'final: {final_metric_value}'))
+        logger.info(f'{context} Returning default')
+        return default
+    else:
         params = np.concatenate((transform.GetFixedParameters(), transform.GetParameters()))
         field = bst.bspline_to_displacement_field(
             transform, initial_fix_shape,
@@ -1290,12 +1311,6 @@ def deformable_align(
         )
         logger.info(f'{context} Registration succeeded')
         return params, field
-    else:
-        logger.warn(f'{context} Optimization failed to improve metric')
-        logger.info(f'{context} METRIC VALUES initial: {initial_metric_value} ',
-                    f'final: {final_metric_value}')
-        logger.info(f'{context} Returning default')
-        return default
 
 
 def alignment_pipeline(

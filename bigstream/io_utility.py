@@ -15,23 +15,90 @@ from tifffile import TiffFile
 logger = logging.getLogger(__name__)
 
 
-def create_dataset(container_path, container_subpath, shape, chunks, dtype,
-                   data=None, overwrite=False,
-                   for_timeindex=None, for_channel=None,
-                   compressor=None,
-                   parent_attrs={},
-                   **dataset_attrs):
+def create_dataset(
+    container_path,
+    container_subpath,
+    shape,
+    chunks,
+    dtype,
+    data=None,
+    overwrite=False,
+    for_timeindex=None,
+    for_channel=None,
+    compressor=None,
+    parent_attrs={},
+    **dataset_attrs,
+):
+    """
+    Create a Zarr dataset
+
+    Parameters
+    ----------
+    container_path : string
+        The path to the root Zarr container on disk
+        If this path does not exist it will be created
+
+    container_subpath : string
+        The subpath within the root Zarr container to create the array
+        If this subpath does not exist it will be created
+
+    shape : tuple of ints
+        The shape of the dataset
+
+    chunks : tuple of ints
+        The shape of individual chunks in the dataset
+
+    dtype : python or numpy primitive numerical data type
+        The primitive data type of the dataset
+
+    data : array (default: None)
+        Data to populate the dataset with
+        If this parameter is not None then the shape and dtype parameters must
+        be None, as in this case those values are inferred from this array.
+
+    overwrite : bool (default: False)
+        If False, an exception will be raised when trying to write to a dataset
+        that already exists. If True then existing datasets can be overwritten.
+
+    for_timeindex : int (default: None)
+        The full size of the time axis. If data is provided, we may only be
+        able to provide one frame. With this parameter we can ensure the time
+        axis is large enough to accommodate the full time series.
+
+    for_channel : int (default: None)
+        The full size of the channels axis. If data is provided, we may only
+        be able to provide one channel. With this parameter we can ensure the time
+        axis is large enough to accommodate the full time series.
+
+    parent_attrs : dict (default: {})
+        Metadata attributes for the group that will contain the dataset
+
+    **dataset_attrs : any additional keyword arguments
+        Metadata attributes for the dataset itself
+
+    Returns
+    -------
+    dataset : zarr.array
+        The zarr.array reference to the newly created dataset
+    """
+
     try:
+
+        # parse container_path
         real_container_path = os.path.realpath(container_path)
         path_comps = os.path.splitext(container_path)
-
         container_ext = path_comps[1]
 
+        # create the correct store
         if container_ext == '.zarr':
             store = zarr.DirectoryStore(real_container_path, dimension_separator='/')
         else:
             store = zarr.N5Store(real_container_path)
+
+        # create dataset in root group at container_subpath
         if container_subpath:
+
+            # log dataset spec, open root container, specify compression codec
             logger.info((
                 f'Create dataset {container_path}:{container_subpath} '
                 f'compressor={compressor}, shape: {shape}, chunks: {chunks} '
@@ -41,19 +108,24 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             root_group = zarr.open_group(store=store, mode='a')
             codec = (None if compressor is None 
                      else codecs.get_codec(dict(id=compressor)))
+
+            # total replacement with empty container
             if data is None and overwrite:
                 dataset_shape = shape
-                dataset = root_group.create_dataset(
+                dataset = root_group.create_dataset(    # XXX ZARR API says should replace with group.create_array
                     container_subpath,
                     shape=shape,
                     chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
-                    compressor=codec,
+                    compressor=codec,    # XXX ZARR API prefers using compressors keyword
                     data=data)
+
+            # we have initialization data and/or the dataset already exists
             else:
+
+                # get dataset shape, either from given data or existing dataset
                 if container_subpath in root_group:
-                    # if the dataset already exists, get its shape
                     dataset_shape = root_group[container_subpath].shape
                     logger.info((
                         f'Dataset {container_path}:{container_subpath} '
@@ -61,21 +133,29 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                     ))
                 else:
                     dataset_shape = shape
-                dataset = root_group.require_dataset(
+
+                # return dataset, with possibility it already exists
+                dataset = root_group.require_dataset(    # XXX ZARR API says should replace with group.require_array
                     container_subpath,
                     shape=dataset_shape,
                     chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
-                    compressor=codec,
+                    compressor=codec,    # XXX ZARR API prefers using compressors keyword
                     data=data)
 
+            # ensure time and channel axes are sufficient length
             _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel)
 
+            # add group and dataset metadata
             _update_dataset_attrs(root_group, dataset,
                                   parent_attrs=parent_attrs,
                                   **dataset_attrs)
             return dataset
+
+        # open a root zarr container only and set attributes
+        # XXX currently this block will never execute because container_subpath
+        #     is compulsory
         else:
             logger.info(f'Create root array {container_path} {kwargs}')
             zarr_data = zarr.open(store=store, mode='a',
@@ -83,6 +163,8 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             # set additional attributes
             zarr_data.attrs.update((k, v) for k,v in kwargs.items() if v)
             return zarr_data
+
+    # write to log before erroring out
     except Exception as e:
         logger.error(f'Error creating a dataset at {container_path}:{container_subpath}: {e}')
         raise e
@@ -91,11 +173,18 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
 def _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel):
     """
     Resize the dataset to accommodate the timeindex and channel
+
+    The time and channels axes are assumed to be the 0 and 1 index axes
+    respectively. If these axes shapes are smaller than for_timeindex or
+    for_channel respectively, they are resized to those values.
     """
+
+    # initializations
     resized_shape = ()
     to_resize = False
     i = 0
 
+    # time axis
     if for_timeindex is not None:
         if dataset_shape[i] <= for_timeindex:
             resized_shape = resized_shape + (for_timeindex + 1,)
@@ -103,6 +192,8 @@ def _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel):
         else:
             resized_shape = resized_shape + (dataset_shape[i],)
         i = i + 1
+
+    # channel axis
     if for_channel is not None:
         if dataset_shape[i] <= for_channel:
             resized_shape = resized_shape + (for_channel + 1,)
@@ -111,16 +202,24 @@ def _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel):
             resized_shape = resized_shape + (dataset_shape[i],)
         i = i + 1
 
+    # if we have to expand
     if to_resize:
         while i < len(dataset_shape):
             resized_shape = resized_shape + (dataset_shape[i],)
             i = i + 1
+
+        # log and then resize in place
         logger.info(f'Resize {dataset.store.path}:{dataset.path} to {resized_shape}')
         dataset.resize(resized_shape)
 
 
 def _update_dataset_attrs(root_container, dataset,
                           parent_attrs={}, **dataset_attrs):
+    """
+    Store all metadata attributes for a dataset in the parent container
+    """
+
+    # get parent container as object, it will contain metadata for the group
     if dataset.path:
         dataset_parent = os.path.dirname(dataset.path)
         parent_container = (root_container if not dataset_parent
@@ -128,6 +227,7 @@ def _update_dataset_attrs(root_container, dataset,
     else:
         parent_container = root_container
 
+    # write the parent (group) metadata and the dataset metadata
     parent_container.attrs.update(parent_attrs)
     dataset.attrs.update(dataset_attrs)
 

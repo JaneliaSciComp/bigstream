@@ -233,6 +233,15 @@ def _update_dataset_attrs(root_container, dataset,
 
 
 def get_voxel_spacing(attrs: dict):
+    """
+    Parse an attributes dictionary and return voxel spacing.
+    Works for OME-ZARR or N5 attributes.
+    N5 attributes can be given at any scale and the downsampling factor will
+    be taken into account.
+
+    For OME-ZARR, spacing for [time, ch, dz, dy, dx] is returned
+    For N5, spacing for [dz, dy, dx] is returned
+    """
     pr = None
     if attrs.get('coordinateTransformations'):
         # this is the OME-ZARR format
@@ -264,11 +273,17 @@ def get_voxel_spacing(attrs: dict):
 def open(container_path, subpath,
          data_timeindex=None, data_channels=None,
          block_coords=None, container_type=None):
+    """
+    A generalized open function that supports nrrd, tiff, npy, n5, and zarr
+    containers. Maps to the appropriate format specific open function.
+    """
+
+    # parse container_path
     real_container_path = os.path.realpath(container_path)
     path_comps = os.path.splitext(container_path)
-
     container_ext = path_comps[1]
 
+    # call the appropriate format specific open function
     if container_ext == '.nrrd' or container_type == 'nrrd':
         logger.info(f'Open nrrd {container_path} ({real_container_path})')
         return _read_nrrd(real_container_path, block_coords=block_coords)
@@ -654,6 +669,7 @@ def _get_data_store(data_path, data_store_name):
 
 
 def _read_tiff(input_path, block_coords=None):
+    "Return tiff data as zarr array, slice at block_coords, include metadata"
     with TiffFile(input_path) as tif:
         tif_store = tif.aszarr()
         tif_array = zarr.open(tif_store)
@@ -665,6 +681,7 @@ def _read_tiff(input_path, block_coords=None):
 
 
 def _read_tiff_attrs(input_path):
+    "Open tiff, call function to get tiff metadata"
     with TiffFile(input_path) as tif:
         tif_store = tif.aszarr()
         tif_array = zarr.open(tif_store)
@@ -672,6 +689,7 @@ def _read_tiff_attrs(input_path):
 
 
 def _get_tiff_attrs(tif_array):
+    "read tiff attributes, nicely organized by zarr, append dtype and shape"
     dict = tif_array.attrs.asdict()
     dict.update({
         'dataType': tif_array.dtype,
@@ -681,11 +699,13 @@ def _get_tiff_attrs(tif_array):
 
 
 def _read_nrrd(input_path, block_coords=None):
+    "read nrrd and metadata, slice at block_coords"
     im, dict = nrrd.read(input_path)
     return im[block_coords] if block_coords is not None else im, dict
 
 
 def _read_nrrd_attrs(input_path):
+    "read only the nrrd metadata"
     return nrrd.read_header(input_path)
 
 

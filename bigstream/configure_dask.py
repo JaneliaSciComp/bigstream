@@ -17,8 +17,7 @@ class ConfigureWorkerPlugin(WorkerPlugin):
         self.worker_cpus = worker_cpus
 
     def setup(self, worker: Worker):
-        self.logger = configure_logging(self.logging_config, self.verbose,
-                                        logger_name='dask_worker')
+        self.logger = configure_logging(self.logging_config, self.verbose)
         set_cpu_resources(self.worker_cpus)
 
     def teardown(self, worker: Worker):

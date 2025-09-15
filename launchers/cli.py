@@ -2,8 +2,8 @@ import logging
 import pydantic.v1.utils as pu
 import yaml
 
-from .configure_bigstream import default_bigstream_config_str
-from .image_data import ImageData
+from bigstream.configure_bigstream import default_bigstream_config_str
+from bigstream.image_data import ImageData
 
 
 logger = logging.getLogger(__name__)
@@ -89,10 +89,21 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('fix-subpath'),
                       dest=args_descriptor.argdest('fix_subpath'),
                       help='Fixed volume subpath')
+    args.add_argument(args_descriptor.argflag('fix-timeindex'),
+                      dest=args_descriptor.argdest('fix_timeindex'),
+                      type=int,
+                      default=None,
+                      help='Fixed volume time index')
+    args.add_argument(args_descriptor.argflag('fix-channel'),
+                      dest=args_descriptor.argdest('fix_channel'),
+                      type=int,
+                      default=None,
+                      help='Fixed volume channel')
     args.add_argument(args_descriptor.argflag('fix-spacing'),
                       dest=args_descriptor.argdest('fix_spacing'),
                       type=floattuple,
                       help='Fixed volume voxel spacing')
+
     args.add_argument(args_descriptor.argflag('fix-mask'),
                       dest=args_descriptor.argdest('fix_mask'),
                       help='Fixed volume mask')
@@ -110,6 +121,16 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('mov-subpath'),
                       dest=args_descriptor.argdest('mov_subpath'),
                       help='Moving volume subpath')
+    args.add_argument(args_descriptor.argflag('mov-timeindex'),
+                      dest=args_descriptor.argdest('mov_timeindex'),
+                      type=int,
+                      default=0,
+                      help='Moving volume time index')
+    args.add_argument(args_descriptor.argflag('mov-channel'),
+                      dest=args_descriptor.argdest('mov_channel'),
+                      type=int,
+                      default=-1, # last channel
+                      help='Fixed volume channel')
     args.add_argument(args_descriptor.argflag('mov-spacing'),
                       dest=args_descriptor.argdest('mov_spacing'),
                       type=floattuple,
@@ -152,6 +173,16 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('align-subpath'),
                       dest=args_descriptor.argdest('align_subpath'),
                       help='Alignment subpath')
+    args.add_argument(args_descriptor.argflag('align-timeindex'),
+                      dest=args_descriptor.argdest('align_timeindex'),
+                      type=int,
+                      default=None,
+                      help='Aligned volume time index')
+    args.add_argument(args_descriptor.argflag('align-channel'),
+                      dest=args_descriptor.argdest('align_channel'),
+                      type=int,
+                      default=None,
+                      help='Aligned volume channel')
 
     args.add_argument(args_descriptor.argflag('transform-blocksize'),
                       dest=args_descriptor.argdest('transform_blocksize'),
@@ -211,12 +242,16 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     registration_args = {}
     _extract_arg(args, args_descriptor, 'fix', registration_args)
     _extract_arg(args, args_descriptor, 'fix_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'fix_timeindex', registration_args)
+    _extract_arg(args, args_descriptor, 'fix_channel', registration_args)
     _extract_arg(args, args_descriptor, 'fix_spacing', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask_descriptor', registration_args)
     _extract_arg(args, args_descriptor, 'mov', registration_args)
     _extract_arg(args, args_descriptor, 'mov_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_timeindex', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_channel', registration_args)
     _extract_arg(args, args_descriptor, 'mov_spacing', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask_subpath', registration_args)
@@ -232,10 +267,12 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'align_dir', registration_args)
     _extract_arg(args, args_descriptor, 'align_name', registration_args)
     _extract_arg(args, args_descriptor, 'align_subpath', registration_args)
+    _extract_arg(args, args_descriptor, 'align_timeindex', registration_args)
+    _extract_arg(args, args_descriptor, 'align_channel', registration_args)
     _extract_arg(args, args_descriptor, 'align_blocksize', registration_args)
     _extract_arg(args, args_descriptor, 'registration_steps', registration_args)
     registration_inputs = RegistrationInputs()
-    registration_inputs.__dict__ = registration_args
+    registration_inputs.__dict__.update(registration_args)
     return registration_inputs
 
 
@@ -246,9 +283,17 @@ def _extract_arg(args: RegistrationInputs, args_descriptor: CliArgsHelper,
 
 def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
     # Read the global inputs
-    fix = ImageData(args.fix, args.fix_subpath)
+    fix = ImageData(
+        args.fix, args.fix_subpath,
+        image_timeindex=args.fix_timeindex,
+        image_channel=args.fix_channel,
+    )
     logger.info(f'Open fix vol {fix} for registration')
-    mov = ImageData(args.mov, args.mov_subpath)
+    mov = ImageData(
+        args.mov, args.mov_subpath,
+        image_timeindex=args.mov_timeindex,
+        image_channel=args.mov_channel,
+    )
     logger.info(f'Open moving vol {mov} for registration')
     # get voxel spacing for fix and moving volume
     if args.fix_spacing:

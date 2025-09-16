@@ -435,11 +435,37 @@ def prepare_parent_group_attrs(container_path,
     
 
 def read_attributes(container_path, subpath, container_type=None):
+    """
+    A generalized attribute reader that supports nrrd, tiff, n5, and zarr
+    containers. Maps to the appropriate format specific attributes reader.
+
+    Parameters
+    ----------
+    container_path : string
+        Path to the image file/container
+
+    subpath : string
+        Subpath to the dataset within the container. For nrrd and tiff can be None.
+
+    container_type : string (default: None)
+        Explicit identifier of container type. Options include:
+        'nrrd', 'tif', 'n5', and 'zarr'.
+        If None, we attempt to infer the container type from the container_path
+        extension, which is not always reliable.
+
+    Returns
+    -------
+    attrs : dict
+        The metadata dictionary for the container/image.
+    """
+
+    # parse container_path
     real_container_path = os.path.realpath(container_path)
     path_comps = os.path.splitext(container_path)
-
     container_ext = path_comps[1]
 
+    # map container type to appropriate attributes reader
+    # read and return attributes
     if container_ext == '.nrrd' or container_type == 'nrrd':
         logger.info(f'Read nrrd attrs {container_path} ({real_container_path})')
         return _read_nrrd_attrs(container_path)
@@ -461,12 +487,48 @@ def read_attributes(container_path, subpath, container_type=None):
 
 def read_block(block_coords, image=None, image_path=None, image_subpath=None,
                image_timeindex=None, image_channel=None):
+    """
+    Read a continuous subset of voxels (a block) from an image dataset
+
+    Parameters
+    ----------
+    block_coords : tuple of slice objects
+        How to slice the global nd-array to get the requested block
+
+    image : nd-array (default: None)
+        If the image is already it can be passed with this parameter
+
+    image_path : string (default: None)
+        If the image is not already open, this is the path to it on disk
+
+    image_subpath : string (default: None)
+        Subpath within the container for the dataset you want to open
+
+    image_timeindex : int or slice object (default: None)
+        An index or slice for the time axis if not included in block_coords
+
+    image_channel : int or slice object (default: None)
+        An index or slice for the channel axis if not included in block_coords
+
+    Returns
+    -------
+    block : nd-array
+        The region of data from image (or the container at image_path-->image_subpath)
+        specificed by block_coords
+    """
+
+    # if no crop is provided
     if block_coords is None:
         return None
 
+    # image already in memory as nd-array
     if image is not None:
+
+        # simplest case, just apply the crop
         if len(block_coords) == len(image.shape):
             return image[block_coords]
+
+        # when block_coords only specifies some but not all axes
         else:
             block_selector = []
             if len(image.shape) - len(block_coords) >= 2:
@@ -485,6 +547,7 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
             block_selector.extend(block_coords)
             return image[tuple(block_selector)]
 
+    # image must be opened first, use generalized open function
     if image_path is not None:
         block, _ = open(image_path, image_subpath,
                         data_timeindex=image_timeindex,
@@ -501,12 +564,20 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
 def _open_zarr(data_path, data_subpath, data_store_name=None,
                data_timeindex=None, data_channels=None,
                block_coords=None):
+    """
+    Open a zarr/n5 container, optionally read a region into memory
+    """
+
+    # "There is no try, only do" -Yoda :D
     try:
+
+        # guarantee a metadata file is in the container folder, identify store, open
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
         data_store = _get_data_store(zarr_container_path, data_store_name)
         data_container = zarr.open(store=data_store, mode='r')
         data_container_attrs = data_container.attrs.asdict()
 
+        # if ome-zarr parse appropriately, otherwise apply subpath and block_coords and return
         if _is_ome_zarr(data_container_attrs):
             return _open_ome_zarr(data_container, zarr_subpath,
                                   data_timeindex=data_timeindex,
@@ -517,6 +588,7 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
             ba = a[block_coords] if block_coords is not None else a
             return ba, a.attrs.asdict()
 
+    # log error before raising exception
     except Exception as e:
         logger.exception(f'Error opening {data_path} : {data_subpath}')
         raise e
@@ -709,16 +781,19 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
     This methods adjusts the container and dataset paths such that
     the container paths always contains a .attrs file
     """
+
+    # N5 already conforms to desired requirement
     if data_store_name == 'n5' or data_path.endswith('.n5') or data_path.endswith('.N5'):
         # N5 container path is the same as the data_path
         # and the subpath is the dataset path
         return data_path, data_subpath
 
+    # extract components of dataset path (data_subpath)
     dataset_path_arg = data_subpath if data_subpath is not None else ''
     dataset_comps = [c for c in dataset_path_arg.split('/') if c]
     dataset_comps_index = 0
 
-    # Look for the first subpath that containes .zattrs file
+    # Look for the first subpath that containes .zattrs or attributes.json file
     while dataset_comps_index < len(dataset_comps):
         container_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         container_path = f'{data_path}/{container_subpath}'
@@ -727,6 +802,7 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
             break
         dataset_comps_index = dataset_comps_index + 1
 
+    # move subpath components to container path to satisfy requirement
     appended_container_path = '/'.join(dataset_comps[0:dataset_comps_index])
     container_path = f'{data_path}/{appended_container_path}'
     new_subpath = '/'.join(dataset_comps[dataset_comps_index:])
@@ -735,6 +811,7 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
 
 
 def _get_data_store(data_path, data_store_name):
+    """Choose the correct zarr.Store type, N5 or Directory/Zarr"""
     if data_store_name is None or data_store_name == 'n5':
         return zarr.N5Store(data_path)
     else:

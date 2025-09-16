@@ -34,7 +34,8 @@ def apply_transform(
     ----------
     fix : ndarray
         the fixed image
-        Optionally, this can be a tuple specifying a shape.
+        Optionally, this can be a tuple specifying a shape and dtype
+        For example, (256, 512, 512, np.uint16)
 
     mov : ndarray
         the moving image; `fix.ndim` must equal `mov.ndim`
@@ -134,8 +135,8 @@ def apply_transform(
 
     # set reference data
     if isinstance(fix, tuple):
-        dtype = mov.dtype
-        resampler.SetSize(fix[::-1])
+        dtype = fix[-1]
+        resampler.SetSize(fix[:-1][::-1])
         resampler.SetOutputSpacing(fix_spacing[::-1])
         if fix_origin is not None:
             resampler.SetOutputOrigin(fix_origin[::-1])

@@ -34,6 +34,8 @@ def distributed_apply_transform(
     ----------
     fix : zarr array
         The fixed image data
+        Optionally, this can be a tuple specifying a shape and dtype
+        For example, (1200, 9000, 5500, np.uint16)
 
     mov : zarr array
         The moving image data
@@ -89,14 +91,16 @@ def distributed_apply_transform(
         this will be a zarr array. Otherwise it is a numpy array.
     """
 
+    # extract fix reference parameters
+    if not isinstance(fix_zarr, tuple):
+        fix_zarr = fix_zarr.shape + (fix_zarr.dtype,)
+
     # temporary file paths and ensure inputs are zarr
     temporary_directory = tempfile.TemporaryDirectory(
         prefix='.', dir=temporary_directory or os.getcwd(),
     )
-    fix_zarr_path = temporary_directory.name + '/fix.zarr'
     mov_zarr_path = temporary_directory.name + '/mov.zarr'
-    zarr_blocks = (128,)*fix_zarr.ndim
-    fix_zarr = ut.numpy_to_zarr(fix_zarr, zarr_blocks, fix_zarr_path)
+    zarr_blocks = (128,)*(len(fix_zarr) - 1)
     mov_zarr = ut.numpy_to_zarr(mov_zarr, zarr_blocks, mov_zarr_path)
 
     # ensure all deforms are zarr
@@ -114,9 +118,9 @@ def distributed_apply_transform(
     if write_path:
         output_zarr = ut.create_zarr(
             write_path,
-            fix_zarr.shape,
+            fix_zarr[:-1],
             tuple(blocksize),
-            fix_zarr.dtype,
+            fix_zarr[-1],
             array_path=dataset_path,
         )
 
@@ -129,27 +133,27 @@ def distributed_apply_transform(
     # get overlap and number of blocks
     blocksize = np.array(blocksize)
     overlap = np.round(blocksize * overlap).astype(int)  # NOTE: default overlap too big?
-    nblocks = np.ceil(np.array(fix_zarr.shape) / blocksize).astype(int)
+    nblocks = np.ceil(np.array(fix_zarr[:-1]) / blocksize).astype(int)
 
     # determine block coordinates with and without overlap
     block_coords_w_overlap, block_coords = [], []
     for index in np.ndindex(*nblocks):
         start = blocksize * index
         stop = start + blocksize
-        stop = np.minimum(fix_zarr.shape, stop)
+        stop = np.minimum(fix_zarr[:-1], stop)
         block_coords.append( tuple(slice(x, y) for x, y in zip(start, stop)) )
 
         start = blocksize * index - overlap
         stop = start + blocksize + 2 * overlap
         start = np.maximum(0, start)
-        stop = np.minimum(fix_zarr.shape, stop)
+        stop = np.minimum(fix_zarr[:-1], stop)
         block_coords_w_overlap.append( tuple(slice(x, y) for x, y in zip(start, stop)) )
 
     # pipeline to run on each block
     def transform_single_block(overlap_coords, coords, transform_list, output_zarr):
 
         # fetch fixed image slices and read fix
-        fix = fix_zarr[overlap_coords]
+        fix = tuple(int(x.stop - x.start) for x in overlap_coords) + (fix_zarr[-1],)
         fix_origin = fix_spacing * [s.start for s in overlap_coords]
 
         # read relevant region of transforms
@@ -227,7 +231,7 @@ def distributed_apply_transform(
     # handle in memory and out of memory result cases
     if not write_path:
         future_keys = [f.key for f in futures]
-        aligned = np.zeros(fix_zarr.shape, dtype=fix_zarr.dtype)
+        aligned = np.zeros(fix_zarr[:-1], dtype=fix_zarr[-1])
         for batch in as_completed(futures, with_results=True).batches():
             for future, result in batch:
                 iii = future_keys.index(future.key)

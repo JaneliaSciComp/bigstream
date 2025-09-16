@@ -4,7 +4,6 @@ from itertools import product
 import bigstream.utility as ut
 import os, tempfile
 from ClusterWrap.decorator import cluster
-import dask.array as da
 import zarr
 import bigstream.transform as bs_transform
 from dask.distributed import as_completed
@@ -110,6 +109,17 @@ def distributed_apply_transform(
         new_list.append(transform)
     transform_list = new_list
 
+    # create output zarr
+    output_zarr = None
+    if write_path:
+        output_zarr = ut.create_zarr(
+            write_path,
+            fix_zarr.shape,
+            tuple(blocksize),
+            fix_zarr.dtype,
+            array_path=dataset_path,
+        )
+
     # ensure transform spacing is set explicitly
     if 'transform_spacing' not in kwargs.keys():
         kwargs['transform_spacing'] = np.array(fix_spacing)
@@ -121,24 +131,26 @@ def distributed_apply_transform(
     overlap = np.round(blocksize * overlap).astype(int)  # NOTE: default overlap too big?
     nblocks = np.ceil(np.array(fix_zarr.shape) / blocksize).astype(int)
 
-    # store block coordinates in a dask array
-    # TODO: remove use of dask array
-    block_coords = np.empty(nblocks, dtype=tuple)
-    for (i, j, k) in np.ndindex(*nblocks):
-        start = blocksize * (i, j, k) - overlap
+    # determine block coordinates with and without overlap
+    block_coords_w_overlap, block_coords = [], []
+    for index in np.ndindex(*nblocks):
+        start = blocksize * index
+        stop = start + blocksize
+        stop = np.minimum(fix_zarr.shape, stop)
+        block_coords.append( tuple(slice(x, y) for x, y in zip(start, stop)) )
+
+        start = blocksize * index - overlap
         stop = start + blocksize + 2 * overlap
         start = np.maximum(0, start)
         stop = np.minimum(fix_zarr.shape, stop)
-        block_coords[i, j, k] = tuple(slice(x, y) for x, y in zip(start, stop))
-    block_coords = da.from_array(block_coords, chunks=(1,)*block_coords.ndim)
+        block_coords_w_overlap.append( tuple(slice(x, y) for x, y in zip(start, stop)) )
 
     # pipeline to run on each block
-    def transform_single_block(coords, transform_list):
+    def transform_single_block(overlap_coords, coords, transform_list, output_zarr):
 
         # fetch fixed image slices and read fix
-        fix_slices = coords.item()
-        fix = fix_zarr[fix_slices]
-        fix_origin = fix_spacing * [s.start for s in fix_slices]
+        fix = fix_zarr[overlap_coords]
+        fix_origin = fix_spacing * [s.start for s in overlap_coords]
 
         # read relevant region of transforms
         new_list = []
@@ -146,7 +158,7 @@ def distributed_apply_transform(
         for iii, transform in enumerate(transform_list):
             if transform.shape != (4, 4):
                 start = np.floor(fix_origin / kwargs['transform_spacing'][iii]).astype(int)
-                stop = [s.stop for s in fix_slices] * fix_spacing / kwargs['transform_spacing'][iii]
+                stop = [s.stop for s in overlap_coords] * fix_spacing / kwargs['transform_spacing'][iii]
                 stop = np.ceil(stop).astype(int)
                 transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
                 transform = transform[transform_slice]
@@ -158,7 +170,7 @@ def distributed_apply_transform(
         # transform fixed block corners, read moving data
         fix_block_coords = []
         for corner in list(product([0, 1], repeat=3)):
-            a = [x.stop-1 if y else x.start for x, y in zip(fix_slices, corner)]
+            a = [x.stop-1 if y else x.start for x, y in zip(overlap_coords, corner)]
             fix_block_coords.append(a)
         fix_block_coords = np.array(fix_block_coords) * fix_spacing
         mov_block_coords = bs_transform.apply_transform_to_coordinates(
@@ -174,7 +186,7 @@ def distributed_apply_transform(
         mov_origin = mov_spacing * [s.start for s in mov_slices]
 
         # resample
-        logger.info(f'Apply {len(transform_list)} transforms to {fix_slices}' +
+        logger.info(f'Apply {len(transform_list)} transforms to {overlap_coords}' +
                     f'fix origin: {fix_origin}, mov origin: {mov_origin}')
         aligned = bs_transform.apply_transform(
             fix, mov, fix_spacing, mov_spacing,
@@ -185,43 +197,47 @@ def distributed_apply_transform(
             **kwargs,
         )
 
-        # crop out overlap
-        for axis in range(aligned.ndim):
+        # remove overlap
+        crop = []
+        for x, y in zip(overlap_coords, coords):
+            start = y.start - x.start
+            stop = y.stop - x.stop
+            if start < 0: start = 0
+            if stop >= 0: stop = None
+            crop.append(slice(start, stop))
+        aligned = aligned[tuple(crop)]
 
-            # left side
-            slc = [slice(None),]*aligned.ndim
-            if fix_slices[axis].start != 0:
-                slc[axis] = slice(overlap[axis], None)
-                aligned = aligned[tuple(slc)]
-
-            # right side
-            slc = [slice(None),]*aligned.ndim
-            if aligned.shape[axis] > blocksize[axis]:
-                slc[axis] = slice(None, blocksize[axis])
-                aligned = aligned[tuple(slc)]
-
-        # return result
-        return aligned
+        # write or return result
+        if output_zarr is not None:
+            output_zarr[coords] = aligned
+            return True
+        else:
+            return aligned
     # END: closure
 
-    # align all blocks
-    aligned = da.map_blocks(
+    # submit all blocks for alignment
+    futures = cluster.client.map(
         transform_single_block,
+        block_coords_w_overlap,
         block_coords,
         transform_list=transform_list,
-        dtype=fix_zarr.dtype,
-        chunks=blocksize,
+        output_zarr=output_zarr,
     )
 
-    # crop to original size
-    aligned = aligned[tuple(slice(s) for s in fix_zarr.shape)]
-
-    # return
-    if write_path:
-        da.to_zarr(aligned, write_path, component=dataset_path)
-        return zarr.open(write_path, 'r+')
+    # handle in memory and out of memory result cases
+    if not write_path:
+        future_keys = [f.key for f in futures]
+        aligned = np.zeros(fix_zarr.shape, dtype=fix_zarr.dtype)
+        for batch in as_completed(futures, with_results=True).batches():
+            for future, result in batch:
+                iii = future_keys.index(future.key)
+                aligned[block_coords[iii]] = result
+        return aligned
     else:
-        return aligned.compute()
+        # execute all alignments
+        all_computed = cluster.client.gather(futures)
+        del futures
+        return output_zarr
 
 
 @cluster

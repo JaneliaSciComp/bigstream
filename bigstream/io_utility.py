@@ -239,8 +239,16 @@ def get_voxel_spacing(attrs: dict):
     N5 attributes can be given at any scale and the downsampling factor will
     be taken into account.
 
-    For OME-ZARR, spacing for [time, ch, dz, dy, dx] is returned
-    For N5, spacing for [dz, dy, dx] is returned
+    Parameters
+    ----------
+    attrs : dict
+        An attributes dictionary from an OME-ZARR or N5 container
+
+    Returns
+    -------
+    spacing : 1-d iterable
+        For OME-ZARR, spacing for [time, ch, dz, dy, dx] is returned
+        For N5, spacing for [dz, dy, dx] is returned
     """
     pr = None
     if attrs.get('coordinateTransformations'):
@@ -276,6 +284,40 @@ def open(container_path, subpath,
     """
     A generalized open function that supports nrrd, tiff, npy, n5, and zarr
     containers. Maps to the appropriate format specific open function.
+
+    Parameters
+    ----------
+    container_path : string
+        Path to the image file or data container
+
+    subpath : string
+        Path to dataset within a container. For nrrd, tiff, or npy this can be
+        None
+
+    data_timeindex : int (default: None)
+        Index along time axis you want returned. None returns whole time axis.
+
+    data_channels : int (default: None)
+        Index along channels axis you want returned. None returns whole
+        channels axis.
+
+    block_coords : tuple of slice objects (default: None)
+        A sub-region of the spatial axes you want returned. None returns
+        the whole spatial domain.
+
+    container_type : string (default: None)
+        Explicit identifier of container type. Options include:
+        'nrrd', 'tif', 'npy', 'n5', and 'zarr'.
+        If None, we attempt to infer the container type from the container_path
+        extension, which is not always reliable.
+
+    Returns
+    -------
+    data : array like
+        The image data
+
+    metadata : dict
+        The metadata for the image. Keys are specific to the container type.
     """
 
     # parse container_path
@@ -320,10 +362,38 @@ def prepare_parent_group_attrs(container_path,
                                dataset_path,
                                axes=None,
                                coordinateTransformations=None):
+    """
+    Prepare an attributes dictionary for a dataset in an OME-ZARR container
+
+    Parameters
+    ----------
+    container_path : string
+        Path to the container which holds the dataset
+
+    dataset_path : string
+        Subpath to the dataset within the container
+
+    axes : list of Axis objects (default: None)
+        Which axes are present in the dataset
+        See ome_zarr_models.v04.axes.Axis
+
+    coordinateTransformations : tuple of VectorScale and/or VectorTranslation (default: None)
+        The scale and translation of the dataset.
+        See ome_zarr_models.v04.coordinate_transformations.VectorScale
+        See ome_zarr_models.v04.coordinate_transformations.VectorTranslation
+
+    Returns
+    -------
+    attrs : dict
+        A dictionary with attributes formatted for OME-ZARR v.04
+    """
+
+    # case of no relevant metadata
     if ((coordinateTransformations is None or coordinateTransformations == []) and
         axes is None):
         return {}
 
+    # identify which dataset in the container we're creating attributes for
     if dataset_path:
         dataset_path_comps = [c for c in dataset_path.split('/') if c]
         logger.info(f'Lookup dataset path: {dataset_path} in {dataset_path_comps}')
@@ -335,6 +405,7 @@ def prepare_parent_group_attrs(container_path,
         logger.info('No dataset was provided - will use "." for dataset subpath')
         dataset_scale_subpath = '.'
 
+    # pull scales and translations out of coordinateTransformations
     scales, translations = None, None
     if coordinateTransformations is not None:
         for t in coordinateTransformations:
@@ -343,18 +414,21 @@ def prepare_parent_group_attrs(container_path,
             elif t['type'] == 'translation':
                 translations = t['translation']
 
+    # construct minimal attributes
     multiscale_attrs = {
         'name': os.path.basename(container_path),
         'axes': axes if axes is not None else [],
         'version': '0.4',
     }
 
+    # add a dataset
     if scales is not None:
         dataset = Dataset.build(path=dataset_scale_subpath, scale=scales, translation=translations)
         multiscale_attrs.update({
             'datasets': (dataset.dict(exclude_none=True),),
         })
 
+    # format and return
     return {
         'multiscales': [ multiscale_attrs ],
     }

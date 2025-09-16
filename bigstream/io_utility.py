@@ -595,9 +595,13 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
 
 
 def _is_ome_zarr(data_container_attrs: dict | None) -> bool:
+    """Determine if attributes are consistent with ome-zarr spec"""
+
+    # no attributes? obviously not ome-zarr.
     if data_container_attrs is None:
         return False
 
+    # two conditions indicate ome-zarr, bioformats2raw.layout == 3 or multiscales present
     # test if multiscales attribute exists - if it does assume OME-ZARR
     bioformats_layout = data_container_attrs.get("bioformats2raw.layout", None)
     multiscales = data_container_attrs.get('multiscales', [])

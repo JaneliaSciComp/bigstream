@@ -12,6 +12,7 @@ from ClusterWrap.decorator import cluster
 import bigstream.utility as ut
 from bigstream.align import realize_mask
 from bigstream.align import alignment_pipeline
+from bigstream.configure_bigstream import configure_logging
 from distributed import Lock, MultiLock
 
 
@@ -36,7 +37,6 @@ def distributed_piecewise_alignment_pipeline(
     cluster_kwargs={},
     temporary_directory=None,
     write_path=None,
-    write_group_interval=30,
     **kwargs,
 ):
     """
@@ -144,10 +144,6 @@ def distributed_piecewise_alignment_pipeline(
         process memory, set this parameter to a location where the transform
         can be written to disk as a zarr file.
 
-    write_group_interval : float (default: 30.)
-        The time each of the 27 mutually exclusive write block groups have
-        each round to write finished data.
-
     kwargs : any additional arguments
         Arguments that will apply to all alignment steps. These are overruled by
         arguments for specific steps e.g. `random_kwargs` etc.
@@ -161,299 +157,338 @@ def distributed_piecewise_alignment_pipeline(
     """
 
     ################  Input, output, and parameter formatting ############
-    # temporary file paths and create zarr images
-    temporary_directory = tempfile.TemporaryDirectory(
-        prefix='.', dir=temporary_directory or os.getcwd(),
-    )
-    zarr_blocks = (128,) * fix.ndim
-    fix_zarr_path = temporary_directory.name + '/fix.zarr'
-    mov_zarr_path = temporary_directory.name + '/mov.zarr'
-    fix_mask_zarr_path = temporary_directory.name + '/fix_mask.zarr'
-    mov_mask_zarr_path = temporary_directory.name + '/mov_mask.zarr'
-    fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
-    mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
-    fix_mask_zarr = fix_mask
-    if isinstance(fix_mask, np.ndarray):
-        fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
-    mov_mask_zarr = mov_mask
-    if isinstance(mov_mask, np.ndarray):
-        mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
+    # temp folder context
+    with tempfile.TemporaryDirectory(
+        prefix='.', suffix='_distributed_bigstream_tempdir',
+        dir=temporary_directory or os.getcwd(),
+    ) as temporary_directory:
 
-    # zarr files for initial deformations
-    new_list = []
-    zarr_blocks = (128,) * fix.ndim + (fix.ndim,)
-    for iii, transform in enumerate(static_transform_list):
-        if len(transform.shape) > fix.ndim:  # fields are always fix.ndim + 1
-            path = temporary_directory.name + f'/deform{iii}.zarr'
-            transform = ut.numpy_to_zarr(transform, zarr_blocks, path)
-        new_list.append(transform)
-    static_transform_list = new_list
-
-    # zarr file for output (if write_path is given)
-    if write_path:
-        output_transform = ut.create_zarr(
-            write_path,
-            fix.shape + (fix.ndim,),
-            tuple(blocksize) + (fix.ndim,),
-            np.float32,
-        )
-        # chunks will need locks for parallel writing
-        locks = [Lock(f'{x}') for x in np.ndindex(*output_transform.cdata_shape)]
-
-    # merge keyword arguments with step specific keyword arguments
-    steps = [(a, {**kwargs, **b}) for a, b in steps]
-    ######################################################################
-
-    #################### Determine block structure #######################
-    # determine fixed image slices for blocking
-    blocksize = np.array(blocksize)
-    nblocks = np.ceil(fix.shape / blocksize).astype(int)
-    overlaps = np.round(blocksize * overlap).astype(int)
-    logger.info(f'Partition {fix.shape} into {nblocks} using' +
-                f'{blocksize} and {overlaps}')
-    indices, slices = [], []
-    for (i, j, k) in np.ndindex(*nblocks):
-        start = blocksize * (i, j, k) - overlaps
-        stop = start + blocksize + 2 * overlaps
-        start = np.maximum(0, start)
-        stop = np.minimum(fix.shape, stop)
-        coords = tuple(slice(x, y) for x, y in zip(start, stop))
-
-        foreground = True
+        # create temporary zarr files
+        zarr_blocks = (128,) * fix.ndim
+        fix_zarr_path = temporary_directory + '/fix.zarr'
+        mov_zarr_path = temporary_directory + '/mov.zarr'
+        fix_mask_zarr_path = temporary_directory + '/fix_mask.zarr'
+        mov_mask_zarr_path = temporary_directory + '/mov_mask.zarr'
+        fix_zarr = ut.numpy_to_zarr(fix, zarr_blocks, fix_zarr_path)
+        mov_zarr = ut.numpy_to_zarr(mov, zarr_blocks, mov_zarr_path)
+        fix_mask_zarr = fix_mask
         if isinstance(fix_mask, np.ndarray):
-            start = blocksize * (i, j, k)
-            stop = start + blocksize
-            ratio = np.array(fix_mask.shape) / fix.shape
-            start = np.round( ratio * start ).astype(int)
-            stop = np.round( ratio * stop ).astype(int)
-            mask_crop = fix_mask[tuple(slice(a, b) for a, b in zip(start, stop))]
-            if not np.sum(mask_crop) / np.prod(mask_crop.shape) >= foreground_percentage:
-                foreground = False
-
-        if foreground:
-            indices.append((i, j, k,))
-            slices.append(coords)
-
-    # determine foreground neighbor structure
-    neighbor_flags = []
-    neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=fix.ndim)))
-    for index in indices:
-        flags = {tuple(o): tuple(index + o) in indices for o in neighbor_offsets}
-        neighbor_flags.append(flags)
-
-    # bundle the three parallel lists together
-    block_data = list(zip(indices, slices, neighbor_flags))
-    ######################################################################
-
-    #################### The function to run on each block ###############
-    def align_single_block(indices, static_transform_list):
-        start_time = time.time()
-        # parse input, log index and slices
-        block_index, fix_slices, neighbor_flags = indices
-        logger.info(f'Block index: {block_index}\n Slices: {fix_slices}')
-
-        ########## Map fix block corners onto mov coordinates ############
-        ############## Reads static transforms in the meantime ###########
-        # get fixed image block corners in physical units
-        fix_block_coords = []
-        for corner in list(product([0, 1], repeat=len(fix_slices))):
-            a = [x.stop-1 if y else x.start for x, y in zip(fix_slices, corner)]
-            fix_block_coords.append(a)
-        fix_block_coords = np.array(fix_block_coords)
-        fix_block_coords_phys = fix_block_coords * fix_spacing
-        logger.debug(f'Block index: {block_index} - corner physical coords: {fix_block_coords_phys}')
-
-        # read static transforms: recenter affines, apply to crop coordinates
+            fix_mask_zarr = ut.numpy_to_zarr(fix_mask, zarr_blocks, fix_mask_zarr_path)
+        mov_mask_zarr = mov_mask
+        if isinstance(mov_mask, np.ndarray):
+            mov_mask_zarr = ut.numpy_to_zarr(mov_mask, zarr_blocks, mov_mask_zarr_path)
+    
+        # zarr files for initial deformations
         new_list = []
-        mov_block_coords_phys = np.copy(fix_block_coords_phys)
-        for transform in static_transform_list[::-1]:
-            if len(transform.shape) == 2:
-                mov_block_coords_phys = bst.apply_transform_to_coordinates(
-                    mov_block_coords_phys, [transform,],
-                )
-                transform = bst.change_affine_matrix_origin(transform, fix_block_coords_phys[0])
-            else:
-                spacing = ut.relative_spacing(transform.shape, fix_zarr.shape, fix_spacing)
-                ratio = np.array(transform.shape[:-1]) / fix_zarr.shape
+        zarr_blocks = (128,) * fix.ndim + (fix.ndim,)
+        for iii, transform in enumerate(static_transform_list):
+            if len(transform.shape) > fix.ndim:  # fields are always fix.ndim + 1
+                path = temporary_directory + f'/deform{iii}.zarr'
+                transform = ut.numpy_to_zarr(transform, zarr_blocks, path)
+            new_list.append(transform)
+        static_transform_list = new_list
+    
+        # temporary folder for registration blocks
+        if write_path:
+            block_folder_path = temporary_directory + '/unmerged_blocks'
+            os.makedirs(block_folder_path)
+    
+        # zarr file for output (if write_path is given)
+        if write_path:
+            output_transform = ut.create_zarr(
+                write_path,
+                fix.shape + (fix.ndim,),
+                tuple(blocksize) + (fix.ndim,),
+                np.float32,
+            )
+            # chunks will need locks for parallel writing
+            locks = [Lock(f'{x}') for x in np.ndindex(*output_transform.cdata_shape)]
+    
+        # merge keyword arguments with step specific keyword arguments
+        steps = [(a, {**kwargs, **b}) for a, b in steps]
+        ######################################################################
+    
+        #################### Determine block structure #######################
+        # determine fixed image slices for blocking
+        blocksize = np.array(blocksize)
+        nblocks = np.ceil(fix.shape / blocksize).astype(int)
+        overlaps = np.round(blocksize * overlap).astype(int)
+        logger.info(f'Partition {fix.shape} into {nblocks} using' +
+                    f'{blocksize} and {overlaps}')
+        indices, slices = [], []
+        for (i, j, k) in np.ndindex(*nblocks):
+            start = blocksize * (i, j, k) - overlaps
+            stop = start + blocksize + 2 * overlaps
+            start = np.maximum(0, start)
+            stop = np.minimum(fix.shape, stop)
+            coords = tuple(slice(x, y) for x, y in zip(start, stop))
+    
+            foreground = True
+            if isinstance(fix_mask, np.ndarray):
+                start = blocksize * (i, j, k)
+                stop = start + blocksize
+                ratio = np.array(fix_mask.shape) / fix.shape
+                start = np.round( ratio * start ).astype(int)
+                stop = np.round( ratio * stop ).astype(int)
+                mask_crop = fix_mask[tuple(slice(a, b) for a, b in zip(start, stop))]
+                if not np.sum(mask_crop) / np.prod(mask_crop.shape) >= foreground_percentage:
+                    foreground = False
+    
+            if foreground:
+                indices.append((i, j, k,))
+                slices.append(coords)
+    
+        # determine foreground neighbor structure
+        neighbor_flags = []
+        neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=fix.ndim)))
+        for index in indices:
+            flags = {tuple(o): tuple(index + o) in indices for o in neighbor_offsets}
+            neighbor_flags.append(flags)
+    
+        # bundle the three parallel lists together
+        block_data = list(zip(indices, slices, neighbor_flags))
+        ######################################################################
+    
+        #################### The function to run on each block ###############
+        def align_single_block(single_block_data, static_transform_list):
+    
+            # logging
+            configure_logging(None, True)
+    
+            start_time = time.time()
+            # parse input, log index and slices
+            block_index, fix_slices, neighbor_flags = single_block_data
+            logger.info(f'Block index: {block_index}\n Slices: {fix_slices}')
+    
+            ########## Map fix block corners onto mov coordinates ############
+            ############## Reads static transforms in the meantime ###########
+            # get fixed image block corners in physical units
+            fix_block_coords = []
+            for corner in list(product([0, 1], repeat=len(fix_slices))):
+                a = [x.stop-1 if y else x.start for x, y in zip(fix_slices, corner)]
+                fix_block_coords.append(a)
+            fix_block_coords = np.array(fix_block_coords)
+            fix_block_coords_phys = fix_block_coords * fix_spacing
+            logger.debug(f'Block index: {block_index} - corner physical coords: {fix_block_coords_phys}')
+    
+            # read static transforms: recenter affines, apply to crop coordinates
+            new_list = []
+            mov_block_coords_phys = np.copy(fix_block_coords_phys)
+            for transform in static_transform_list[::-1]:
+                if len(transform.shape) == 2:
+                    mov_block_coords_phys = bst.apply_transform_to_coordinates(
+                        mov_block_coords_phys, [transform,],
+                    )
+                    transform = bst.change_affine_matrix_origin(transform, fix_block_coords_phys[0])
+                else:
+                    spacing = ut.relative_spacing(transform.shape, fix_zarr.shape, fix_spacing)
+                    ratio = np.array(transform.shape[:-1]) / fix_zarr.shape
+                    start = np.round( ratio * fix_block_coords[0] ).astype(int)
+                    stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)
+                    transform_slices = tuple(slice(a, b) for a, b in zip(start, stop))
+                    transform = transform[transform_slices]
+                    origin = spacing * start
+                    mov_block_coords_phys = bst.apply_transform_to_coordinates(
+                        mov_block_coords_phys, [transform,], spacing, origin
+                    )
+                new_list.append(transform)
+            static_transform_list = new_list[::-1]
+    
+            # Now we can determine the moving image crop
+            mov_block_coords = np.round(mov_block_coords_phys / mov_spacing).astype(int)
+            mov_start = np.min(mov_block_coords, axis=0)
+            mov_stop = np.max(mov_block_coords, axis=0)
+            mov_start = np.maximum(0, mov_start)
+            mov_stop = np.minimum(np.array(mov_zarr.shape)-1, mov_stop)
+            mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
+    
+            # get moving crop origin relative to fixed crop
+            mov_origin = mov_start * mov_spacing - fix_block_coords_phys[0]
+    
+            logger.debug(f'Block {block_index} :' +
+                         f'fix voxel coords {fix_block_coords},' +
+                         f'fix phys coords {fix_block_coords_phys} -> ' +
+                         f'mov coords {mov_slices},' +
+                         f'mov phys coords {mov_block_coords_phys}')
+            ##################################################################
+    
+            ################ Read fix and moving data ########################
+            fix = fix_zarr[fix_slices]
+            mov = mov_zarr[mov_slices]
+            fix_mask, mov_mask = fix_mask_zarr, mov_mask_zarr
+            if isinstance(fix_mask_zarr, zarr.core.Array):
+                ratio = np.array(fix_mask_zarr.shape) / fix_zarr.shape
                 start = np.round( ratio * fix_block_coords[0] ).astype(int)
                 stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)
-                transform_slices = tuple(slice(a, b) for a, b in zip(start, stop))
-                transform = transform[transform_slices]
-                origin = spacing * start
-                mov_block_coords_phys = bst.apply_transform_to_coordinates(
-                    mov_block_coords_phys, [transform,], spacing, origin
-                )
-            new_list.append(transform)
-        static_transform_list = new_list[::-1]
-
-        # Now we can determine the moving image crop
-        mov_block_coords = np.round(mov_block_coords_phys / mov_spacing).astype(int)
-        mov_start = np.min(mov_block_coords, axis=0)
-        mov_stop = np.max(mov_block_coords, axis=0)
-        mov_start = np.maximum(0, mov_start)
-        mov_stop = np.minimum(np.array(mov_zarr.shape)-1, mov_stop)
-        mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
-
-        # get moving crop origin relative to fixed crop
-        mov_origin = mov_start * mov_spacing - fix_block_coords_phys[0]
-
-        logger.debug(f'Block {block_index} :' +
-                     f'fix voxel coords {fix_block_coords},' +
-                     f'fix phys coords {fix_block_coords_phys} -> ' +
-                     f'mov coords {mov_slices},' +
-                     f'mov phys coords {mov_block_coords_phys}')
-        ##################################################################
-
-        ################ Read fix and moving data ########################
-        fix = fix_zarr[fix_slices]
-        mov = mov_zarr[mov_slices]
-        fix_mask, mov_mask = fix_mask_zarr, mov_mask_zarr
-        if isinstance(fix_mask_zarr, zarr.core.Array):
-            ratio = np.array(fix_mask_zarr.shape) / fix_zarr.shape
-            start = np.round( ratio * fix_block_coords[0] ).astype(int)
-            stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)
-            fix_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
-            fix_mask = fix_mask_zarr[fix_mask_slices]
-        if isinstance(mov_mask_zarr, zarr.core.Array):
-            ratio = np.array(mov_mask_zarr.shape) / mov_zarr.shape
-            start = np.round( ratio * mov_start ).astype(int)
-            stop = np.round( ratio * mov_stop ).astype(int)
-            mov_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
-            mov_mask = mov_mask_zarr[mov_mask_slices]
-        ##################################################################
-
-        ################ Parse steps #####################################
-        # we don't want exceptions in the distributed context
-        for step in steps:
-            if step[0] == 'ransac':
-                step[1]['safeguard_exceptions'] = False
-        ##################################################################
-
-        ############################ Align ###############################
-        # run alignment pipeline
-        logger.info(f'Compute block transform' +
-                    f'{block_index}: {fix_slices}, {mov_origin}' +
-                    f'fix shape: {fix.shape}, mov_shape: {mov.shape}' +
-                    f'{static_transform_list}')
-        transform = alignment_pipeline(
-            fix, mov, fix_spacing, mov_spacing, steps,
-            fix_mask=fix_mask, mov_mask=mov_mask,
-            mov_origin=mov_origin,
-            static_transform_list=static_transform_list,
-            context=f'{block_index}',
-        )
-        # ensure transform is a vector field
-        if len(transform.shape) == 2:
-            transform = bst.matrix_to_displacement_field(
-                transform, fix.shape, spacing=fix_spacing,
+                fix_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
+                fix_mask = fix_mask_zarr[fix_mask_slices]
+            if isinstance(mov_mask_zarr, zarr.core.Array):
+                ratio = np.array(mov_mask_zarr.shape) / mov_zarr.shape
+                start = np.round( ratio * mov_start ).astype(int)
+                stop = np.round( ratio * mov_stop ).astype(int)
+                mov_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
+                mov_mask = mov_mask_zarr[mov_mask_slices]
+            ##################################################################
+    
+            ################ Parse steps #####################################
+            # we don't want exceptions in the distributed context
+            for step in steps:
+                if step[0] == 'ransac':
+                    step[1]['safeguard_exceptions'] = False
+            ##################################################################
+    
+            ############################ Align ###############################
+            # run alignment pipeline
+            logger.info(f'Compute block transform' +
+                        f'{block_index}: {fix_slices}, {mov_origin}' +
+                        f'fix shape: {fix.shape}, mov_shape: {mov.shape}' +
+                        f'{static_transform_list}')
+            transform = alignment_pipeline(
+                fix, mov, fix_spacing, mov_spacing, steps,
+                fix_mask=fix_mask, mov_mask=mov_mask,
+                mov_origin=mov_origin,
+                static_transform_list=static_transform_list,
+                context=f'{block_index}',
             )
-            logger.info(f'Block {block_index} - transform -> vector field' +
-                        f'{transform.shape}')
-        ##################################################################
-
-
-        ################ Apply weights for linear blending ###############
-        # create the standard weight array
-        core = tuple(x - 2*y + 2 for x, y in zip(blocksize, overlaps))
-        pad = tuple((2*y - 1, 2*y - 1) for y in overlaps)
-        weights = np.pad(np.ones(core, dtype=np.float64), pad, mode='linear_ramp')
-
-        # rebalance if any neighbors are missing
-        if rebalance_for_missing_neighbors and not np.all(list(neighbor_flags.values())):
-            logger.debug(f'Rebalance transform weights {block_index}')
-            # define overlap slices
-            slices = {}
-            slices[-1] = tuple(slice(0, 2*y) for y in overlaps)
-            slices[0] = (slice(None),) * len(overlaps)
-            slices[1] = tuple(slice(-2*y, None) for y in overlaps)
-
-            missing_weights = np.zeros_like(weights)
-            for neighbor, flag in neighbor_flags.items():
-                if not flag:
-                    neighbor_region = tuple(slices[-1*b][a] for a, b in enumerate(neighbor))
-                    region = tuple(slices[b][a] for a, b in enumerate(neighbor))
-                    missing_weights[region] += weights[neighbor_region]
-
-            # rebalance the weights
-            with np.errstate(divide='ignore', invalid='ignore'):
-                weights = weights / (1 - missing_weights)
-            weights[np.isnan(weights)] = 0.  # edges of blocks are 0/0
-            weights = weights.astype(np.float32)
-
-        # crop weights if block is on edge of domain
-        for i in range(fix.ndim):
-            region = [slice(None),]*fix.ndim
-            if block_index[i] == 0:
-                region[i] = slice(overlaps[i], None)
-                weights = weights[tuple(region)]
-            if block_index[i] == nblocks[i] - 1:
-                region[i] = slice(None, -overlaps[i])
-                weights = weights[tuple(region)]
-
-        # crop any incomplete blocks (on the ends)
-        if np.any( weights.shape != transform.shape[:-1] ):
-            weights = weights[tuple(slice(0, s) for s in transform.shape[:-1])]
-
-        # apply weights
-        logger.debug(f'Block {block_index} :' +
-                     f'Apply weights {weights.shape},' +
-                     f'to transform {transform.shape}')
-        transform = transform * weights[..., None]
-        end_time = time.time()
-
-        logger.info(f'Finished computing {transform.shape}' +
-                    f'block  transform in {end_time-start_time}s' +
-                    f'{block_index}')
-        ##################################################################
-
-
-        ################ Write or return result ##########################
-        # if there's no write path, just return the transform block
+            # ensure transform is a vector field
+            if len(transform.shape) == 2:
+                transform = bst.matrix_to_displacement_field(
+                    transform, fix.shape, spacing=fix_spacing,
+                )
+                logger.info(f'Block {block_index} - transform -> vector field' +
+                            f'{transform.shape}')
+            ##################################################################
+    
+    
+            ################ Apply weights for linear blending ###############
+            # create the standard weight array
+            core = tuple(x - 2*y + 2 for x, y in zip(blocksize, overlaps))
+            pad = tuple((2*y - 1, 2*y - 1) for y in overlaps)
+            weights = np.pad(np.ones(core, dtype=np.float64), pad, mode='linear_ramp')
+    
+            # rebalance if any neighbors are missing
+            if rebalance_for_missing_neighbors and not np.all(list(neighbor_flags.values())):
+                logger.debug(f'Rebalance transform weights {block_index}')
+                # define overlap slices
+                slices = {}
+                slices[-1] = tuple(slice(0, 2*y) for y in overlaps)
+                slices[0] = (slice(None),) * len(overlaps)
+                slices[1] = tuple(slice(-2*y, None) for y in overlaps)
+    
+                missing_weights = np.zeros_like(weights)
+                for neighbor, flag in neighbor_flags.items():
+                    if not flag:
+                        neighbor_region = tuple(slices[-1*b][a] for a, b in enumerate(neighbor))
+                        region = tuple(slices[b][a] for a, b in enumerate(neighbor))
+                        missing_weights[region] += weights[neighbor_region]
+    
+                # rebalance the weights
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    weights = weights / (1 - missing_weights)
+                weights[np.isnan(weights)] = 0.  # edges of blocks are 0/0
+                weights = weights.astype(np.float32)
+    
+            # crop weights if block is on edge of domain
+            for i in range(fix.ndim):
+                region = [slice(None),]*fix.ndim
+                if block_index[i] == 0:
+                    region[i] = slice(overlaps[i], None)
+                    weights = weights[tuple(region)]
+                if block_index[i] == nblocks[i] - 1:
+                    region[i] = slice(None, -overlaps[i])
+                    weights = weights[tuple(region)]
+    
+            # crop any incomplete blocks (on the ends)
+            if np.any( weights.shape != transform.shape[:-1] ):
+                weights = weights[tuple(slice(0, s) for s in transform.shape[:-1])]
+    
+            # apply weights
+            logger.debug(f'Block {block_index} :' +
+                         f'Apply weights {weights.shape},' +
+                         f'to transform {transform.shape}')
+            transform = transform * weights[..., None]
+            end_time = time.time()
+    
+            logger.info(f'Finished computing {transform.shape}' +
+                        f'block  transform in {end_time-start_time}s' +
+                        f'{block_index}')
+            ##################################################################
+    
+    
+            ################ Write or return result ##########################
+            # if there's no write path, just return the transform block
+            if not write_path:
+                return transform
+    
+            # otherwise, coordinate with neighboring blocks
+            else:
+    #            # block until locks for all write blocks are acquired
+    #            lock_strs = []
+    #            for delta in product((-1, 0, 1,), repeat=3):
+    #                lock_index = tuple(x + y for x, y in zip(block_index, delta))
+    #                if lock_index in indices:
+    #                    lock_strs.append(str(lock_index))
+    #            lock = MultiLock(lock_strs)
+    #            lock.acquire()
+    #
+    #            # write result to disk
+    #            logger.info(f'Writing block {block_index} at {fix_slices}')
+    #            output_block = output_transform[fix_slices] + transform
+    #            output_transform[fix_slices] = output_block
+    #            logger.info(f'Finished writing block {block_index} at {fix_slices}')
+    #
+    #            # release the lock
+    #            lock.release()
+    #            return True
+                block_string = 'x'.join(str(x) for x in block_index)
+                block_filename = '/unmerged_transform_block_' + block_string + '.npz'
+                np.savez_compressed(block_folder_path + block_filename, transform=transform)
+            ##################################################################
+        ######################################################################
+    
+    
+        #################### Submit all blocks, parse output #################
+        # submit all alignments to cluster
+        futures = cluster.client.map(
+            align_single_block, block_data,
+            static_transform_list=static_transform_list,
+        )
+    
+        # handle output for in memory and out of memory cases
         if not write_path:
+            future_keys = [f.key for f in futures]
+            transform = np.zeros(fix.shape + (fix.ndim,), dtype=np.float32)
+            for batch in as_completed(futures, with_results=True).batches():
+                for future, result in batch:
+                    iii = future_keys.index(future.key)
+                    transform[block_data[iii][1]] += result
             return transform
-
-        # otherwise, coordinate with neighboring blocks
         else:
-            # block until locks for all write blocks are acquired
-            lock_strs = []
-            for delta in product((-1, 0, 1,), repeat=3):
-                lock_strs.append(str(tuple(a + b for a, b in zip(block_index, delta))))
-            lock = MultiLock(lock_strs)
-            lock.acquire()
-
-            # write result to disk
-            logger.info(f'Writing block {block_index} at {fix_slices}')
-            output_block = output_transform[fix_slices] + transform
-            output_transform[fix_slices] = output_block
-            logger.info(f'Finished writing block {block_index} at {fix_slices}')
-
-            # release the lock
-            lock.release()
-            return True
-        ##################################################################
-    ######################################################################
-
-
-    #################### Submit all blocks, parse output #################
-    # submit all alignments to cluster
-    futures = cluster.client.map(
-        align_single_block, block_data,
-        static_transform_list=static_transform_list,
-    )
-
-    # handle output for in memory and out of memory cases
-    if not write_path:
-        future_keys = [f.key for f in futures]
-        transform = np.zeros(fix.shape + (fix.ndim,), dtype=np.float32)
-        for batch in as_completed(futures, with_results=True).batches():
-            for future, result in batch:
-                iii = future_keys.index(future.key)
-                transform[block_data[iii][1]] += result
-        return transform
-    else:
-        all_written = np.all( cluster.client.gather(futures) )
-        return output_transform
-    ######################################################################
+    
+            # execute alignments
+            all_computed = np.all( cluster.client.gather(futures) )
+            del futures
+    
+            # define write function
+            def write_block(single_block_data):
+                block_index = single_block_data[0]
+                crop = single_block_data[1]
+                block_string = 'x'.join(str(x) for x in block_index)
+                block_filename = '/unmerged_transform_block_' + block_string + '.npz'
+                transform = np.load(block_folder_path + block_filename)['transform']
+                write_block = output_transform[crop] + transform
+                output_transform[crop] = write_block
+                return True
+    
+            # iterate over write sets
+            for write_group_id in product((0, 1, 2), repeat=3):
+                write_group_data = [x for x in block_data if np.all(np.array(x[0]) % 3 == write_group_id)]
+                futures = cluster.client.map(write_block, write_group_data)
+                all_written = np.all( cluster.client.gather(futures) )
+                del futures
+    
+            return output_transform
+        ######################################################################
 
 
 # TODO: THIS FUNCTION CURRENTLY DOES NOT WORK FOR LARGER THAN MEMORY TRANSFORMS

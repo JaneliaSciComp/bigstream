@@ -6,6 +6,7 @@ from bigstream.configure_irm import interpolator_switch
 import os
 import sys
 from scipy.ndimage import map_coordinates, zoom, gaussian_filter
+from scipy.spatial.transform import Rotation
 
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,7 @@ def apply_transform_to_coordinates(
     transform_list,
     transform_spacing=None,
     transform_origin=None,
+    **kwargs,
 ):
     """
     Move a set of coordinates through a list of transforms
@@ -192,6 +194,8 @@ def apply_transform_to_coordinates(
         the same logic as transform_spacing. Origins given for affine transforms
         are ignored.
 
+    **kwargs : passed to scipy.ndimage.map_coordinates
+
     Returns
     -------
     transform_coordinates : Nxd array
@@ -218,7 +222,7 @@ def apply_transform_to_coordinates(
             assert (transform_spacing is not None), error_message
 
             # handle multiple spacings and origins
-            spacing = transform_spacing
+            spacing = transform_spacing[::-1]  # iterating through transforms in reverse
             origin = transform_origin
             if isinstance(spacing, tuple): spacing = spacing[iii]
             if isinstance(origin, tuple): origin = origin[iii]
@@ -229,7 +233,8 @@ def apply_transform_to_coordinates(
 
             # interpolate position field at coordinates, reformat, return
             ndims = transform.shape[-1]
-            interp = lambda x: map_coordinates(x, coordinates, mode='nearest')
+            if 'mode' not in kwargs.keys(): kwargs['mode'] = 'nearest'
+            interp = lambda x: map_coordinates(x, coordinates, **kwargs)
             dX = []
             for i in range(ndims):
                 if transform[..., i]:

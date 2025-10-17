@@ -1,26 +1,28 @@
 import argparse
 import numpy as np
+import os
 import bigstream.io_utility as io_utility
 import bigstream.utility as ut
 
 from dask.distributed import (Client, LocalCluster)
-from os.path import exists
 
-from bigstream.cli import (CliArgsHelper, RegistrationInputs,
-                           define_registration_input_args,
-                           extract_align_pipeline,
-                           extract_registration_input_args,
-                           inttuple, floattuple, get_input_images)
 from bigstream.configure_bigstream import (configure_logging)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
-from bigstream.image_data import ImageData
+from bigstream.image_data import (ImageData, get_spatial_values,
+                                  calc_full_voxel_resolution_attr,
+                                  calc_downsampling_attr)
+
+from .cli import (CliArgsHelper, RegistrationInputs,
+                  define_registration_input_args, extract_align_pipeline,
+                  extract_registration_input_args, get_input_images,
+                  inttuple, floattuple)
 
 
-logger = None # initialized in main as a result of calling configure_logging
+logger = None
 
 
 def _define_args(local_descriptor):
@@ -46,6 +48,10 @@ def _define_args(local_descriptor):
                              dest='local_processing_overlap_factor',
                              type=float,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
+    args_parser.add_argument('--local-transform-overlap-factor',
+                             dest='local_transform_overlap_factor',
+                             type=float,
+                             help='partition overlap when splitting the work for applying a transformation - a fractional number between 0 - 1')
 
     args_parser.add_argument('--inv-step',
                              dest='inv_step',
@@ -90,6 +96,10 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--dask-config', dest='dask_config',
                              type=str, default=None,
                              help='YAML file containing dask configuration')
+    args_parser.add_argument('--local-dask-workers', '--local_dask_workers',
+                             dest='local_dask_workers',
+                             type=int,
+                             help='Number of workers when using a local cluster')
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
                              type=int, default=0,
                              help='Number of cpus allocated to a dask worker')
@@ -115,6 +125,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          align_config, global_affine,
                          processing_size=None,
                          processing_overlap=None,
+                         transform_overlap=0.1,
                          default_blocksize=128,
                          default_overlap=0.5,
                          inv_step=1.0,
@@ -126,6 +137,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          inv_use_root=True,
                          dask_scheduler_address=None,
                          dask_config_file=None,
+                         dask_workers=None,
                          worker_cpus=0,
                          logging_config=None,
                          compressor=None,
@@ -162,9 +174,16 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                                                            default_overlap)
     if (local_processing_overlap_factor <= 0 and
         local_processing_overlap_factor >= 1):
-        raise Exception('Invalid block overlap value'
-                        f'{local_processing_overlap_factor}',
-                        'must be greater than 0 and less than 1')
+        raise ValueError((
+            'Invalid block overlap value '
+            f'{local_processing_overlap_factor} '
+            'must be greater than 0 and less than 1 '
+        ))
+
+    if transform_overlap:
+        local_transform_overlap_factor = transform_overlap
+    else:
+        local_transform_overlap_factor = local_config.get('transform_overlap', 0.125)
 
     if reg_args.transform_subpath:
         transform_subpath = reg_args.transform_subpath
@@ -202,12 +221,15 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     # start a dask client
     load_dask_config(dask_config_file)
 
-    worker_config = ConfigureWorkerPlugin(logging_config, verbose,
-                                          worker_cpus=worker_cpus)
     if dask_scheduler_address:
         cluster_client = Client(address=dask_scheduler_address)
     else:
-        cluster_client = Client(LocalCluster())
+        cluster_client = Client(LocalCluster(n_workers=dask_workers,
+                                             threads_per_worker=worker_cpus))
+    # create worker plugin
+    worker_config = ConfigureWorkerPlugin(logging_config,
+                                          verbose,
+                                          worker_cpus=worker_cpus)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
     try:
         _align_local_data(
@@ -227,7 +249,10 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             inv_transform_blocksize,
             reg_args.align_path(),
             align_subpath,
+            reg_args.align_timeindex,
+            reg_args.align_channel,
             align_blocksize,
+            local_transform_overlap_factor,
             inv_step,
             inv_iterations,
             inv_shrink_spacings,
@@ -258,7 +283,10 @@ def _align_local_data(fix_image: ImageData,
                       inv_transform_blocksize,
                       align_path,
                       align_subpath,
+                      align_timeindex,
+                      align_channel,
                       align_blocksize,
+                      transform_overlap_factor,
                       inv_step,
                       inv_iterations,
                       inv_shrink_spacings,
@@ -268,26 +296,55 @@ def _align_local_data(fix_image: ImageData,
                       inv_use_root,
                       cluster_client,
                       compressor):
-
-    fix_shape = fix_image.shape
-    fix_ndim = fix_image.ndim
-
     logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
                 f'using {ut.get_number_of_cores()} cpus')
 
-    transform_downsampling = (list(fix_image.downsampling) + [1])[::-1]
-    transform_spacing = (list(fix_image.get_downsampled_voxel_resolution(False)) + [1])[::-1]
+    transform_downsampling = tuple(get_spatial_values(fix_image.voxel_downsampling)) + (1,)
+    logger.info(f'Transform downsampling: {transform_downsampling}')
+    transform_voxel_spacing = tuple(get_spatial_values(fix_image.voxel_spacing)) + (1,)
+    logger.info(f'Transform voxel spacing: {transform_voxel_spacing}')
+    transform_shape = tuple(fix_image.spatial_dims) + (3,)
+    logger.info(f'Transform shape: {fix_image.spatial_dims} => {transform_shape}')
+
     if transform_path:
+        # transform shape
+        transform_axes = get_spatial_values(fix_image.get_attr('axes'))
+        if transform_axes is not None:
+            transform_axes.append({
+                'name': 'c',
+                'type': 'channel',
+            })
+        coordinate_transformations = fix_image.get_attr('coordinateTransformations')
+        if coordinate_transformations is not None:
+            new_transforms = []
+            for ct in coordinate_transformations:
+                cttype = ct['type']
+                tx = ct[cttype]
+                chtx = tx[1]
+                new_transforms.append({
+                    'type': cttype,
+                    ct['type']: get_spatial_values(tx) + [chtx],
+                })
+            coordinate_transformations = new_transforms
+        transform_attrs = io_utility.prepare_parent_group_attrs(
+            transform_path,
+            transform_subpath,
+            axes=transform_axes,
+            coordinateTransformations=coordinate_transformations,
+        )
+        transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
         transform = io_utility.create_dataset(
             transform_path,
             transform_subpath,
-            fix_shape + (fix_ndim,),
-            tuple(transform_blocksize) + (fix_ndim,),
+            transform_shape,
+            transform_output_chunksize,
             np.float32,
             overwrite=True,
             compressor=compressor,
-            pixelResolution=transform_spacing,
-            downsamplingFactors=transform_downsampling, 
+            parent_attrs=transform_attrs,
+            pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
+                                                            transform_downsampling),
+            downsamplingFactors=calc_downsampling_attr(transform_downsampling),
         )
     else:
         transform = None
@@ -297,7 +354,6 @@ def _align_local_data(fix_image: ImageData,
     if fix_image.has_data() and mov_image.has_data():
         deform_ok = distributed_alignment_pipeline(
             fix_image, mov_image,
-            fix_image.voxel_spacing, mov_image.voxel_spacing,
             steps,
             processing_size, # parallelize on processing size
             cluster_client,
@@ -327,29 +383,40 @@ def _align_local_data(fix_image: ImageData,
                 f'{inv_iterations} vs {inv_shrink_spacings} vs {inv_smooth_sigmas} '
             ))
 
+        inv_transform_attrs = io_utility.prepare_parent_group_attrs(
+            inv_transform_path,
+            inv_transform_subpath,
+            axes=transform_axes,
+            coordinateTransformations=coordinate_transformations,
+        )
+        inv_transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
         inv_transform = io_utility.create_dataset(
             inv_transform_path,
             inv_transform_subpath,
-            fix_shape + (fix_ndim,),
-            tuple(inv_transform_blocksize) + (fix_ndim,),
+            transform_shape,
+            inv_transform_output_chunksize,
             np.float32,
             overwrite=True,
             compressor=compressor,
-            pixelResolution=transform_spacing,
-            downsamplingFactors=transform_downsampling,            
+            parent_attrs=inv_transform_attrs,
+            pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
+                                                            transform_downsampling),
+            downsamplingFactors=calc_downsampling_attr(transform_downsampling),
         )
-        logger.info('Calculate inverse transformation' +
-                    f'{inv_transform_path}:{inv_transform_subpath}' +
-                    f'from {transform_path}:{transform_subpath}' +
-                    f'for local alignment of {mov_image}' +
-                    f'to reference {fix_image}')
+        logger.info((
+            'Calculate inverse transformation '
+            f'{inv_transform_path}:{inv_transform_subpath} '
+            f'from {transform_path}:{transform_subpath} '
+            f'for local alignment of {mov_image} '
+            f'to reference {fix_image} '
+        ))
         distributed_invert_displacement_vector_field(
             transform,
             fix_image.voxel_spacing,
             inv_transform_blocksize, # use blocksize for partitioning the work
             inv_transform,
             cluster_client,
-            overlap_factor=processing_overlap_factor,
+            overlap_factor=transform_overlap_factor,
             step=inv_step,
             iterations=inv_iterations,
             shrink_spacings=inv_shrink_spacings,
@@ -358,6 +425,7 @@ def _align_local_data(fix_image: ImageData,
             pad=inv_pad,
             use_root=inv_use_root,
         )
+        del inv_transform
     else:
         if not inv_transform_path:
             logger.info('Skip the inverse because it is not set')
@@ -365,16 +433,32 @@ def _align_local_data(fix_image: ImageData,
     if (deform_ok or len(global_affine_transforms) > 0) and align_path:
         # Apply local transformation only if 
         # highres aligned output name is set
+        align_attrs = io_utility.prepare_parent_group_attrs(
+            align_path,
+            align_subpath,
+            axes=mov_image.get_attr('axes'),
+            coordinateTransformations=mov_image.get_attr('coordinateTransformations'),
+        )
+        align_shape = fix_image.shape
+        if len(align_blocksize) < len(align_shape):
+            # align_blocksize is not set, so use default block size
+            align_chunk_size = (1,) * (len(align_shape)-len(align_blocksize)) + tuple(get_spatial_values(align_blocksize))
+        else:
+            align_chunk_size = tuple(get_spatial_values(align_blocksize))
         align = io_utility.create_dataset(
             align_path,
             align_subpath,
-            fix_shape,
-            align_blocksize,
+            align_shape,
+            align_chunk_size,
             fix_image.dtype,
-            overwrite=True,
+            overwrite=False,
             compressor=compressor,
-            pixelResolution=mov_image.get_attr('pixelResolution'),
-            downsamplingFactors=mov_image.get_attr('downsamplingFactors'),
+            for_timeindex=align_timeindex,
+            for_channel=align_channel,
+            parent_attrs=align_attrs,
+            pixelResolution=calc_full_voxel_resolution_attr(mov_image.voxel_spacing,
+                                                            mov_image.voxel_downsampling),
+            downsamplingFactors=calc_downsampling_attr(mov_image.voxel_downsampling),
         )
         logger.info(f'Apply affine transform {global_affine_transforms}' +
                     f'and local transform {transform_path}:{transform_subpath}' +
@@ -383,16 +467,19 @@ def _align_local_data(fix_image: ImageData,
             deform_transforms = [transform]
         else:
             deform_transforms = []
-        affine_spacings = [(1.,) * mov_image.ndim for i in range(len(global_affine_transforms))]
-        transform_spacing = tuple(affine_spacings + [fix_image.voxel_spacing])
+        affine_spacings = [(1.,) * mov_image.spatial_ndim for i in range(len(global_affine_transforms))]
+        transform_spacing = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing)])
+        logger.info(f'Transforms spacings: {transform_spacing}')
+
         distributed_apply_transform(
             fix_image, mov_image,
-            fix_image.voxel_spacing, mov_image.voxel_spacing,
             align_blocksize, # use block chunk size for distributing work
             global_affine_transforms + deform_transforms, # transform_list
             cluster_client,
-            overlap_factor=processing_overlap_factor,
+            overlap_factor=transform_overlap_factor,
             aligned_data=align,
+            aligned_data_timeindex=align_timeindex,
+            aligned_data_channel=align_channel,
             transform_spacing=transform_spacing,
         )
     else:
@@ -414,7 +501,7 @@ def main():
     logger.info(f'Local registration: {args}')
 
     global_affine = None
-    if args.global_affine and exists(args.global_affine):
+    if args.global_affine and os.path.exists(args.global_affine):
         logger.info(f'Read global affine from {args.global_affine}')
         global_affine = np.loadtxt(args.global_affine)
 
@@ -430,6 +517,7 @@ def main():
         global_affine,
         processing_size=args.local_processing_size,
         processing_overlap=args.local_processing_overlap_factor,
+        transform_overlap=args.local_transform_overlap_factor,
         inv_step=args.inv_step,
         inv_iterations=args.inv_iterations,
         inv_shrink_spacings=inv_shrink_spacings,
@@ -439,6 +527,7 @@ def main():
         inv_use_root=args.inv_use_root,
         dask_scheduler_address=args.dask_scheduler,
         dask_config_file=args.dask_config,
+        dask_workers=args.local_dask_workers,
         worker_cpus=args.worker_cpus,
         logging_config=args.logging_config,
         compressor=args.compression,

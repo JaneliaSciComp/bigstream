@@ -92,7 +92,8 @@ def distributed_piecewise_image_mean(
         reference = images_list[0][crop]
         mean = reference / n_images
         for image in images_list[1:]:
-            image = match_histograms(image[crop], reference)
+            image = image[crop]
+#            image = match_histograms(image, reference)
             mean += image / n_images
         # TODO: rounding assumes an integer data type
         output[crop] = np.round(mean).astype(images_list[0].dtype)

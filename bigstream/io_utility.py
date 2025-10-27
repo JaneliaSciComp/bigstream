@@ -13,23 +13,90 @@ from tifffile import TiffFile
 logger = logging.getLogger(__name__)
 
 
-def create_dataset(container_path, container_subpath, shape, chunks, dtype,
-                   data=None, overwrite=False,
-                   for_timeindex=None, for_channel=None,
-                   compressor=None,
-                   parent_attrs={},
-                   **dataset_attrs):
+def create_dataset(
+    container_path,
+    container_subpath,
+    shape,
+    chunks,
+    dtype,
+    data=None,
+    overwrite=False,
+    for_timeindex=None,
+    for_channel=None,
+    compressor=None,
+    parent_attrs={},
+    **dataset_attrs,
+):
+    """
+    Create a Zarr dataset
+
+    Parameters
+    ----------
+    container_path : string
+        The path to the root Zarr container on disk
+        If this path does not exist it will be created
+
+    container_subpath : string
+        The subpath within the root Zarr container to create the array
+        If this subpath does not exist it will be created
+
+    shape : tuple of ints
+        The shape of the dataset
+
+    chunks : tuple of ints
+        The shape of individual chunks in the dataset
+
+    dtype : python or numpy primitive numerical data type
+        The primitive data type of the dataset
+
+    data : array (default: None)
+        Data to populate the dataset with
+        If this parameter is not None then the shape and dtype parameters must
+        be None, as in this case those values are inferred from this array.
+
+    overwrite : bool (default: False)
+        If False, an exception will be raised when trying to write to a dataset
+        that already exists. If True then existing datasets can be overwritten.
+
+    for_timeindex : int (default: None)
+        The full size of the time axis. If data is provided, we may only be
+        able to provide one frame. With this parameter we can ensure the time
+        axis is large enough to accommodate the full time series.
+
+    for_channel : int (default: None)
+        The full size of the channels axis. If data is provided, we may only
+        be able to provide one channel. With this parameter we can ensure the time
+        axis is large enough to accommodate the full time series.
+
+    parent_attrs : dict (default: {})
+        Metadata attributes for the group that will contain the dataset
+
+    **dataset_attrs : any additional keyword arguments
+        Metadata attributes for the dataset itself
+
+    Returns
+    -------
+    dataset : zarr.array
+        The zarr.array reference to the newly created dataset
+    """
+
     try:
+
+        # parse container_path
         real_container_path = os.path.realpath(container_path)
         path_comps = os.path.splitext(container_path)
-
         container_ext = path_comps[1]
 
+        # create the correct store
         if container_ext == '.zarr':
             store = zarr.DirectoryStore(real_container_path, dimension_separator='/')
         else:
             store = zarr.N5Store(real_container_path)
+
+        # create dataset in root group at container_subpath
         if container_subpath:
+
+            # log dataset spec, open root container, specify compression codec
             logger.info((
                 f'Create dataset {container_path}:{container_subpath} '
                 f'compressor={compressor}, shape: {shape}, chunks: {chunks} '
@@ -39,9 +106,11 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             root_group = zarr.open_group(store=store, mode='a')
             codec = (None if compressor is None 
                      else codecs.get_codec(dict(id=compressor)))
+
+            # total replacement with empty container
             if data is None and overwrite:
                 dataset_shape = shape
-                dataset = root_group.create_dataset(
+                dataset = root_group.create_dataset(    # XXX ZARR API says should replace with group.create_array
                     container_subpath,
                     shape=shape,
                     chunks=chunks,
@@ -50,7 +119,11 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                     compressor=codec,
                     dimension_separator='/',
                     data=data)
+
+            # we have initialization data and/or the dataset already exists
             else:
+
+                # get dataset shape, either from given data or existing dataset
                 if container_subpath in root_group:
                     # if the dataset already exists, get its shape
                     dataset = root_group[container_subpath]
@@ -71,12 +144,18 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                         dimension_separator='/',
                         data=data)
 
+            # ensure time and channel axes are sufficient length
             _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel)
 
+            # add group and dataset metadata
             _update_dataset_attrs(root_group, dataset,
                                   parent_attrs=parent_attrs,
                                   **dataset_attrs)
             return dataset
+
+        # open a root zarr container only and set attributes
+        # XXX currently this block will never execute because container_subpath
+        #     is compulsory
         else:
             logger.info(f'Create root array {container_path} {kwargs}')
             zarr_data = zarr.open(store=store, mode='a',
@@ -84,6 +163,8 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
             # set additional attributes
             zarr_data.attrs.update((k, v) for k,v in kwargs.items() if v)
             return zarr_data
+
+    # write to log before erroring out
     except Exception as e:
         logger.error(f'Error creating a dataset at {container_path}:{container_subpath}: {e}')
         raise e
@@ -92,11 +173,18 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
 def _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel):
     """
     Resize the dataset to accommodate the timeindex and channel
+
+    The time and channels axes are assumed to be the 0 and 1 index axes
+    respectively. If these axes shapes are smaller than for_timeindex or
+    for_channel respectively, they are resized to those values.
     """
+
+    # initializations
     resized_shape = ()
     to_resize = False
     i = 0
 
+    # time axis
     if for_timeindex is not None:
         if dataset_shape[i] <= for_timeindex:
             resized_shape = resized_shape + (for_timeindex + 1,)
@@ -104,6 +192,8 @@ def _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel):
         else:
             resized_shape = resized_shape + (dataset_shape[i],)
         i = i + 1
+
+    # channel axis
     if for_channel is not None:
         if dataset_shape[i] <= for_channel:
             resized_shape = resized_shape + (for_channel + 1,)
@@ -112,16 +202,24 @@ def _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel):
             resized_shape = resized_shape + (dataset_shape[i],)
         i = i + 1
 
+    # if we have to expand
     if to_resize:
         while i < len(dataset_shape):
             resized_shape = resized_shape + (dataset_shape[i],)
             i = i + 1
+
+        # log and then resize in place
         logger.info(f'Resize {dataset.store.path}:{dataset.path} to {resized_shape}')
         dataset.resize(resized_shape)
 
 
 def _update_dataset_attrs(root_container, dataset,
                           parent_attrs={}, **dataset_attrs):
+    """
+    Store all metadata attributes for a dataset in the parent container
+    """
+
+    # get parent container as object, it will contain metadata for the group
     if dataset.path:
         dataset_parent = os.path.dirname(dataset.path)
         parent_container = (root_container if not dataset_parent
@@ -129,11 +227,29 @@ def _update_dataset_attrs(root_container, dataset,
     else:
         parent_container = root_container
 
+    # write the parent (group) metadata and the dataset metadata
     parent_container.attrs.update(parent_attrs)
     dataset.attrs.update(dataset_attrs)
 
 
 def get_voxel_spacing(attrs: dict):
+    """
+    Parse an attributes dictionary and return voxel spacing.
+    Works for OME-ZARR or N5 attributes.
+    N5 attributes can be given at any scale and the downsampling factor will
+    be taken into account.
+
+    Parameters
+    ----------
+    attrs : dict
+        An attributes dictionary from an OME-ZARR or N5 container
+
+    Returns
+    -------
+    spacing : 1-d iterable
+        For OME-ZARR, spacing for [time, ch, dz, dy, dx] is returned
+        For N5, spacing for [dz, dy, dx] is returned
+    """
     pr = None
     if attrs.get('coordinateTransformations'):
         # this is the OME-ZARR format
@@ -165,11 +281,51 @@ def get_voxel_spacing(attrs: dict):
 def open(container_path, subpath,
          data_timeindex=None, data_channels=None,
          block_coords=None, container_type=None):
+    """
+    A generalized open function that supports nrrd, tiff, npy, n5, and zarr
+    containers. Maps to the appropriate format specific open function.
+
+    Parameters
+    ----------
+    container_path : string
+        Path to the image file or data container
+
+    subpath : string
+        Path to dataset within a container. For nrrd, tiff, or npy this can be
+        None
+
+    data_timeindex : int (default: None)
+        Index along time axis you want returned. None returns whole time axis.
+
+    data_channels : int (default: None)
+        Index along channels axis you want returned. None returns whole
+        channels axis.
+
+    block_coords : tuple of slice objects (default: None)
+        A sub-region of the spatial axes you want returned. None returns
+        the whole spatial domain.
+
+    container_type : string (default: None)
+        Explicit identifier of container type. Options include:
+        'nrrd', 'tif', 'npy', 'n5', and 'zarr'.
+        If None, we attempt to infer the container type from the container_path
+        extension, which is not always reliable.
+
+    Returns
+    -------
+    data : array like
+        The image data
+
+    metadata : dict
+        The metadata for the image. Keys are specific to the container type.
+    """
+
+    # parse container_path
     real_container_path = os.path.realpath(container_path)
     path_comps = os.path.splitext(container_path)
-
     container_ext = path_comps[1]
 
+    # call the appropriate format specific open function
     if container_ext == '.nrrd' or container_type == 'nrrd':
         logger.info(f'Open nrrd {container_path} ({real_container_path})')
         return _read_nrrd(real_container_path, block_coords=block_coords)
@@ -206,10 +362,38 @@ def prepare_parent_group_attrs(container_path,
                                dataset_path,
                                axes=None,
                                coordinateTransformations=None):
+    """
+    Prepare an attributes dictionary for a dataset in an OME-ZARR container
+
+    Parameters
+    ----------
+    container_path : string
+        Path to the container which holds the dataset
+
+    dataset_path : string
+        Subpath to the dataset within the container
+
+    axes : list of Axis objects (default: None)
+        Which axes are present in the dataset
+        See ome_zarr_models.v04.axes.Axis
+
+    coordinateTransformations : tuple of VectorScale and/or VectorTranslation (default: None)
+        The scale and translation of the dataset.
+        See ome_zarr_models.v04.coordinate_transformations.VectorScale
+        See ome_zarr_models.v04.coordinate_transformations.VectorTranslation
+
+    Returns
+    -------
+    attrs : dict
+        A dictionary with attributes formatted for OME-ZARR v.04
+    """
+
+    # case of no relevant metadata
     if ((coordinateTransformations is None or coordinateTransformations == []) and
         axes is None):
         return {}
 
+    # identify which dataset in the container we're creating attributes for
     if dataset_path:
         dataset_path_comps = [c for c in dataset_path.split('/') if c]
         logger.info(f'Lookup dataset path: {dataset_path} in {dataset_path_comps}')
@@ -221,6 +405,7 @@ def prepare_parent_group_attrs(container_path,
         logger.info('No dataset was provided - will use "." for dataset subpath')
         dataset_scale_subpath = '.'
 
+    # pull scales and translations out of coordinateTransformations
     scales, translations = None, None
     if coordinateTransformations is not None:
         for t in coordinateTransformations:
@@ -229,29 +414,58 @@ def prepare_parent_group_attrs(container_path,
             elif t['type'] == 'translation':
                 translations = t['translation']
 
+    # construct minimal attributes
     multiscale_attrs = {
         'name': os.path.basename(container_path),
         'axes': axes if axes is not None else [],
         'version': '0.4',
     }
 
+    # add a dataset
     if scales is not None:
         dataset = Dataset.build(path=dataset_scale_subpath, scale=scales, translation=translations)
         multiscale_attrs.update({
             'datasets': (dataset.dict(exclude_none=True),),
         })
 
+    # format and return
     return {
         'multiscales': [ multiscale_attrs ],
     }
     
 
 def read_attributes(container_path, subpath, container_type=None):
+    """
+    A generalized attribute reader that supports nrrd, tiff, n5, and zarr
+    containers. Maps to the appropriate format specific attributes reader.
+
+    Parameters
+    ----------
+    container_path : string
+        Path to the image file/container
+
+    subpath : string
+        Subpath to the dataset within the container. For nrrd and tiff can be None.
+
+    container_type : string (default: None)
+        Explicit identifier of container type. Options include:
+        'nrrd', 'tif', 'n5', and 'zarr'.
+        If None, we attempt to infer the container type from the container_path
+        extension, which is not always reliable.
+
+    Returns
+    -------
+    attrs : dict
+        The metadata dictionary for the container/image.
+    """
+
+    # parse container_path
     real_container_path = os.path.realpath(container_path)
     path_comps = os.path.splitext(container_path)
-
     container_ext = path_comps[1]
 
+    # map container type to appropriate attributes reader
+    # read and return attributes
     if container_ext == '.nrrd' or container_type == 'nrrd':
         logger.info(f'Read nrrd attrs {container_path} ({real_container_path})')
         return _read_nrrd_attrs(container_path)
@@ -273,12 +487,48 @@ def read_attributes(container_path, subpath, container_type=None):
 
 def read_block(block_coords, image=None, image_path=None, image_subpath=None,
                image_timeindex=None, image_channel=None):
+    """
+    Read a continuous subset of voxels (a block) from an image dataset
+
+    Parameters
+    ----------
+    block_coords : tuple of slice objects
+        How to slice the global nd-array to get the requested block
+
+    image : nd-array (default: None)
+        If the image is already it can be passed with this parameter
+
+    image_path : string (default: None)
+        If the image is not already open, this is the path to it on disk
+
+    image_subpath : string (default: None)
+        Subpath within the container for the dataset you want to open
+
+    image_timeindex : int or slice object (default: None)
+        An index or slice for the time axis if not included in block_coords
+
+    image_channel : int or slice object (default: None)
+        An index or slice for the channel axis if not included in block_coords
+
+    Returns
+    -------
+    block : nd-array
+        The region of data from image (or the container at image_path-->image_subpath)
+        specificed by block_coords
+    """
+
+    # if no crop is provided
     if block_coords is None:
         return None
 
+    # image already in memory as nd-array
     if image is not None:
+
+        # simplest case, just apply the crop
         if len(block_coords) == len(image.shape):
             return image[block_coords]
+
+        # when block_coords only specifies some but not all axes
         else:
             block_selector = []
             if len(image.shape) - len(block_coords) >= 2:
@@ -297,6 +547,7 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
             block_selector.extend(block_coords)
             return image[tuple(block_selector)]
 
+    # image must be opened first, use generalized open function
     if image_path is not None:
         block, _ = open(image_path, image_subpath,
                         data_timeindex=image_timeindex,
@@ -313,12 +564,20 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
 def _open_zarr(data_path, data_subpath, data_store_name=None,
                data_timeindex=None, data_channels=None,
                block_coords=None):
+    """
+    Open a zarr/n5 container, optionally read a region into memory
+    """
+
+    # "There is no try, only do" -Yoda :D
     try:
+
+        # guarantee a metadata file is in the container folder, identify store, open
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
         data_store = _get_data_store(zarr_container_path, data_store_name)
         data_container = zarr.open(store=data_store, mode='r')
         data_container_attrs = data_container.attrs.asdict()
 
+        # if ome-zarr parse appropriately, otherwise apply subpath and block_coords and return
         if _is_ome_zarr(data_container_attrs):
             return _open_ome_zarr(data_container, zarr_subpath,
                                   data_timeindex=data_timeindex,
@@ -329,15 +588,20 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
             ba = a[block_coords] if block_coords is not None else a
             return ba, a.attrs.asdict()
 
+    # log error before raising exception
     except Exception as e:
         logger.exception(f'Error opening {data_path} : {data_subpath}')
         raise e
 
 
 def _is_ome_zarr(data_container_attrs: dict | None) -> bool:
+    """Determine if attributes are consistent with ome-zarr spec"""
+
+    # no attributes? obviously not ome-zarr.
     if data_container_attrs is None:
         return False
 
+    # two conditions indicate ome-zarr, bioformats2raw.layout == 3 or multiscales present
     # test if multiscales attribute exists - if it does assume OME-ZARR
     bioformats_layout = data_container_attrs.get("bioformats2raw.layout", None)
     multiscales = data_container_attrs.get('multiscales', [])
@@ -521,16 +785,19 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
     This methods adjusts the container and dataset paths such that
     the container paths always contains a .attrs file
     """
+
+    # N5 already conforms to desired requirement
     if data_store_name == 'n5' or data_path.endswith('.n5') or data_path.endswith('.N5'):
         # N5 container path is the same as the data_path
         # and the subpath is the dataset path
         return data_path, data_subpath
 
+    # extract components of dataset path (data_subpath)
     dataset_path_arg = data_subpath if data_subpath is not None else ''
     dataset_comps = [c for c in dataset_path_arg.split('/') if c]
     dataset_comps_index = 0
 
-    # Look for the first subpath that containes .zattrs file
+    # Look for the first subpath that containes .zattrs or attributes.json file
     while dataset_comps_index < len(dataset_comps):
         container_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         container_path = f'{data_path}/{container_subpath}'
@@ -539,6 +806,7 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
             break
         dataset_comps_index = dataset_comps_index + 1
 
+    # move subpath components to container path to satisfy requirement
     appended_container_path = '/'.join(dataset_comps[0:dataset_comps_index])
     container_path = f'{data_path}/{appended_container_path}'
     new_subpath = '/'.join(dataset_comps[dataset_comps_index:])
@@ -547,6 +815,7 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
 
 
 def _get_data_store(data_path, data_store_name):
+    """Choose the correct zarr.Store type, N5 or Directory/Zarr"""
     if data_store_name is None or data_store_name == 'n5':
         return zarr.N5Store(data_path)
     else:
@@ -555,6 +824,7 @@ def _get_data_store(data_path, data_store_name):
 
 
 def _read_tiff(input_path, block_coords=None):
+    "Return tiff data as zarr array, slice at block_coords, include metadata"
     with TiffFile(input_path) as tif:
         tif_store = tif.aszarr()
         tif_array = zarr.open(tif_store)
@@ -566,6 +836,7 @@ def _read_tiff(input_path, block_coords=None):
 
 
 def _read_tiff_attrs(input_path):
+    "Open tiff, call function to get tiff metadata"
     with TiffFile(input_path) as tif:
         tif_store = tif.aszarr()
         tif_array = zarr.open(tif_store)
@@ -573,6 +844,7 @@ def _read_tiff_attrs(input_path):
 
 
 def _get_tiff_attrs(tif_array):
+    "read tiff attributes, nicely organized by zarr, append dtype and shape"
     dict = tif_array.attrs.asdict()
     dict.update({
         'dataType': tif_array.dtype,
@@ -582,11 +854,13 @@ def _get_tiff_attrs(tif_array):
 
 
 def _read_nrrd(input_path, block_coords=None):
+    "read nrrd and metadata, slice at block_coords"
     im, dict = nrrd.read(input_path)
     return im[block_coords] if block_coords is not None else im, dict
 
 
 def _read_nrrd_attrs(input_path):
+    "read only the nrrd metadata"
     return nrrd.read_header(input_path)
 
 

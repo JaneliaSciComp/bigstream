@@ -4,14 +4,160 @@ from itertools import product
 import bigstream.utility as ut
 import os, tempfile
 from ClusterWrap.decorator import cluster
-import dask.array as da
 import zarr
 import bigstream.transform as bs_transform
 from dask.distributed import as_completed
+from pydantic_zarr.v2 import ArraySpec
+from ome_zarr_models.v04.axes import Axis
+from ome_zarr_models.v04.image import Image
 
 
 logger = logging.getLogger(__name__)
 
+
+def distributed_apply_transform_to_multiscale_pyramid(
+    fix_zarr, mov_zarr,
+    fix_spacing, mov_spacing,
+    transform_list,
+    top_scale_blocksize,
+    write_path,
+    scales=None,
+    subpath_prefix=None,
+    cluster=None,
+    cluster_kwargs={},
+    **kwargs,
+):
+    """
+    Call distributed_apply_transform a series of times to construct an
+    ome-zarr compliant multiresolution image pyramid.
+
+    Parameters
+    ----------
+    fix : zarr array
+        The fixed image data
+        Optionally, this can be a tuple specifying a shape and dtype
+        For example, (1200, 9000, 5500, np.uint16)
+        This specifies the highest resolution scale level
+
+    mov : zarr array
+        The moving image data
+
+    fix_spacing : 1d array
+        The spacing in physical units (e.g. mm or um) between voxels
+        of the fixed image. Length must equal `fix.ndim`
+
+    mov_spacing : 1d array
+        The spacing in physical units (e.g. mm or um) between voxels
+        of the moving image. Length must equal `mov.ndim`
+
+    transform_list : list
+        The list of transforms to apply. These may be 2d arrays of shape 4x4
+        (affine transforms), or ndarrays of `fix.ndim` + 1 dimensions (deformations).
+        Zarr arrays work just fine.
+
+    top_scale_blocksize : iterable
+        The shape of blocks in voxels at the highest resolution scale
+        blocksize will be scaled down with the scale levels
+
+    write_path : string (default: None)
+        Location on disk that will be the root directory of the pyramid
+
+    scales : str, list of int, or list of tuple of int (default: None)
+        Some presets are available:
+            'to-isotropic-then-exhaustive' : resampled axes anisotropically until
+                voxel spacing is as close to isotropic as possible, then resample
+                axes evenly by factors of 2 until this cannot occur any more.
+                This is what occurs if scales is None.
+        If a list of ints, each int correspond to a downsampling factor. Typically the
+        first element of the list is a 1 to indicate a full resolution scale.
+        If a list of tuple of int then each resample scale can have different factors
+        for each axis.
+
+    subpath_prefix : str (default: None)
+        A prefix for the scale array subpaths. All arrays in the container will have
+        this subpath with an integer appended to the end indicating the scale level.
+        An example is subpath_prefix='/c0/s' which would indicate channel 0 and
+        s for scale level.
+
+    cluster : ClusterWrap.cluster object (default: None)
+        Only set if you have constructed your own static cluster. The default behavior
+        is to construct a cluster for the duration of this function, then close it
+        when the function is finished.
+
+    cluster_kwargs : dict (default: {})
+        Arguments passed to ClusterWrap.cluster
+        If working with an LSF cluster, this will be
+        ClusterWrap.janelia_lsf_cluster. If on a workstation
+        this will be ClusterWrap.local_cluster.
+        This is how distribution parameters are specified.
+
+    **kwargs : Any additional keyword arguments
+        Passed to distributed_apply_transform
+
+    Returns
+    -------
+    pyramid : zarr.hierarchy.Group
+        The root group of the pyramid
+    """
+
+    # extract fix reference parameters
+    if not isinstance(fix_zarr, tuple):
+        fix_zarr = fix_zarr.shape + (fix_zarr.dtype,)
+
+    # determine scales
+    if scales is None: scales = 'to-isotropic-then-exhaustive'
+    if isinstance(scales, str):
+        if scales == 'to-isotropic-then-exhaustive':
+            # TODO calculate scale levels
+            pass
+
+    ### create zarr container for all scales ###
+    # contant axis label for all scales
+    axes = [
+        Axis(name='z', type='space', unit='um'),
+        Axis(name='y', type='space', unit='um'),
+        Axis(name='x', type='space', unit='um'),
+    ]
+
+    # determine array specs, dataset paths, translation and spacings for all scales
+    array_specs, subpaths, translations, spacings, blocksizes = [], [], [], [], []
+    for iii, scale in enumerate(scales):
+        shape = tuple(round(x / y) for x, y in zip(fix_zarr[:-1], scale))
+        blocksizes.append(tuple(round(x / y) for x, y in zip(top_scale_blocksize, scale)))
+        array_specs.append(ArraySpec(shape=shape, chunks=blocksizes[-1], dtype=fix_zarr[-1]))
+        subpaths.append(f'/{subpath_prefix}{iii}')
+        translations.append(spacings[-1] * 0.5 if spacings else (0,)*len(shape))
+        spacings.append(fix_spacing * scale)
+
+    # generate the container and write it to disk
+    pyramid = Image.new(
+        array_specs=array_specs,
+        paths=subpaths,
+        axes=axes,
+        translations=translations,
+        scales=spacings,
+    )
+    store = zarr.DirectoryStore(path=write_path)
+    pyramid.to_zarr(store=store, path='/')
+    pyramid = zarr.open(write_path, 'r+')
+
+    ### Loop over scales and resample for each one ###
+    cluster_type = cluster_kwargs['cluster_type']
+    for array_spec, subpath, spacing, blocksize in zip(array_specs, subpaths, spacings, blocksizes):
+        distributed_apply_transform(
+            array_spec.shape + (fix_zarr[-1],),
+            mov_zarr,
+            spacing,
+            mov_spacing,
+            transform_list=transform_list,
+            blocksize=blocksize,
+            write_path=pyramid[subpath],
+            cluster_kwargs=cluster_kwargs,
+            **kwargs,
+        )
+        cluster_kwargs['cluster_type'] = cluster_type
+    return pyramid
+            
 
 @cluster
 def distributed_apply_transform(
@@ -35,6 +181,8 @@ def distributed_apply_transform(
     ----------
     fix : zarr array
         The fixed image data
+        Optionally, this can be a tuple specifying a shape and dtype
+        For example, (1200, 9000, 5500, np.uint16)
 
     mov : zarr array
         The moving image data
@@ -57,6 +205,10 @@ def distributed_apply_transform(
 
     write_path : string (default: None)
         Location on disk to write the resampled data as a zarr array
+        You may also pass an already instantiated zarr array, in which case
+        the result will be written to that array. You need to be sure that the
+        output shape and blocksize of that zarr array are the same as the
+        resampled output shape and compute blocksize.
 
     overlap : float in range [0, 1] (default: 0.5)
         Block overlap size as a percentage of block size
@@ -90,14 +242,16 @@ def distributed_apply_transform(
         this will be a zarr array. Otherwise it is a numpy array.
     """
 
+    # extract fix reference parameters
+    if not isinstance(fix_zarr, tuple):
+        fix_zarr = fix_zarr.shape + (fix_zarr.dtype,)
+
     # temporary file paths and ensure inputs are zarr
     temporary_directory = tempfile.TemporaryDirectory(
         prefix='.', dir=temporary_directory or os.getcwd(),
     )
-    fix_zarr_path = temporary_directory.name + '/fix.zarr'
     mov_zarr_path = temporary_directory.name + '/mov.zarr'
-    zarr_blocks = (128,)*fix_zarr.ndim
-    fix_zarr = ut.numpy_to_zarr(fix_zarr, zarr_blocks, fix_zarr_path)
+    zarr_blocks = (128,)*(len(fix_zarr) - 1)
     mov_zarr = ut.numpy_to_zarr(mov_zarr, zarr_blocks, mov_zarr_path)
 
     # ensure all deforms are zarr
@@ -110,6 +264,19 @@ def distributed_apply_transform(
         new_list.append(transform)
     transform_list = new_list
 
+    # create output zarr
+    output_zarr = None
+    if isinstance(write_path, str):
+        output_zarr = ut.create_zarr(
+            write_path,
+            fix_zarr[:-1],
+            tuple(blocksize),
+            fix_zarr[-1],
+            array_path=dataset_path,
+        )
+    if isinstance(write_path, zarr.core.Array):
+        output_zarr = write_path
+
     # ensure transform spacing is set explicitly
     if 'transform_spacing' not in kwargs.keys():
         kwargs['transform_spacing'] = np.array(fix_spacing)
@@ -119,26 +286,28 @@ def distributed_apply_transform(
     # get overlap and number of blocks
     blocksize = np.array(blocksize)
     overlap = np.round(blocksize * overlap).astype(int)  # NOTE: default overlap too big?
-    nblocks = np.ceil(np.array(fix_zarr.shape) / blocksize).astype(int)
+    nblocks = np.ceil(np.array(fix_zarr[:-1]) / blocksize).astype(int)
 
-    # store block coordinates in a dask array
-    # TODO: remove use of dask array
-    block_coords = np.empty(nblocks, dtype=tuple)
-    for (i, j, k) in np.ndindex(*nblocks):
-        start = blocksize * (i, j, k) - overlap
+    # determine block coordinates with and without overlap
+    block_coords_w_overlap, block_coords = [], []
+    for index in np.ndindex(*nblocks):
+        start = blocksize * index
+        stop = start + blocksize
+        stop = np.minimum(fix_zarr[:-1], stop)
+        block_coords.append( tuple(slice(x, y) for x, y in zip(start, stop)) )
+
+        start = blocksize * index - overlap
         stop = start + blocksize + 2 * overlap
         start = np.maximum(0, start)
-        stop = np.minimum(fix_zarr.shape, stop)
-        block_coords[i, j, k] = tuple(slice(x, y) for x, y in zip(start, stop))
-    block_coords = da.from_array(block_coords, chunks=(1,)*block_coords.ndim)
+        stop = np.minimum(fix_zarr[:-1], stop)
+        block_coords_w_overlap.append( tuple(slice(x, y) for x, y in zip(start, stop)) )
 
     # pipeline to run on each block
-    def transform_single_block(coords, transform_list):
+    def transform_single_block(overlap_coords, coords, transform_list, output_zarr):
 
         # fetch fixed image slices and read fix
-        fix_slices = coords.item()
-        fix = fix_zarr[fix_slices]
-        fix_origin = fix_spacing * [s.start for s in fix_slices]
+        fix = tuple(int(x.stop - x.start) for x in overlap_coords) + (fix_zarr[-1],)
+        fix_origin = fix_spacing * [s.start for s in overlap_coords]
 
         # read relevant region of transforms
         new_list = []
@@ -146,7 +315,7 @@ def distributed_apply_transform(
         for iii, transform in enumerate(transform_list):
             if transform.shape != (4, 4):
                 start = np.floor(fix_origin / kwargs['transform_spacing'][iii]).astype(int)
-                stop = [s.stop for s in fix_slices] * fix_spacing / kwargs['transform_spacing'][iii]
+                stop = [s.stop for s in overlap_coords] * fix_spacing / kwargs['transform_spacing'][iii]
                 stop = np.ceil(stop).astype(int)
                 transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
                 transform = transform[transform_slice]
@@ -158,7 +327,7 @@ def distributed_apply_transform(
         # transform fixed block corners, read moving data
         fix_block_coords = []
         for corner in list(product([0, 1], repeat=3)):
-            a = [x.stop-1 if y else x.start for x, y in zip(fix_slices, corner)]
+            a = [x.stop-1 if y else x.start for x, y in zip(overlap_coords, corner)]
             fix_block_coords.append(a)
         fix_block_coords = np.array(fix_block_coords) * fix_spacing
         mov_block_coords = bs_transform.apply_transform_to_coordinates(
@@ -174,7 +343,7 @@ def distributed_apply_transform(
         mov_origin = mov_spacing * [s.start for s in mov_slices]
 
         # resample
-        logger.info(f'Apply {len(transform_list)} transforms to {fix_slices}' +
+        logger.info(f'Apply {len(transform_list)} transforms to {overlap_coords}' +
                     f'fix origin: {fix_origin}, mov origin: {mov_origin}')
         aligned = bs_transform.apply_transform(
             fix, mov, fix_spacing, mov_spacing,
@@ -185,43 +354,47 @@ def distributed_apply_transform(
             **kwargs,
         )
 
-        # crop out overlap
-        for axis in range(aligned.ndim):
+        # remove overlap
+        crop = []
+        for x, y in zip(overlap_coords, coords):
+            start = y.start - x.start
+            stop = y.stop - x.stop
+            if start < 0: start = 0
+            if stop >= 0: stop = None
+            crop.append(slice(start, stop))
+        aligned = aligned[tuple(crop)]
 
-            # left side
-            slc = [slice(None),]*aligned.ndim
-            if fix_slices[axis].start != 0:
-                slc[axis] = slice(overlap[axis], None)
-                aligned = aligned[tuple(slc)]
-
-            # right side
-            slc = [slice(None),]*aligned.ndim
-            if aligned.shape[axis] > blocksize[axis]:
-                slc[axis] = slice(None, blocksize[axis])
-                aligned = aligned[tuple(slc)]
-
-        # return result
-        return aligned
+        # write or return result
+        if output_zarr is not None:
+            output_zarr[coords] = aligned
+            return True
+        else:
+            return aligned
     # END: closure
 
-    # align all blocks
-    aligned = da.map_blocks(
+    # submit all blocks for alignment
+    futures = cluster.client.map(
         transform_single_block,
+        block_coords_w_overlap,
         block_coords,
         transform_list=transform_list,
-        dtype=fix_zarr.dtype,
-        chunks=blocksize,
+        output_zarr=output_zarr,
     )
 
-    # crop to original size
-    aligned = aligned[tuple(slice(s) for s in fix_zarr.shape)]
-
-    # return
-    if write_path:
-        da.to_zarr(aligned, write_path, component=dataset_path)
-        return zarr.open(write_path, 'r+')
+    # handle in memory and out of memory result cases
+    if not write_path:
+        future_keys = [f.key for f in futures]
+        aligned = np.zeros(fix_zarr[:-1], dtype=fix_zarr[-1])
+        for batch in as_completed(futures, with_results=True).batches():
+            for future, result in batch:
+                iii = future_keys.index(future.key)
+                aligned[block_coords[iii]] = result
+        return aligned
     else:
-        return aligned.compute()
+        # execute all alignments
+        all_computed = cluster.client.gather(futures)
+        del futures
+        return output_zarr
 
 
 @cluster

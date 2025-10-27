@@ -4,7 +4,9 @@ import SimpleITK as sitk
 import bigstream.utility as ut
 from bigstream.configure_irm import interpolator_switch
 import os
+import sys
 from scipy.ndimage import map_coordinates, zoom, gaussian_filter
+from scipy.spatial.transform import Rotation
 
 
 logger = logging.getLogger(__name__)
@@ -32,7 +34,8 @@ def apply_transform(
     ----------
     fix : ndarray
         the fixed image
-        Optionally, this can be a tuple specifying a shape.
+        Optionally, this can be a tuple specifying a shape and dtype
+        For example, (256, 512, 512, np.uint16)
 
     mov : ndarray
         the moving image; `fix.ndim` must equal `mov.ndim`
@@ -132,8 +135,8 @@ def apply_transform(
 
     # set reference data
     if isinstance(fix, tuple):
-        dtype = mov.dtype
-        resampler.SetSize(fix[::-1])
+        dtype = fix[-1]
+        resampler.SetSize(fix[:-1][::-1])
         resampler.SetOutputSpacing(fix_spacing[::-1])
         if fix_origin is not None:
             resampler.SetOutputOrigin(fix_origin[::-1])
@@ -163,6 +166,7 @@ def apply_transform_to_coordinates(
     transform_list,
     transform_spacing=None,
     transform_origin=None,
+    **kwargs,
 ):
     """
     Move a set of coordinates through a list of transforms
@@ -191,6 +195,8 @@ def apply_transform_to_coordinates(
         the same logic as transform_spacing. Origins given for affine transforms
         are ignored.
 
+    **kwargs : passed to scipy.ndimage.map_coordinates
+
     Returns
     -------
     transform_coordinates : Nxd array
@@ -217,7 +223,7 @@ def apply_transform_to_coordinates(
             assert (transform_spacing is not None), error_message
 
             # handle multiple spacings and origins
-            spacing = transform_spacing
+            spacing = transform_spacing[::-1]  # iterating through transforms in reverse
             origin = transform_origin
             if isinstance(spacing, tuple): spacing = spacing[iii]
             if isinstance(origin, tuple): origin = origin[iii]
@@ -228,18 +234,10 @@ def apply_transform_to_coordinates(
 
             # interpolate position field at coordinates, reformat, return
             ndims = transform.shape[-1]
-            interp = lambda x: map_coordinates(x, coordinates, mode='nearest')
-            dX = []
-            for i in range(ndims):
-                transform_shape = transform[..., i].shape
-                if np.array(transform_shape).all():
-                    # all dimensions are non zero
-                    dX.append(interp(transform[..., i]))
-                else:
-                    # set dX[i] = 0
-                    dX.append(0)
-
-            coordinates = coordinates.transpose() * spacing + np.array(dX).transpose()
+            if 'mode' not in kwargs.keys(): kwargs['mode'] = 'nearest'
+            interp = lambda x: map_coordinates(x, coordinates, **kwargs)
+            dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()
+            coordinates = coordinates.transpose() * spacing + dX
             if origin is not None: coordinates += origin
 
     return coordinates
@@ -530,6 +528,16 @@ def invert_displacement_vector_field(
         inverse_field(field) should be nearly zeros everywhere.
     """
 
+    # set logger status
+    if verbose:
+        add_handler = True
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and handler.stream == sys.stdout:
+                add_handler = False; break
+        if add_handler:
+            logger.addHandler(logging.StreamHandler(stream=sys.stdout))
+        logger.setLevel(logging.DEBUG)
+
     # initialize inverse as negative root
     root = field
     if use_root:
@@ -714,6 +722,16 @@ def displacement_field_composition_square_root(
         compose_displacement_vector_fields(root, root, spacing, spacing) ~= field
     """
 
+    # set logger status
+    if verbose:
+        add_handler = True
+        for handler in logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and handler.stream == sys.stdout:
+                add_handler = False; break
+        if add_handler:
+            logger.addHandler(logging.StreamHandler(stream=sys.stdout))
+        logger.setLevel(logging.DEBUG)
+
     # pad input
     if pad > 0:
         pad = tuple(round(pad*x) for x in field.shape[:-1])
@@ -724,7 +742,9 @@ def displacement_field_composition_square_root(
     field_smooth_store = {}
 
     # loop over scale levels
-    level_values = zip(iterations, shrink_spacings, smooth_sigmas)
+    level_values = tuple(zip(iterations, shrink_spacings, smooth_sigmas))
+    logger.info(f'Displacement vector leveled iterations: {level_values}')
+    
     for level, (iterations_level, shrink, sigma) in enumerate(level_values):
 
         # smooth

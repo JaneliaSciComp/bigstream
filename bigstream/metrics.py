@@ -144,7 +144,7 @@ def local_correlation_coefficient(
         coefficients
 
     tolerance : float (default: 1e-6)
-        The lower bound on variance for CC to adequately be computed
+        The lower bound on standard deviation for CC to adequately be computed
 
     Returns
     -------
@@ -158,7 +158,7 @@ def local_correlation_coefficient(
     # convert radius to integer voxel units
     radius = np.round(radius / spacing).astype(int)
 
-    # get local means and variances, use high precision and zero center images for stability
+    # get local means and standard deviations, use high precision and zero center images for stability
     fix_means = fix.astype(np.longdouble) - np.mean(fix)
     mov_means = mov.astype(np.longdouble) - np.mean(mov)
     fix_square = fix_means**2
@@ -166,19 +166,20 @@ def local_correlation_coefficient(
     fix_mov_product = fix_means * mov_means
     fix_means = _local_means(fix_means, radius)
     mov_means = _local_means(mov_means, radius)
-    fix_var = _local_means(fix_square, radius) - fix_means**2
-    mov_var = _local_means(mov_square, radius) - mov_means**2
+    fix_std = np.sqrt(_local_means(fix_square, radius) - fix_means**2)
+    mov_std = np.sqrt(_local_means(mov_square, radius) - mov_means**2)
     fix_mov_cov = _local_means(fix_mov_product, radius) - fix_means*mov_means
 
     # compute LCCs
+    # TODO: instead of disabling divide by zero warnings, just mask zero values with np.ma
     with np.errstate(divide='ignore', invalid='ignore'):
-        lcc = fix_mov_cov**2 / (fix_var * mov_var)
+        lcc = fix_mov_cov / (fix_std * mov_std)
 
     # replace NaNs (occur when there is no data, or data values are constant)
     mn, mx = np.percentile(fix, [0.1, 99.9])
-    fix_mask = fix_var / (mx - mn) < tolerance
+    fix_mask = fix_std / (mx - mn) < tolerance
     mn, mx = np.percentile(mov, [0.1, 99.9])
-    mov_mask = mov_var / (mx - mn) < tolerance
+    mov_mask = mov_std / (mx - mn) < tolerance
     lcc[fix_mask + mov_mask] = 0.
     
     # return

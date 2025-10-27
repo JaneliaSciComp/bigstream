@@ -1,4 +1,3 @@
-import dask.array as da
 import logging
 import nrrd
 import numcodecs as codecs
@@ -6,7 +5,6 @@ import numpy as np
 import os
 import re
 import zarr
-import traceback
 
 from ome_zarr_models.v04.image import Dataset
 from tifffile import TiffFile
@@ -50,25 +48,28 @@ def create_dataset(container_path, container_subpath, shape, chunks, dtype,
                     dtype=dtype,
                     overwrite=overwrite,
                     compressor=codec,
+                    dimension_separator='/',
                     data=data)
             else:
                 if container_subpath in root_group:
                     # if the dataset already exists, get its shape
-                    dataset_shape = root_group[container_subpath].shape
+                    dataset = root_group[container_subpath]
+                    dataset_shape = dataset.shape
                     logger.info((
                         f'Dataset {container_path}:{container_subpath} '
                         f'already exists with shape {dataset_shape} '
                     ))
                 else:
                     dataset_shape = shape
-                dataset = root_group.require_dataset(
-                    container_subpath,
-                    shape=dataset_shape,
-                    chunks=chunks,
-                    dtype=dtype,
-                    overwrite=overwrite,
-                    compressor=codec,
-                    data=data)
+                    dataset = root_group.create_dataset(
+                        container_subpath,
+                        shape=dataset_shape,
+                        chunks=chunks,
+                        dtype=dtype,
+                        overwrite=overwrite,
+                        compressor=codec,
+                        dimension_separator='/',
+                        data=data)
 
             _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel)
 

@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "bigstream"
 version = "5.0.2"
 description = "Tools for distributed alignment of massive images"
-license = { text = "BSD 3-Clause License" }
+license = "BSD-3-Clause"
 requires-python = ">=3.10"
 authors = [
     { name = "Greg M. Fleishman", email = "greg.nli10me@gmail.com" }

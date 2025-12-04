@@ -114,18 +114,21 @@ def distributed_apply_transform_to_multiscale_pyramid(
     ### create zarr container for all scales ###
     # contant axis label for all scales
     axes = [
-        Axis(name='z', type='space', unit='um'),
-        Axis(name='y', type='space', unit='um'),
-        Axis(name='x', type='space', unit='um'),
+        Axis(name='z', type='space', unit='micrometer'),
+        Axis(name='y', type='space', unit='micrometer'),
+        Axis(name='x', type='space', unit='micrometer'),
     ]
 
     # determine array specs, dataset paths, translation and spacings for all scales
     array_specs, subpaths, translations, spacings, blocksizes = [], [], [], [], []
     for iii, scale in enumerate(scales):
         shape = tuple(round(x / y) for x, y in zip(fix_zarr[:-1], scale))
-        blocksizes.append(tuple(round(x / y) for x, y in zip(top_scale_blocksize, scale)))
+
+        blocksize = tuple(max(2, round(x / y)) for x, y in zip(top_scale_blocksize, scale))
+        blocksizes.append(blocksize)
+
         array_specs.append(ArraySpec(shape=shape, chunks=blocksizes[-1], dtype=fix_zarr[-1]))
-        subpaths.append(f'/{subpath_prefix}{iii}')
+        subpaths.append(f'{subpath_prefix}{iii}')
         translations.append(spacings[-1] * 0.5 if spacings else (0,)*len(shape))
         spacings.append(fix_spacing * scale)
 
@@ -136,6 +139,9 @@ def distributed_apply_transform_to_multiscale_pyramid(
         axes=axes,
         translations=translations,
         scales=spacings,
+        name='/',
+        metadata={},
+        multiscale_type='/',
     )
     store = zarr.DirectoryStore(path=write_path)
     pyramid.to_zarr(store=store, path='/')
@@ -157,7 +163,7 @@ def distributed_apply_transform_to_multiscale_pyramid(
         )
         cluster_kwargs['cluster_type'] = cluster_type
     return pyramid
-            
+
 
 @cluster
 def distributed_apply_transform(

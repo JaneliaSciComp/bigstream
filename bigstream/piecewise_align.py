@@ -383,7 +383,8 @@ def distributed_piecewise_alignment_pipeline(
                         missing_weights[region] += weights[neighbor_region]
     
                 # rebalance the weights
-                weights = weights / (1 - missing_weights)
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    weights = weights / (1 - missing_weights)
                 weights[np.isnan(weights)] = 0.  # edges of blocks are 0/0
                 weights = weights.astype(np.float32)
     

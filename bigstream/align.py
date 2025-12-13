@@ -551,10 +551,10 @@ def feature_point_ransac_affine_align(
 
     # sort
     logger.info(f'{context} sorting spots')
-    sort_idx = np.argsort(fix_spots[:, 3])[::-1]
-    fix_spots = fix_spots[sort_idx, :3][:nspots]
-    sort_idx = np.argsort(mov_spots[:, 3])[::-1]
-    mov_spots = mov_spots[sort_idx, :3][:nspots]
+    sort_idx = np.argsort(fix_spots[:, -1])[::-1]
+    fix_spots = fix_spots[sort_idx, :-1][:nspots]
+    sort_idx = np.argsort(mov_spots[:, -1])[::-1]
+    mov_spots = mov_spots[sort_idx, :-1][:nspots]
 
     # get contexts
     logger.info(f'{context} extracting contexts')

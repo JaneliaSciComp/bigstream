@@ -254,7 +254,7 @@ def distributed_piecewise_alignment_pipeline(
     
             # logging
             configure_logging(None, True)
-    
+
             start_time = time.time()
             # parse input, log index and slices
             block_index, fix_slices, neighbor_flags = single_block_data

@@ -1,5 +1,5 @@
 # Create final image
-FROM ghcr.io/janeliascicomp/zarr-tools:dask2025.5.1-py12-ol9
+FROM ghcr.io/janeliascicomp/dask:2025.11.0-py12-ol9
 ARG TARGETPLATFORM
 
 RUN dnf install -y \
@@ -17,15 +17,21 @@ ENV OMP_NUM_THREADS=
 
 ENV PYTHONPATH=/app/bigstream
 
+ENV PIP_ROOT_USER_ACTION=ignore
+
 # Use the base environment from the baseImage and the conda-env
 # from current dir
 COPY conda-env.yaml .
 RUN mamba env update -n base -f conda-env.yaml
 
 # install bigstream
-COPY scripts scripts
+COPY launchers launchers
 COPY bigstream bigstream
+COPY configs configs
+
 COPY *.py .
+COPY *.toml .
 COPY *.md .
 
-RUN pip install .
+RUN pip install -e . && \
+    pip install "zarr-tools @ git+https://github.com/JaneliaSciComp/zarr-tools.git@14a289c"

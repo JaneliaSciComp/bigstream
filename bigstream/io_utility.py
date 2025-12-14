@@ -13,18 +13,56 @@ from tifffile import TiffFile
 logger = logging.getLogger(__name__)
 
 
-def create_dataset(
+def _get_compressor(compressor: str | None, compression_opts: dict, zarr_format: int):
+    logger.info(f'Get compressor: {compressor}: {compression_opts} for zarr format {zarr_format}')
+    if compressor is None:
+        return None
+
+    if zarr_format == 3:
+        import zarr.codecs as zv3codecs
+
+        compressor_map = {
+            'packbits': zv3codecs.PackBits,
+            'zstd': zv3codecs.Zstd,
+            'zlib': zv3codecs.Zlib,
+            'gzip': zv3codecs.GZip,
+            'bz2': zv3codecs.BZ2,
+            'lzma': zv3codecs.LZMA,
+            'lz4': zv3codecs.LZ4,
+            'blosc': zv3codecs.Blosc,
+        }
+        codec_cls = compressor_map.get(compressor.lower())
+        if codec_cls is None:
+            raise ValueError(f'Unsupported compressor {compressor} for zarr format {zarr_format}')
+        return codec_cls(**compression_opts)
+    else:
+        import numcodecs as zv2codecs
+
+        return zv2codecs.get_codec({'id': compressor, **compression_opts})
+
+
+def _compressor_kwargs(codec, zarr_format: int):
+    if zarr_format == 3:
+        # zarr v3 expects a tuple of BytesBytesCodec (or an empty tuple)
+        compressors = None if codec is None else (codec,)
+        return {'compressors': compressors}
+    else:
+        return {'compressors': codec}
+
+
+def create_dataset_array(
     container_path,
     container_subpath,
     shape,
     chunks,
     dtype,
-    data=None,
     overwrite=False,
     for_timeindex=None,
     for_channel=None,
     compressor=None,
-    parent_attrs={},
+    compression_opts:dict={},
+    parent_attrs:dict={},
+    zarr_format:int=2, # default zarr v2 format
     **dataset_attrs,
 ):
     """
@@ -89,14 +127,17 @@ def create_dataset(
 
         # create the correct store
         if container_ext == '.zarr':
-            store = zarr.DirectoryStore(real_container_path, dimension_separator='/')
+            store = zarr.storage.LocalStore(real_container_path)
         else:
-            store = zarr.N5Store(real_container_path)
+            store = real_container_path
+
+        codec = _get_compressor(compressor, compression_opts, zarr_format)
+        compressor_args = _compressor_kwargs(codec, zarr_format)
+
+        chunk_key_separator = {'name': 'v2', 'separator': '/'} if zarr_format == 2 else None
 
         # create dataset in root group at container_subpath
         if container_subpath:
-
-            # log dataset spec, open root container, specify compression codec
             logger.info((
                 f'Create dataset {container_path}:{container_subpath} '
                 f'compressor={compressor}, shape: {shape}, chunks: {chunks} '
@@ -104,65 +145,83 @@ def create_dataset(
                 f'{dataset_attrs} '
             ))
             root_group = zarr.open_group(store=store, mode='a')
-            codec = (None if compressor is None 
-                     else codecs.get_codec(dict(id=compressor)))
 
             # total replacement with empty container
-            if data is None and overwrite:
+            if overwrite:
                 dataset_shape = shape
-                dataset = root_group.create_dataset(    # XXX ZARR API says should replace with group.create_array
+                dataset_array = root_group.create_array(
                     container_subpath,
                     shape=shape,
                     chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
-                    compressor=codec,
-                    dimension_separator='/',
-                    data=data)
-
-            # we have initialization data and/or the dataset already exists
+                    chunk_key_encoding=chunk_key_separator,
+                    **compressor_args,
+                )
             else:
 
                 # get dataset shape, either from given data or existing dataset
                 if container_subpath in root_group:
                     # if the dataset already exists, get its shape
-                    dataset = root_group[container_subpath]
-                    dataset_shape = dataset.shape
+                    dataset_array = root_group[container_subpath]
+                    dataset_shape = dataset_array.shape
                     logger.info((
                         f'Dataset {container_path}:{container_subpath} '
                         f'already exists with shape {dataset_shape} '
                     ))
+                    # if array already exists ensure time and channel axes are sufficient length
+                    _resize_dataset_array(dataset_array, dataset_shape, for_timeindex, for_channel)
                 else:
+                    # this is a new dataset
                     dataset_shape = shape
-                    dataset = root_group.create_dataset(
+                    dataset_array = root_group.create_array(
                         container_subpath,
                         shape=dataset_shape,
                         chunks=chunks,
                         dtype=dtype,
                         overwrite=overwrite,
-                        compressor=codec,
-                        dimension_separator='/',
-                        data=data)
-
-            # ensure time and channel axes are sufficient length
-            _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel)
+                        chunk_key_encoding=chunk_key_separator,
+                        **compressor_args,
+                    )
 
             # add group and dataset metadata
-            _update_dataset_attrs(root_group, dataset,
+            _update_dataset_attrs(root_group, dataset_array,
                                   parent_attrs=parent_attrs,
                                   **dataset_attrs)
-            return dataset
-
-        # open a root zarr container only and set attributes
-        # XXX currently this block will never execute because container_subpath
-        #     is compulsory
         else:
-            logger.info(f'Create root array {container_path} {kwargs}')
-            zarr_data = zarr.open(store=store, mode='a',
-                                  shape=shape, chunks=chunks)
+            # the zarr container is the array
+            logger.info(f'Create root array {container_path} {dataset_attrs}')
+            if overwrite:
+                # doesn't matter if array exists or not we overwrite it anyway
+                dataset_array = zarr.create_array(
+                    store=store,
+                    shape=shape,
+                    chunks=chunks,
+                    dtype=dtype,
+                    overwrite=True,
+                    zarr_format=zarr_format,
+                    chunk_key_encoding=chunk_key_separator,
+                    **compressor_args,
+                )
+            elif zarr.storage.contains_array(store):
+                # the array already exists
+                dataset_array = zarr.open(store=store, mode='a')
+                _resize_dataset_array(dataset_array, shape, for_timeindex, for_channel)
+            else:
+                # this is a new array
+                dataset_array = zarr.create_array(
+                    store=store,
+                    shape=shape,
+                    chunks=chunks,
+                    dtype=dtype,
+                    zarr_format=zarr_format,
+                    chunk_key_encoding=chunk_key_separator,
+                    **compressor_args,
+                )
             # set additional attributes
-            zarr_data.attrs.update((k, v) for k,v in kwargs.items() if v)
-            return zarr_data
+            dataset_array.attrs.update((k, v) for k,v in dataset_attrs.items() if v)
+
+        return dataset_array
 
     # write to log before erroring out
     except Exception as e:
@@ -170,7 +229,7 @@ def create_dataset(
         raise e
 
 
-def _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel):
+def _resize_dataset_array(dataset, dataset_shape, for_timeindex, for_channel):
     """
     Resize the dataset to accommodate the timeindex and channel
 
@@ -819,7 +878,7 @@ def _get_data_store(data_path, data_store_name):
     if data_store_name is None or data_store_name == 'n5':
         return zarr.N5Store(data_path)
     else:
-        return zarr.DirectoryStore(data_path, dimension_separator='/')
+        return zarr.LocalStore(data_path)
 
 
 

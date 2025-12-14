@@ -1,4 +1,5 @@
 import argparse
+import logging
 import numpy as np
 import os
 import bigstream.io_utility as io_utility
@@ -22,7 +23,7 @@ from .cli import (CliArgsHelper, RegistrationInputs,
                   inttuple, floattuple)
 
 
-logger = None
+logger:logging.Logger
 
 
 def _define_args(local_descriptor):
@@ -333,7 +334,7 @@ def _align_local_data(fix_image: ImageData,
             coordinateTransformations=coordinate_transformations,
         )
         transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
-        transform = io_utility.create_dataset(
+        transform = io_utility.create_dataset_array(
             transform_path,
             transform_subpath,
             transform_shape,
@@ -345,9 +346,11 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
                                                             transform_downsampling),
             downsamplingFactors=calc_downsampling_attr(transform_downsampling),
+            zarr_format=2,
         )
     else:
         transform = None
+
     logger.info(f'Calculate transformation {transform_path}' +
                 f'for the local alignment of {mov_image}' +
                 f'to {fix_image}')
@@ -390,7 +393,7 @@ def _align_local_data(fix_image: ImageData,
             coordinateTransformations=coordinate_transformations,
         )
         inv_transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
-        inv_transform = io_utility.create_dataset(
+        inv_transform = io_utility.create_dataset_array(
             inv_transform_path,
             inv_transform_subpath,
             transform_shape,
@@ -402,6 +405,7 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
                                                             transform_downsampling),
             downsamplingFactors=calc_downsampling_attr(transform_downsampling),
+            zarr_format=2,
         )
         logger.info((
             'Calculate inverse transformation '
@@ -445,7 +449,7 @@ def _align_local_data(fix_image: ImageData,
             align_chunk_size = (1,) * (len(align_shape)-len(align_blocksize)) + tuple(get_spatial_values(align_blocksize))
         else:
             align_chunk_size = tuple(get_spatial_values(align_blocksize))
-        align = io_utility.create_dataset(
+        align = io_utility.create_dataset_array(
             align_path,
             align_subpath,
             align_shape,
@@ -459,6 +463,7 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=calc_full_voxel_resolution_attr(mov_image.voxel_spacing,
                                                             mov_image.voxel_downsampling),
             downsamplingFactors=calc_downsampling_attr(mov_image.voxel_downsampling),
+            zarr_format=2,
         )
         logger.info(f'Apply affine transform {global_affine_transforms}' +
                     f'and local transform {transform_path}:{transform_subpath}' +

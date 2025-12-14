@@ -1,4 +1,5 @@
 import argparse
+import logging
 import numpy as np
 import bigstream.io_utility as io_utility
 
@@ -15,7 +16,7 @@ from bigstream.image_data import (ImageData, get_spatial_values,
 from .cli import (inttuple, floattuple, stringlist)
 
 
-logger = None
+logger:logging.Logger
 
 
 def _define_args():
@@ -199,7 +200,7 @@ def _run_apply_transform(args):
         else:
             output_chunk_size = tuple(get_spatial_values(output_blocks))
 
-        output_dataarray = io_utility.create_dataset(
+        output_dataarray = io_utility.create_dataset_array(
             args.output,
             output_subpath,
             output_shape,
@@ -212,6 +213,7 @@ def _run_apply_transform(args):
             pixelResolution=calc_full_voxel_resolution_attr(mov_data.voxel_spacing,
                                                             mov_data.voxel_downsampling),
             downsamplingFactors=calc_downsampling_attr(mov_data.voxel_downsampling),
+            zarr_format=2,
         )
 
         # read affine transformations

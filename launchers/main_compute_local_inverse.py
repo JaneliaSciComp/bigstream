@@ -1,4 +1,5 @@
 import argparse
+import logging
 import numpy as np
 import bigstream.io_utility as io_utility
 
@@ -15,7 +16,7 @@ from bigstream.image_data import (ImageData,
 from .cli import (inttuple, floattuple)
 
 
-logger = None # initialized in main as a result of calling configure_logging
+logger:logging.Logger
 
 
 def _define_args():
@@ -158,7 +159,7 @@ def _run_compute_inverse(args):
         axes=local_deform_field.get_attr('axes'),
         coordinateTransformations=local_deform_field.get_attr('coordinateTransformations'),
     )
-    inv_deform_field = io_utility.create_dataset(
+    inv_deform_field = io_utility.create_dataset_array(
         inv_transform_path,
         inv_transform_subpath,
         local_deform_field.shape,
@@ -170,6 +171,7 @@ def _run_compute_inverse(args):
         pixelResolution=calc_full_voxel_resolution_attr(local_deform_field.voxel_spacing,
                                                         local_deform_field.voxel_downsampling),
         downsamplingFactors=calc_downsampling_attr(local_deform_field.voxel_downsampling),
+        zarr_format=2,
     )
 
     # open a dask client

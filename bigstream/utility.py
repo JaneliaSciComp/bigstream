@@ -5,8 +5,6 @@ import psutil
 import SimpleITK as sitk
 import zarr
 
-from zarr import blosc
-
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +118,6 @@ def create_zarr(
     dtype,
     array_path=None,
     multithreaded=False,
-    client=None,
 ):
     """
     Create a new zarr array on disk
@@ -150,7 +147,6 @@ def create_zarr(
 
     synchronizer = None
     if multithreaded:
-        blosc.use_threads = True
         synchronizer = zarr.ThreadSynchronizer()
     zarr_disk = zarr.open(
         path, 'a',
@@ -158,7 +154,7 @@ def create_zarr(
         chunks=chunks,
         dtype=dtype,
         path=array_path,
-        synchronizer=synchronizer,
+        synchronizer=synchronizer
     )
     return zarr_disk
 

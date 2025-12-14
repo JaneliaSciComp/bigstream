@@ -12,19 +12,19 @@ authors = [
     { name = "Greg M. Fleishman", email = "greg.nli10me@gmail.com" }
 ]
 dependencies = [
-    "numpy>=1.20.3,<2",
+    "numpy>2,<3",
     "scipy>=1.9.1",
     "opencv-python>=4.5.5.64",
     "bokeh>=2.4.3",
     "dask>=2025.11.0",
     "distributed>=2025.11.0",
     "ClusterWrap>=0.3.0",
-    "zarr>=2.12.0",
-    "h5py>=3.8.0",
-    "numcodecs>=0.9.1",
+    "zarr>3,<4",
+    "h5py>=3.15.1",
+    "numcodecs>=0.16.1",
     "fishspot>=0.2.3",
     "SimpleITK>=2.2.0",
-    "tifffile>=2022.10.10",
+    "tifffile>=2025.10.16",
     "morphsnakes>=2.0.0",
     "pynrrd>=1.0.0",
     "scikit-image>=0.20.0",
@@ -32,3 +32,8 @@ dependencies = [
 
 [project.urls]
 "Bug Tracker" = "https://github.com/JaneliaScicomp/bigstream/issues"
+
+[tool.setuptools.packages.find]
+where = [
+    "."
+]

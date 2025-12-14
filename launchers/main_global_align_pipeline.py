@@ -1,4 +1,5 @@
 import argparse
+import logging
 import numpy as np
 import os
 import bigstream.io_utility as io_utility
@@ -15,7 +16,7 @@ from .cli import (CliArgsHelper, RegistrationInputs,
                   extract_registration_input_args, get_input_images)
 
 
-logger = None
+logger:logging.Logger
 
 
 def _define_args(args_descriptor):
@@ -221,13 +222,12 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             f'blocksize {align_chunk_size} '
             f'attrs: {align_attrs} '
         ))
-        return io_utility.create_dataset(
+        dataset_array = io_utility.create_dataset_array(
             align_path,
             reg_args.align_dataset(),
             align_shape,
             align_chunk_size,
             aligned_array.dtype,
-            data=aligned_array,
             overwrite=False,
             compressor=compressor,
             for_timeindex=reg_args.align_timeindex,
@@ -236,7 +236,10 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             pixelResolution=calc_full_voxel_resolution_attr(voxel_resolution,
                                                             downsampling),
             downsamplingFactors=calc_downsampling_attr(downsampling),
+            zarr_format=2,
         )
+        dataset_array[...] = aligned_array
+        return dataset_array
     else:
         logger.info('Skip saving global aligned volume')
         return  None

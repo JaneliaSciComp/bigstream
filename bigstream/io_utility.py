@@ -144,14 +144,16 @@ def create_dataset_array(
                 f'parent attrs: {parent_attrs} '
                 f'{dataset_attrs} '
             ))
-            root_group = zarr.open_group(store=store, mode='a')
+            root_group = zarr.open_group(store=store,
+                                         mode='a',
+                                         zarr_format=zarr_format)
 
             # total replacement with empty container
             if overwrite:
                 dataset_shape = shape
                 dataset_array = root_group.create_array(
                     container_subpath,
-                    shape=shape,
+                    shape=_to_native_type(shape),
                     chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
@@ -176,7 +178,7 @@ def create_dataset_array(
                     dataset_shape = shape
                     dataset_array = root_group.create_array(
                         container_subpath,
-                        shape=dataset_shape,
+                        shape=_to_native_type(dataset_shape),
                         chunks=chunks,
                         dtype=dtype,
                         overwrite=overwrite,
@@ -199,8 +201,8 @@ def create_dataset_array(
                     chunks=chunks,
                     dtype=dtype,
                     overwrite=True,
-                    zarr_format=zarr_format,
                     chunk_key_encoding=chunk_key_separator,
+                    zarr_format=zarr_format,
                     **compressor_args,
                 )
             elif zarr.storage.contains_array(store):
@@ -214,12 +216,12 @@ def create_dataset_array(
                     shape=shape,
                     chunks=chunks,
                     dtype=dtype,
-                    zarr_format=zarr_format,
                     chunk_key_encoding=chunk_key_separator,
+                    zarr_format=zarr_format,
                     **compressor_args,
                 )
             # set additional attributes
-            dataset_array.attrs.update((k, v) for k,v in dataset_attrs.items() if v)
+            dataset_array.attrs.update(_to_native_type(dataset_attrs))
 
         return dataset_array
 
@@ -287,8 +289,21 @@ def _update_dataset_attrs(root_container, dataset,
         parent_container = root_container
 
     # write the parent (group) metadata and the dataset metadata
-    parent_container.attrs.update(parent_attrs)
-    dataset.attrs.update(dataset_attrs)
+    parent_container.attrs.update(_to_native_type(parent_attrs))
+    dataset.attrs.update(_to_native_type(dataset_attrs))
+
+
+def _to_native_type(obj):
+    if isinstance(obj, np.generic):
+        return obj.item()
+
+    if isinstance(obj, (list, tuple)):
+        return [_to_native_type(x) for x in obj]
+
+    if isinstance(obj, dict):
+        return {k: _to_native_type(v) for k, v in obj.items()}
+
+    return obj
 
 
 def get_voxel_spacing(attrs: dict):
@@ -875,11 +890,7 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
 
 def _get_data_store(data_path, data_store_name):
     """Choose the correct zarr.Store type, N5 or Directory/Zarr"""
-    if data_store_name is None or data_store_name == 'n5':
-        return zarr.N5Store(data_path)
-    else:
-        return zarr.LocalStore(data_path)
-
+    return zarr.storage.LocalStore(data_path)
 
 
 def _read_tiff(input_path, block_coords=None):

@@ -54,7 +54,7 @@ class ImageData:
             imgdtype = imgarray.dtype
             if convert_to_little_endian and imgdtype.byteorder == '>':
                 # Bigstream algorithms do not support big-endian data
-                self.image_ndarray = imgarray.byteswap().newbyteorder('<')
+                self.image_ndarray = imgarray.astype(imgdtype.newbyteorder('<'))
             else:
                 self.image_ndarray = imgarray
 
@@ -152,7 +152,7 @@ def as_image_data(image_data, image_timeindex=None, image_channels=None):
         return ImageData(image_arraydata=image_data, read_attrs=False,
                          image_timeindex=image_timeindex,
                          image_channel=image_channels)
-    elif isinstance(image_data, zarr.core.Array):
+    elif isinstance(image_data, zarr.Array):
         return ImageData(image_arraydata=image_data,
                          image_attrs=image_data.attrs,
                          image_timeindex=image_timeindex,
@@ -186,7 +186,7 @@ def calc_full_voxel_resolution_attr(voxel_spacing, downsampling):
     if downsampling is None:
         return list(voxel_spacing)[::-1]
 
-    return list(np.array(voxel_spacing) / downsampling)[::-1]
+    return (np.array(voxel_spacing) / downsampling)[::-1].tolist()
 
 
 def calc_downsampling_attr(downsampling):

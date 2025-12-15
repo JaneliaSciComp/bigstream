@@ -143,7 +143,7 @@ def _read_block(block_coords, image_data,
             image_channel=image_repr.image_channel,
         )
         if b.dtype.byteorder == '>':
-            b = b.byteswap().newbyteorder('<')
+            b = b.astype(b.dtype.newbyteorder('<'))
         return b
 
 
@@ -436,7 +436,7 @@ def distributed_alignment_pipeline(
 
     Returns
     -------
-    field : nd array or zarr.core.Array
+    field : nd array or zarr.Array
         Local affines stitched together into a displacement field
         Shape is `fix.shape` + (3,) as the last dimension contains
         the displacement vector.

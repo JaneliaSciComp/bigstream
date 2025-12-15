@@ -150,7 +150,7 @@ def distributed_piecewise_alignment_pipeline(
 
     Returns
     -------
-    field : nd array or zarr.core.Array
+    field : nd array or zarr.Array
         Local affines stitched together into a displacement field
         Shape is `fix.shape` + (3,) as the last dimension contains
         the displacement vector.
@@ -316,13 +316,13 @@ def distributed_piecewise_alignment_pipeline(
             fix = fix_zarr[fix_slices]
             mov = mov_zarr[mov_slices]
             fix_mask, mov_mask = fix_mask_zarr, mov_mask_zarr
-            if isinstance(fix_mask_zarr, zarr.core.Array):
+            if isinstance(fix_mask_zarr, zarr.Array):
                 ratio = np.array(fix_mask_zarr.shape) / fix_zarr.shape
                 start = np.round( ratio * fix_block_coords[0] ).astype(int)
                 stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)
                 fix_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
                 fix_mask = fix_mask_zarr[fix_mask_slices]
-            if isinstance(mov_mask_zarr, zarr.core.Array):
+            if isinstance(mov_mask_zarr, zarr.Array):
                 ratio = np.array(mov_mask_zarr.shape) / mov_zarr.shape
                 start = np.round( ratio * mov_start ).astype(int)
                 stop = np.round( ratio * mov_stop ).astype(int)
@@ -586,7 +586,7 @@ def nested_distributed_piecewise_alignment_pipeline(
 
     Returns
     -------
-    field : nd array or zarr.core.Array
+    field : nd array or zarr.Array
         Composition of all alignments into a single displacement vector field.
     """
 

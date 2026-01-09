@@ -229,13 +229,19 @@ def apply_transform_to_coordinates(
             if isinstance(origin, tuple): origin = origin[iii]
 
             # get coordinates in transform voxel units, reformat for map_coordinates
-            if origin is not None: coordinates -= origin
+            if origin is not None:
+                coordinates -= origin
+
             coordinates = ( coordinates / spacing ).transpose()
 
             # interpolate position field at coordinates, reformat, return
             ndims = transform.shape[-1]
-            if 'mode' not in kwargs.keys(): kwargs['mode'] = 'nearest'
-            interp = lambda x: map_coordinates(x, coordinates, **kwargs)
+            if 'mode' not in kwargs.keys():
+                kwargs['mode'] = 'nearest'
+
+            def interp(x):
+                return map_coordinates(x, coordinates, **kwargs)
+
             dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()
             coordinates = coordinates.transpose() * spacing + dX
             if origin is not None: coordinates += origin

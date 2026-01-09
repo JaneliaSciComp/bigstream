@@ -1,6 +1,5 @@
 # Create final image
 FROM ghcr.io/janeliascicomp/dask:2025.11.0-py12-ol9
-ARG TARGETPLATFORM
 
 RUN dnf install -y \
         git \

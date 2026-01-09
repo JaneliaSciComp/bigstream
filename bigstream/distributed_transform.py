@@ -511,13 +511,21 @@ def _transform_coords(block_index,
             # no need to do any cropping if it's an affine matrix
             cropped_transforms.append(transform)
 
-    # apply transforms
-    warped_coords = bs_transform.apply_transform_to_coordinates(
-        points_coords,
-        cropped_transforms,
-        transform_spacing=coords_spacing,
-        transform_origin=block_origin[::-1]
-    )
+    try:
+        # apply transforms
+        warped_coords = bs_transform.apply_transform_to_coordinates(
+            points_coords,
+            cropped_transforms,
+            transform_spacing=coords_spacing,
+            transform_origin=block_origin[::-1]
+        )
+    except Exception as e:
+        logger.exception((
+            f'Error transforming block {block_index} '
+            f'with slice coords {block_slice_coords} '
+            f'and points_coords shape {points_coords.shape}'
+        ))
+        raise e
 
     warped_coord_indexed_values = np.empty_like(coord_indexed_values)
     # flipped the zyx warped coords back to xyz

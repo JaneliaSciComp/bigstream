@@ -240,7 +240,7 @@ def apply_transform_to_coordinates(
                 kwargs['mode'] = 'nearest'
 
             def interp(x):
-                logger.info(f'Interpolate {x.shape}, coords: {coordinates}, args: {kwargs}')
+                logger.info(f'Interpolate {x.shape}, coords: {coordinates.shape}, args: {kwargs}')
                 return map_coordinates(x, coordinates, **kwargs)
 
             dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()

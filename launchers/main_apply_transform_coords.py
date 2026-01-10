@@ -1,4 +1,5 @@
 import argparse
+import logging
 import numpy as np
 import bigstream.io_utility as io_utility
 
@@ -12,7 +13,7 @@ from bigstream.image_data import get_spatial_values
 from .cli import (inttuple, floattuple, stringlist)
 
 
-logger = None
+logger:logging.Logger
 
 
 def _define_args():
@@ -145,15 +146,8 @@ def _run_apply_transform(args):
                                           worker_cpus=args.worker_cpus)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
     # read local deform, but ignore attributes as they are not needed
-    local_deform, _ = io_utility.open(args.local_transform,
-                                      args.local_transform_subpath)
-
-    if (args.processing_blocksize is not None and
-        len(args.processing_blocksize) > 0):
-        processing_blocksize = args.processing_blocksize
-    else:
-        # default to output blocksize
-        processing_blocksize = (args.partition_size,) * 3
+    local_deform, local_deform_attrs = io_utility.open(args.local_transform,
+                                                       args.local_transform_subpath)
 
     if args.output_coords:
         if args.affine_transformations:
@@ -162,15 +156,29 @@ def _run_apply_transform(args):
         else:
             affine_transforms_list = []
 
+        if local_deform is not None:
+            transform_spacing = io_utility.get_voxel_spacing(local_deform_attrs)
+        else:
+            transform_spacing = 1
+
         voxel_spacing = _get_coords_spacing(args.input_volume,
                                             args.input_dataset,
                                             args.pixel_resolution,
                                             args.downsampling)
+
+        if (args.processing_blocksize is not None and
+            len(args.processing_blocksize) > 0):
+            processing_blocksize = args.processing_blocksize
+        else:
+            # default to output blocksize
+            processing_blocksize = (args.partition_size,) * 3
+
         warped_zyx_coords = distributed_apply_transform_to_coordinates(
             zyx_coords,
             affine_transforms_list + [local_deform], # transform_list
             processing_blocksize,
             cluster_client,
+            transform_spacing=transform_spacing,
             coords_spacing=voxel_spacing,
         )
         output_coords = np.empty_like(warped_zyx_coords)

@@ -1,5 +1,6 @@
 import functools
 import logging
+import math
 import numpy as np
 import traceback
 
@@ -350,7 +351,8 @@ def distributed_apply_transform_to_coordinates(
     transform_list,
     voxel_blocksize,
     cluster_client,
-    coords_spacing=None,
+    transform_spacing=(1,),
+    coords_spacing=(1,),
     coords_origin=None,
 ):
     """
@@ -361,7 +363,7 @@ def distributed_apply_transform_to_coordinates(
     ----------
     coordinates : Nxd array
         The coordinates to move. N such coordinates in d dimensions.
-        Typically coordinates are expected to be as z, y, x, 
+        Typically coordinates are expected to be as z, y, x in physical coordinate system,
         unless the displacement vector uses a different coordinate system
 
     transform_list : list
@@ -407,7 +409,8 @@ def distributed_apply_transform_to_coordinates(
                  f'Block size: {voxel_blocksize}, ' +
                  f'Phys block size {phys_blocksize},' +
                  f'Vol size: {vol_size}, ' +
-                 f'Voxel spacing: {coords_spacing}, ' +
+                 f'Coordinates spacing: {coords_spacing}, ' +
+                 f'Transformation spacing: {transform_spacing}, ' +
                  f'NBlocks: {nblocks}')
     blocks_indexes = []
     blocks_slices = []
@@ -446,6 +449,7 @@ def distributed_apply_transform_to_coordinates(
         blocks_points,
         blocks_points_indexes,
         coords_spacing=coords_spacing,
+        transform_spacing=transform_spacing,
         transform_list=transform_list,
     )
 
@@ -479,7 +483,8 @@ def _transform_coords(block_index,
                       block_origin,
                       coord_indexed_values,
                       coord_indices,
-                      coords_spacing=None,
+                      coords_spacing=(1,),
+                      transform_spacing=(1,),
                       transform_list=[]):
     # read relevant region of transform
     logger.info((
@@ -494,15 +499,16 @@ def _transform_coords(block_index,
 
     cropped_transforms = []
     for _, transform in enumerate(transform_list):
-        if transform.shape != (4, 4):
+        if len(transform.shape) not in [1, 2]:
             crop_slices = []
+            # convert block voxel coordinates into corresponding transform voxel coordinates
+            # keeping in mind that block voxel uses coords_spacing
+            # and transform block uses transform_spacing
             for axis in range(transform.ndim-1):
-                start = block_slice_coords[axis].start
-                stop = block_slice_coords[axis].stop
-                if transform.shape[axis] < stop:
-                    crop_slices.append(slice(start, transform.shape[axis]))
-                else:
-                    crop_slices.append(slice(start, stop))
+                start = max(math.floor(block_slice_coords[axis].start * coords_spacing[axis] / transform_spacing[axis]), 0)
+                stop = min(math.ceil(block_slice_coords[axis].stop * coords_spacing[axis] / transform_spacing[axis]), transform.shape[axis])
+                crop_slices.append(slice(start, stop))
+
             # for vector displacement fields crop the transformation
             cropped_transform = transform[tuple(crop_slices)]
             logger.debug((

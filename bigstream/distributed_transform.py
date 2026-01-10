@@ -402,7 +402,7 @@ def distributed_apply_transform_to_coordinates(
     phys_blocksize = np.array(voxel_blocksize)*coords_spacing[::-1]
     min_coord = np.min(coordinates[:, 0:3], axis=0)
     max_coord = np.max(coordinates[:, 0:3], axis=0)
-    vol_size = max_coord - min_coord
+    vol_size = max_coord - min_coord # volume size in physical space coordinates
     nblocks = np.ceil(vol_size / phys_blocksize + 1).astype(int)
     logger.debug(f'Min coords: {min_coord}, '+ 
                  f'Max coords: {max_coord}, ' +
@@ -416,6 +416,10 @@ def distributed_apply_transform_to_coordinates(
     blocks_slices = []
     blocks_origins = []
     blocks_points, blocks_points_indexes = [], []
+    # Partition points into spatial blocks for efficient processing:
+    # - Groups nearby points together (spatial locality)
+    # - Allows cropping the transform field to only the needed region per block
+    # - Enables parallel processing of independent blocks
     for (i, j, k) in np.ndindex(*nblocks):
         block_index = (i, j, k)
         block_start = voxel_blocksize * np.array(block_index)
@@ -429,6 +433,7 @@ def distributed_apply_transform_to_coordinates(
         ))
         not_too_low = np.all(coordinates[:, 0:3] >= lower_bound, axis=1)
         not_too_high = np.all(coordinates[:, 0:3] < upper_bound, axis=1)
+        # get the position of all points from the block
         point_indexes = np.nonzero(not_too_low * not_too_high)[0]
         if point_indexes.size > 0:
             logger.info(f'Add {point_indexes.size} to block {block_index}')

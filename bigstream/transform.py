@@ -225,8 +225,10 @@ def apply_transform_to_coordinates(
             # handle multiple spacings and origins
             spacing = transform_spacing[::-1]  # iterating through transforms in reverse
             origin = transform_origin
-            if isinstance(spacing, tuple): spacing = spacing[iii]
-            if isinstance(origin, tuple): origin = origin[iii]
+            if isinstance(spacing, tuple):
+                spacing = spacing[iii]
+            if isinstance(origin, tuple):
+                origin = origin[iii]
 
             # get coordinates in transform voxel units, reformat for map_coordinates
             if origin is not None:

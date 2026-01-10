@@ -503,10 +503,13 @@ def _transform_coords(block_index,
                     crop_slices.append(slice(start, transform.shape[axis]))
                 else:
                     crop_slices.append(slice(start, stop))
-            logger.debug(f'Crop transform {block_index}: ' +
-                         f'to {crop_slices} from {transform.shape}')
             # for vector displacement fields crop the transformation
-            cropped_transforms.append(transform[tuple(crop_slices)])
+            cropped_transform = transform[tuple(crop_slices)]
+            logger.debug((
+                f'Crop transform {block_index}: '
+                f'to {crop_slices} from {transform.shape} to {cropped_transform.shape} '
+            ))
+            cropped_transforms.append(cropped_transform)
         else:
             # no need to do any cropping if it's an affine matrix
             cropped_transforms.append(transform)

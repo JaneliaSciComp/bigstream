@@ -186,7 +186,7 @@ def _run_apply_transform(args):
         output_coords[:, 0:3] = warped_zyx_coords[:, [2, 1, 0]]
         output_coords[:, 3:] = warped_zyx_coords[:, 3:]
         logger.info(f'Save warped coords to {args.output_coords}')
-        np.savetxt(args.output_coords, output_coords, delimiter=',')
+        np.savetxt(args.output_coords, output_coords, delimiter=',', fmt='%4.4f')
         return args.output_coords
     else:
         return None

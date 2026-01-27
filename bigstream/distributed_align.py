@@ -550,6 +550,29 @@ def distributed_alignment_pipeline(
         static_transform_list=static_transform_list,
     )
 
+    read_block_method = functools.partial(
+        _read_blocks_for_processing,
+        fix=fix_image,
+        mov=mov_image,
+        fix_mask=fix_mask,
+        mov_mask=mov_mask,
+    )
+
+    compute_block_transform_method = functools.partial(
+        _compute_block_transform,
+        fix_spacing=fix_spacing,
+        mov_spacing=mov_spacing,
+        block_size=block_partition_size,
+        block_overlaps=overlaps,
+        nblocks=nblocks,
+        align_steps=block_align_steps,
+        output_transform=output_transform,
+    )
+
+    def block_processing_method(block_info):
+        # compose compute_block_transform_method . read_block_method . prepare_blocks_method
+        return compute_block_transform_method(read_block_method(prepare_blocks_method(block_info)))
+
     if max_cluster_jobs > 0:
         partitioned_fix_blocks = partition_all(max_cluster_jobs, fix_blocks_infos)
     else:
@@ -558,31 +581,10 @@ def distributed_alignment_pipeline(
     res = True
     for pidx, part_fix_blocks_infos in enumerate(partitioned_fix_blocks):
         logger.info(f'Process partition {pidx} ({len(part_fix_blocks_infos)} blocks)')
-        blocks = cluster_client.map(prepare_blocks_method, part_fix_blocks_infos)
-
-        blocks_to_process = cluster_client.map(
-            _read_blocks_for_processing,
-            blocks,
-            fix=fix_image,
-            mov=mov_image,
-            fix_mask=fix_mask,
-            mov_mask=mov_mask,
-        )
-
-        logger.info(f'Submit {block_align_steps} for {len(blocks)} blocks')
-        block_transform_res = cluster_client.map(_compute_block_transform,
-                                                blocks_to_process,
-                                                fix_spacing=fix_spacing,
-                                                mov_spacing=mov_spacing,
-                                                block_size=block_partition_size,
-                                                block_overlaps=overlaps,
-                                                nblocks=nblocks,
-                                                align_steps=block_align_steps,
-                                                output_transform=output_transform)
+        blocks_transform_res = cluster_client.map(block_processing_method, part_fix_blocks_infos)
         logger.info('Collect compute transform results for ' +
-                    f'{len(block_transform_res)} blocks')
-
-        part_res = _collect_results(block_transform_res)
+                    f'{len(blocks_transform_res)} blocks')
+        part_res = _collect_results(blocks_transform_res)
         if not part_res:
             logger.warning(f'Partition {pidx} had errors while collecting block results')
             res = False

@@ -8,7 +8,7 @@ class ImageData:
 
     def __init__(self, image_path=None, image_subpath=None,
                  image_arraydata=None, image_attrs=None,
-                 image_timeindex=None, image_channel=None,
+                 image_timeindex:int|None=None, image_channel:int|None=None,
                  read_attrs=True):
         self.image_path = image_path
         self.image_subpath = image_subpath

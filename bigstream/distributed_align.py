@@ -8,6 +8,7 @@ import traceback
 
 from dask.distributed import as_completed, MultiLock
 from itertools import product
+from toolz import partition_all
 
 from .align import alignment_pipeline
 from .image_data import (ImageData, as_image_data, get_spatial_values)
@@ -117,10 +118,10 @@ def _read_blocks_for_processing(blocks_info,
     #    origin,
     #    block_transforms
     logger.debug(f'Read blocks: {blocks_info}')
-    fix_block = _read_block(blocks_info[1], fix)
-    mov_block = _read_block(blocks_info[3], mov)
-    fix_mask_block = _read_block(blocks_info[4], fix_mask)
-    mov_mask_block = _read_block(blocks_info[5], mov_mask)
+    fix_block = _read_imagedata_block(blocks_info[1], fix)
+    mov_block = _read_imagedata_block(blocks_info[3], mov)
+    fix_mask_block = _read_imagedata_block(blocks_info[4], fix_mask)
+    mov_mask_block = _read_imagedata_block(blocks_info[5], mov_mask)
 
     return (blocks_info,
             fix_block,
@@ -129,8 +130,8 @@ def _read_blocks_for_processing(blocks_info,
             mov_mask_block)
 
 
-def _read_block(block_coords, image_data,
-                image_timeindex=None, image_channels=None):
+def _read_imagedata_block(block_coords, image_data,
+                          image_timeindex=None, image_channels=None):
     image_repr = as_image_data(image_data, image_timeindex=image_timeindex,
                                image_channels=image_channels)
     if image_repr is not None:
@@ -354,6 +355,7 @@ def distributed_alignment_pipeline(
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
+    max_cluster_jobs=0,
     **kwargs,
 ):
     """
@@ -500,7 +502,7 @@ def distributed_alignment_pipeline(
                                                 for a, b in zip(mask_start, mask_stop))
             if fix_mask_image is not None:
                 # mask is provided as an image
-                fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
+                fix_mask_crop = _read_imagedata_block(fix_mask_block_coords, fix_mask_image)
                 foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
                 logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
                 if foreground_ratio < foreground_percentage:
@@ -508,7 +510,7 @@ def distributed_alignment_pipeline(
                     foreground = False
             elif isinstance(fix_mask, (tuple, list)):
                 # mask is provided as a tuple
-                fix_mask_crop = _read_block(fix_mask_block_coords, fix_mask_image)
+                fix_mask_crop = _read_imagedata_block(fix_mask_block_coords, fix_mask_image)
                 fix_mask_crop = np.isin(fix_mask_crop, fix_mask, invert=True).astype(np.uint8)
                 foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
                 logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
@@ -548,31 +550,43 @@ def distributed_alignment_pipeline(
         static_transform_list=static_transform_list,
     )
 
-    blocks = cluster_client.map(prepare_blocks_method, fix_blocks_infos)
+    if max_cluster_jobs > 0:
+        partitioned_fix_blocks = partition_all(max_cluster_jobs, fix_blocks_infos)
+    else:
+        partitioned_fix_blocks = partition_all(len(fix_blocks_infos), fix_blocks_infos)
 
-    blocks_to_process = cluster_client.map(
-        _read_blocks_for_processing,
-        blocks,
-        fix=fix_image,
-        mov=mov_image,
-        fix_mask=fix_mask,
-        mov_mask=mov_mask,
-    )
+    res = True
+    for pidx, part_fix_blocks_infos in enumerate(partitioned_fix_blocks):
+        logger.info(f'Process partition {pidx} ({len(part_fix_blocks_infos)} blocks)')
+        blocks = cluster_client.map(prepare_blocks_method, part_fix_blocks_infos)
 
-    logger.info(f'Submit {block_align_steps} for {len(blocks)} blocks')
-    block_transform_res = cluster_client.map(_compute_block_transform,
-                                             blocks_to_process,
-                                             fix_spacing=fix_spacing,
-                                             mov_spacing=mov_spacing,
-                                             block_size=block_partition_size,
-                                             block_overlaps=overlaps,
-                                             nblocks=nblocks,
-                                             align_steps=block_align_steps,
-                                             output_transform=output_transform)
-    logger.info('Collect compute transform results for ' +
-                f'{len(block_transform_res)} blocks')
+        blocks_to_process = cluster_client.map(
+            _read_blocks_for_processing,
+            blocks,
+            fix=fix_image,
+            mov=mov_image,
+            fix_mask=fix_mask,
+            mov_mask=mov_mask,
+        )
 
-    res = _collect_results(block_transform_res)
+        logger.info(f'Submit {block_align_steps} for {len(blocks)} blocks')
+        block_transform_res = cluster_client.map(_compute_block_transform,
+                                                blocks_to_process,
+                                                fix_spacing=fix_spacing,
+                                                mov_spacing=mov_spacing,
+                                                block_size=block_partition_size,
+                                                block_overlaps=overlaps,
+                                                nblocks=nblocks,
+                                                align_steps=block_align_steps,
+                                                output_transform=output_transform)
+        logger.info('Collect compute transform results for ' +
+                    f'{len(block_transform_res)} blocks')
+
+        part_res = _collect_results(block_transform_res)
+        if not part_res:
+            logger.warning(f'Partition {pidx} had errors while collecting block results')
+            res = False
+
     logger.info('Distributed alignment completed successfully')
     return res
 

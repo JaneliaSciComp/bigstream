@@ -208,7 +208,7 @@ def extract_align_pipeline(config_filename, context, steps):
     config_filename:
     context: 'global_align' or 'local_align'
     """
-
+    logger.info(f'Extract {context} pipeline configuration from {config_filename} for steps: {steps}')
     default_config = yaml.safe_load(default_bigstream_config_str)
     if config_filename:
         with open(config_filename) as f:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bigstream"
-version = "5.0.2"
+version = "5.1.1"
 description = "Tools for distributed alignment of massive images"
 license = "BSD-3-Clause"
 requires-python = ">=3.10"
@@ -30,6 +30,7 @@ dependencies = [
     "scipy>=1.16.3",
     "SimpleITK>=2.5.3",
     "tifffile>=2025.10.16",
+    "toolz==1.1.0",
     "zarr>3,<4",
 ]
 

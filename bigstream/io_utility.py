@@ -1,9 +1,10 @@
+import json
 import logging
 import nrrd
-import numcodecs as codecs
 import numpy as np
 import os
 import re
+import tensorstore as ts
 import zarr
 
 from ome_zarr_models.v04.image import Dataset
@@ -270,7 +271,7 @@ def _resize_dataset_array(dataset, dataset_shape, for_timeindex, for_channel):
             i = i + 1
 
         # log and then resize in place
-        logger.info(f'Resize {dataset.store.path}:{dataset.path} to {resized_shape}')
+        logger.info(f'Resize {dataset.store}:{dataset.path} to {resized_shape}')
         dataset.resize(resized_shape)
 
 
@@ -414,17 +415,13 @@ def open(container_path, subpath,
           or os.path.exists(f'{real_container_path}/attributes.json')
           or container_type == 'n5'):
         logger.info(f'Open N5 {container_path} ({real_container_path})')
-        return _open_zarr(real_container_path, subpath,
-                          data_timeindex=data_timeindex,
-                          data_channels=data_channels,
-                          data_store_name='n5',
-                          block_coords=block_coords)
+        return _open_n5(real_container_path, subpath,
+                        block_coords=block_coords)
     elif container_ext == '.zarr' or container_type == 'zarr':
         logger.info(f'Open Zarr {container_path} ({real_container_path})')
         return _open_zarr(real_container_path, subpath,
                           data_timeindex=data_timeindex,
                           data_channels=data_channels,
-                          data_store_name='zarr',
                           block_coords=block_coords)
     else:
         logger.error(f'Cannot handle {container_path} ' +
@@ -546,10 +543,10 @@ def read_attributes(container_path, subpath, container_type=None):
     elif (container_ext == '.n5' or os.path.exists(f'{container_path}/attributes.json')
           or container_type == 'n5'):
         logger.info(f'Read N5 attrs {container_path} ({real_container_path})')
-        return _open_zarr_attrs(real_container_path, subpath, data_store_name='n5')
+        return _open_n5_attrs(real_container_path, subpath)
     elif container_ext == '.zarr' or container_type == 'zarr':
         logger.info(f'Read Zarr attrs {container_path} ({real_container_path})')
-        return _open_zarr_attrs(real_container_path, subpath, data_store_name='zarr')
+        return _open_zarr_attrs(real_container_path, subpath)
     elif (container_ext == '.tif' or container_ext == '.tiff'
           or container_type == 'tif'):
         logger.info(f'Read TIFF attrs {container_path} ({real_container_path})')
@@ -598,12 +595,11 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
     # image already in memory as nd-array
     if image is not None:
 
-        # simplest case, just apply the crop
         if len(block_coords) == len(image.shape):
+            # simplest case, just apply the crop
             return image[block_coords]
-
-        # when block_coords only specifies some but not all axes
         else:
+            # when block_coords only specifies some but not all axes
             block_selector = []
             if len(image.shape) - len(block_coords) >= 2:
                 # image has 2 additional dimensions - so it's very likely timepoints are present
@@ -635,19 +631,80 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
     return None
 
 
-def _open_zarr(data_path, data_subpath, data_store_name=None,
+def _open_n5(data_path, data_subpath, block_coords=None):
+    """
+    Open an N5 container using tensorstore, optionally read a region into memory.
+
+    Parameters
+    ----------
+    data_path : string
+        Path to the N5 container
+
+    data_subpath : string
+        Subpath within the N5 container (e.g., 's0' for scale level 0)
+
+    block_coords : tuple of slice objects (default: None)
+        A sub-region of the data to read. None returns the whole dataset.
+
+    Returns
+    -------
+    data : numpy array
+        The image data (or a slice of it if block_coords is provided)
+
+    attrs : dict
+        The attributes dictionary from the N5 container
+    """
+    try:
+        # Build the tensorstore spec for N5
+        spec = {
+            "driver": "n5",
+            "kvstore": {
+                "driver": "file",
+                "path": data_path
+            },
+        }
+        if data_subpath:
+            spec["path"] = data_subpath
+
+        # Open the dataset synchronously using .result()
+        dataset = ts.open(spec, read=True).result()
+
+        # Read the data - either the full array or a slice
+        if block_coords is not None:
+            data = dataset[block_coords].read().result()
+        else:
+            data = dataset.read().result()
+
+        # Get attributes from the N5 container
+        attrs = _open_n5_attrs(data_path, data_subpath)
+
+        # Add array metadata to attributes
+        attrs.update({
+            'dataType': data.dtype,
+            'dimensions': dataset.shape,
+            'blockSize': dataset.chunk_layout.read_chunk.shape,
+        })
+
+        logger.debug(f'Opened N5 {data_path}:{data_subpath}, shape={dataset.shape}, attrs={attrs}')
+        return data, attrs
+
+    except Exception as e:
+        logger.exception(f'Error opening N5 {data_path}:{data_subpath}')
+        raise e
+
+def _open_zarr(data_path, data_subpath,
                data_timeindex=None, data_channels=None,
                block_coords=None):
     """
-    Open a zarr/n5 container, optionally read a region into memory
+    Open a zarr container, optionally read a region into memory
     """
 
     # "There is no try, only do" -Yoda :D
     try:
 
         # guarantee a metadata file is in the container folder, identify store, open
-        zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
-        data_store = _get_data_store(zarr_container_path, data_store_name)
+        zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath)
+        data_store = _get_data_store(zarr_container_path)
         data_container = zarr.open(store=data_store, mode='r')
         data_container_attrs = data_container.attrs.asdict()
 
@@ -828,10 +885,53 @@ def _get_array_selector(axes, timeindex: int | None,
 
     return _selector
 
+
+def _open_n5_attrs(data_path, data_subpath):
+    """
+    Read attributes from an N5 container.
+
+    Parameters
+    ----------
+    data_path : string
+        Path to the N5 container
+
+    data_subpath : string
+        Subpath within the N5 container
+
+    Returns
+    -------
+    attrs : dict
+        The attributes dictionary from attributes.json
+    """
+    # Construct the full path to attributes.json
+    if data_subpath:
+        attrs_path = os.path.join(data_path, data_subpath, 'attributes.json')
+    else:
+        attrs_path = os.path.join(data_path, 'attributes.json')
+
+    # Check if attributes.json exists
+    if not os.path.exists(attrs_path):
+        logger.warning(f'No attributes.json found at {attrs_path}')
+        return {}
+
+    # Read and parse the JSON file
+    try:
+        with open(attrs_path, 'r') as f:
+            attrs = json.load(f)
+        logger.debug(f'Read N5 attributes from {attrs_path}: {attrs}')
+        return attrs
+    except json.JSONDecodeError as e:
+        logger.error(f'Error parsing attributes.json at {attrs_path}: {e}')
+        return {}
+    except Exception as e:
+        logger.error(f'Error reading attributes.json at {attrs_path}: {e}')
+        raise e
+
+
 def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
     try:
-        zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
-        data_store = _get_data_store(zarr_container_path, data_store_name)
+        zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath)
+        data_store = _get_data_store(zarr_container_path)
         data_container = zarr.open(store=data_store, mode='r')
         data_container_attrs = data_container.attrs.asdict()
 
@@ -854,18 +954,11 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         raise e
 
 
-def _adjust_data_paths(data_path, data_subpath, data_store_name):
+def _adjust_data_paths(data_path, data_subpath):
     """
     This methods adjusts the container and dataset paths such that
     the container paths always contains a .attrs file
     """
-
-    # N5 already conforms to desired requirement
-    if data_store_name == 'n5' or data_path.endswith('.n5') or data_path.endswith('.N5'):
-        # N5 container path is the same as the data_path
-        # and the subpath is the dataset path
-        return data_path, data_subpath
-
     # extract components of dataset path (data_subpath)
     dataset_path_arg = data_subpath if data_subpath is not None else ''
     dataset_comps = [c for c in dataset_path_arg.split('/') if c]
@@ -876,7 +969,7 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
         container_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         container_path = f'{data_path}/{container_subpath}'
         if (os.path.exists(f'{container_path}/.zattrs') or
-            os.path.exists(f'{container_path}/attributes.json')):
+            os.path.exists(f'{container_path}/zarr.json')):
             break
         dataset_comps_index = dataset_comps_index + 1
 
@@ -888,8 +981,8 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
     return container_path, new_subpath
 
 
-def _get_data_store(data_path, data_store_name):
-    """Choose the correct zarr.Store type, N5 or Directory/Zarr"""
+def _get_data_store(data_path):
+    """Get a local zarr store"""
     return zarr.storage.LocalStore(data_path)
 
 

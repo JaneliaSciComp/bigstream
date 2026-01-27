@@ -27,6 +27,7 @@ setuptools.setup(
         'morphsnakes>=2.0.0',
         'pynrrd>=1.0.0',
         'scikit-image>=0.20.0',
+        'tensorstore==0.1.80',
         'toolz==1.1.0',
     ]
 )

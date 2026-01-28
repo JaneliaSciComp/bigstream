@@ -604,6 +604,6 @@ def _collect_results(futures):
             traceback.print_tb(tb)
             res = False
         else:
-            logger.info(f'Finished computing deformation field for {r}')
+            logger.debug(f'Finished computing deformation field for {r}')
 
     return res

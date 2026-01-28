@@ -574,6 +574,7 @@ def distributed_alignment_pipeline(
         return compute_block_transform_method(read_block_method(prepare_blocks_method(block_info)))
 
     if max_cluster_jobs > 0:
+        logger.info(f'Split {len(fix_blocks_infos)} total blocks into partitions of up to {max_cluster_jobs} blocks')
         partitioned_fix_blocks = partition_all(max_cluster_jobs, fix_blocks_infos)
     else:
         partitioned_fix_blocks = partition_all(len(fix_blocks_infos), fix_blocks_infos)

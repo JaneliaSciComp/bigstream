@@ -519,7 +519,7 @@ def feature_point_ransac_affine_align(
         )
     logger.info(f'{context} found {len(fix_spots)} fixed spots')
     if len(fix_spots) < fix_spots_count_threshold:
-        logger.info(f'{context} insufficient fixed spots found')
+        logger.info(f'{context} insufficient fixed spots found ({len(fix_spots)}) expected {fix_spots_count_threshold}')
         if safeguard_exceptions:
             raise ValueError('fix spot detection safeguard failed')
         else:
@@ -542,7 +542,7 @@ def feature_point_ransac_affine_align(
         )
     logger.info(f'{context} found {len(mov_spots)} moving spots')
     if len(mov_spots) < mov_spots_count_threshold:
-        logger.info('insufficient moving spots found')
+        logger.info(f'{context} insufficient moving spots found ({len(mov_spots)}) expected {mov_spots_count_threshold}')
         if safeguard_exceptions:
             raise ValueError('mov spot detection safeguard failed')
         else:

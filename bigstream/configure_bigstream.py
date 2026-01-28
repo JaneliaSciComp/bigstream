@@ -24,6 +24,7 @@ def configure_logging(config_file, verbose):
 
 def set_cpu_resources(cpus:int):
     if cpus:
+        print(f'Set CPU resources: {cpus}')
         os.environ['ITK_THREADS'] = str(cpus)
         os.environ['MKL_NUM_THREADS'] = str(cpus)
         os.environ['NUM_MKL_THREADS'] = str(cpus)

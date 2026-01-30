@@ -767,7 +767,10 @@ def random_affine_search(
     # generate random parameters, first row is always identity
     params = np.zeros((random_iterations+1, 12))
     params[:, 6:9] = 1  # default for scale params
-    F = lambda mx: 2 * (mx * np.random.rand(random_iterations, 3)) - mx
+
+    def F(mx):
+        return 2 * (mx * np.random.rand(random_iterations, 3)) - mx
+
     if max_translation: params[1:, 0:3] = F(max_translation)
     if max_rotation: params[1:, 3:6] = F(max_rotation)
     if max_scale: params[1:, 6:9] = np.e**F(np.log(max_scale))

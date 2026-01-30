@@ -104,11 +104,6 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
                              type=int, default=0,
                              help='Number of cpus allocated to a dask worker')
-    args_parser.add_argument('--max-cluster-jobs', '--max_cluster_jobs',
-                             dest='max_cluster_jobs',
-                             type=int, default=0,
-                             help='Maximum number of cluster jobs executed in parallel',
-                            )
 
     args_parser.add_argument('--compression', dest='compression',
                              default='gzip',
@@ -148,7 +143,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          logging_config=None,
                          compressor=None,
                          verbose=False,
-                         max_cluster_jobs=0,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
                                                        'local_align',
@@ -271,7 +265,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             inv_use_root,
             cluster_client,
             compressor,
-            max_cluster_jobs,
         )
     finally:
         cluster_client.close()
@@ -305,8 +298,7 @@ def _align_local_data(fix_image: ImageData,
                       inv_pad,
                       inv_use_root,
                       cluster_client,
-                      compressor,
-                      max_cluster_jobs):
+                      compressor):
     logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
                 f'using {ut.get_number_of_cores()} cpus')
 
@@ -375,7 +367,6 @@ def _align_local_data(fix_image: ImageData,
             mov_mask=mov_mask,
             static_transform_list=global_affine_transforms,
             output_transform=transform,
-            max_cluster_jobs=max_cluster_jobs,
         )
         logger.info('Finished computing the deformation field ' +
                     f'{transform_path} for the local alignment of ' +
@@ -548,7 +539,6 @@ def main():
         logging_config=args.logging_config,
         compressor=args.compression,
         verbose=args.verbose,
-        max_cluster_jobs=args.max_cluster_jobs,
     )
 
 

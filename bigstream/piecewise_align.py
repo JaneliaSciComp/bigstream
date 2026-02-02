@@ -218,8 +218,8 @@ def distributed_piecewise_alignment_pipeline(
         indices, slices = [], []
         for (i, j, k) in np.ndindex(*nblocks):
             start = blocksize * (i, j, k) - overlaps
-            stop = start + blocksize + 2 * overlaps
             start = np.maximum(0, start)
+            stop = start + blocksize + 2 * overlaps
             stop = np.minimum(fix.shape, stop)
             coords = tuple(slice(x, y) for x, y in zip(start, stop))
     
@@ -297,8 +297,8 @@ def distributed_piecewise_alignment_pipeline(
             # Now we can determine the moving image crop
             mov_block_coords = np.round(mov_block_coords_phys / mov_spacing).astype(int)
             mov_start = np.min(mov_block_coords, axis=0)
-            mov_stop = np.max(mov_block_coords, axis=0)
             mov_start = np.maximum(0, mov_start)
+            mov_stop = np.max(mov_block_coords, axis=0)
             mov_stop = np.minimum(np.array(mov_zarr.shape)-1, mov_stop)
             mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
     

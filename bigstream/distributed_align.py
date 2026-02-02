@@ -1,4 +1,3 @@
-import functools
 import gc
 import logging
 import bigstream.transform as bst
@@ -56,8 +55,8 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     mov_block_coords = np.round(
         mov_block_phys_coords / mov_spacing).astype(int)
     mov_start = np.min(mov_block_coords, axis=0)
-    mov_stop = np.max(mov_block_coords, axis=0)
     mov_start = np.maximum(0, mov_start)
+    mov_stop = np.max(mov_block_coords, axis=0)
     mov_stop = np.minimum(np.array(mov_shape)-1, mov_stop)
     mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
 
@@ -143,8 +142,11 @@ def _read_imagedata_block(block_coords, image_data,
             image_timeindex=image_repr.image_timeindex,
             image_channel=image_repr.image_channel,
         )
-        if b.dtype.byteorder == '>':
-            b = b.astype(b.dtype.newbyteorder('<'))
+        if b is not None:
+            if np.issubdtype(b.dtype, np.floating):
+                tmp_b = b.astype(np.float32)
+                del b
+                b = tmp_b
         return b
 
 
@@ -479,8 +481,8 @@ def distributed_alignment_pipeline(
     fix_blocks_neighbors = []
     for bi in np.ndindex(*nblocks):
         start = block_partition_size * bi - overlaps
-        stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
+        stop = start + block_partition_size + 2 * overlaps
         stop = np.minimum(fix_spatial_dims, stop)
         block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
@@ -536,39 +538,46 @@ def distributed_alignment_pipeline(
     logger.info(f'Prepare params for {len(fix_blocks_infos)} ' +
                 f'blocks for a {fix_spatial_dims} volume')
 
-    prepare_blocks_method = functools.partial(
-        _prepare_compute_block_spatial_transform_params,
-        fix_shape=fix_spatial_dims,
-        mov_shape=mov_spatial_dims,
-        fix_spacing=fix_spacing,
-        mov_spacing=mov_spacing,
-        fix_fullmask_shape=fix_mask_spatial_dims,
-        mov_fullmask_shape=mov_mask_spatial_dims,
-        static_transform_list=static_transform_list,
-    )
+    # define partial functions that will be composed in the
+    # final block processing method
+    def prepare_blocks_method(block_info):
+        return _prepare_compute_block_spatial_transform_params(
+            block_info,
+            fix_shape=fix_spatial_dims,
+            mov_shape=mov_spatial_dims,
+            fix_spacing=fix_spacing,
+            mov_spacing=mov_spacing,
+            fix_fullmask_shape=fix_mask_spatial_dims,
+            mov_fullmask_shape=mov_mask_spatial_dims,
+            static_transform_list=static_transform_list,
+        )
 
-    read_block_method = functools.partial(
-        _read_blocks_for_processing,
-        fix=fix_image,
-        mov=mov_image,
-        fix_mask=fix_mask,
-        mov_mask=mov_mask,
-    )
+    def read_block_method(blocks_info):
+        return _read_blocks_for_processing(
+            blocks_info,
+            fix=fix_image,
+            mov=mov_image,
+            fix_mask=fix_mask,
+            mov_mask=mov_mask,
+        )
 
-    compute_block_transform_method = functools.partial(
-        _compute_block_transform,
-        fix_spacing=fix_spacing,
-        mov_spacing=mov_spacing,
-        block_size=block_partition_size,
-        block_overlaps=overlaps,
-        nblocks=nblocks,
-        align_steps=block_align_steps,
-        output_transform=output_transform
-    )
+    def compute_block_transform_method(transform_params):
+        return _compute_block_transform(
+            transform_params,
+            fix_spacing=fix_spacing,
+            mov_spacing=mov_spacing,
+            block_size=block_partition_size,
+            block_overlaps=overlaps,
+            nblocks=nblocks,
+            align_steps=block_align_steps,
+            output_transform=output_transform
+        )
 
     def block_processing_method(block_info):
         # compose compute_block_transform_method . read_block_method . prepare_blocks_method
-        return compute_block_transform_method(read_block_method(prepare_blocks_method(block_info)))
+        r1 = prepare_blocks_method(block_info)
+        r2 = read_block_method(r1)
+        return compute_block_transform_method(r2)
 
     # Partition blocks so non-adjacent blocks are processed together.
     # With 50% overlap, blocks spaced 3 apart in each dimension don't overlap.
@@ -586,7 +595,7 @@ def distributed_alignment_pipeline(
     res = True
     for pidx, (partition_key, part_fix_blocks_infos) in enumerate(partition_dict.items()):
         logger.info(f'Process partition {pidx} key={partition_key} ({len(part_fix_blocks_infos)} blocks)')
-        blocks_transform_res = cluster_client.map(block_processing_method, part_fix_blocks_infos)
+        blocks_transform_res = cluster_client.map(block_processing_method, part_fix_blocks_infos, pure=False)
         logger.info('Collect compute transform results for ' +
                     f'{len(blocks_transform_res)} blocks')
         part_res = _collect_results(blocks_transform_res)

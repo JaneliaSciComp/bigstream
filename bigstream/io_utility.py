@@ -418,7 +418,7 @@ def open(container_path, subpath,
         return _open_n5(real_container_path, subpath,
                         block_coords=block_coords)
     elif container_ext == '.zarr' or container_type == 'zarr':
-        logger.info(f'Open Zarr {container_path} ({real_container_path})')
+        logger.info(f'Open Zarr {container_path}:{subpath} ({real_container_path})')
         return _open_zarr(real_container_path, subpath,
                           data_timeindex=data_timeindex,
                           data_channels=data_channels,
@@ -874,6 +874,7 @@ def _get_array_selector(axes, timeindex: int | None,
     def _selector(a):
         if selection_exists:
             try:
+                logger.debug(f'Read {selector}')
                 # try to select the data using the selector
                 return a[tuple(selector)]
             except Exception  as e:

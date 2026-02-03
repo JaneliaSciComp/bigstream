@@ -30,8 +30,11 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     (fix_block_voxel_coords,
      fix_block_phys_coords) = _get_spatial_block_corner_coords(fix_block_coords,
                                                                fix_spacing)
-    logger.debug(f'Block index: {block_index} - ' +
-                 f'corner physical coords: {fix_block_phys_coords}')
+    logger.debug((
+        f'Block index: {block_index} - '
+        f'fix block corner physical coords: {fix_block_phys_coords} '
+        f'using fix spacing = {fix_spacing}'
+    ))
 
     # parse initial transforms
     # recenter affines, read deforms, apply transforms to crop coordinates
@@ -51,7 +54,8 @@ def _prepare_compute_block_spatial_transform_params(block_info,
 
     logger.debug((
         f'Block {block_index} :'
-        f'moving block physical coords {mov_block_phys_coords},'
+        f'moving block physical coords {mov_block_phys_coords}, '
+        f'using moving spacing = {mov_spacing}'
     ))
 
     block_transform_list = updated_block_transform_list[::-1]  # reverse it
@@ -93,7 +97,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
 
     logger.debug((
-        f'!!!!!!!Block {block_index} : '
+        f'Block {block_index} : '
         f'fix voxel coords {fix_block_voxel_coords}, '
         f'fix phys coords {fix_block_phys_coords} -> '
         f'mov origin phys coords {fix_block_phys_coords} -> '

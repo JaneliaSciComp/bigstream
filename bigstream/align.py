@@ -1426,6 +1426,16 @@ def alignment_pipeline(
         deformable align: a tuple with the bspline parameters and the
         vector field with shape equal to fix.shape + (3,)
     """
+
+    # check default case
+    if fix is None or mov is None:
+        ndim = len(fix_spacing)
+        default = np.eye(ndim + 1)
+        if 'deform' in [x[0] for x in steps]:
+            shape = fix.shape if fix is not None else mov.shape
+            default = np.zeros(shape + (ndim,), dtype=np.float32)
+        return default
+
     # define how to run alignment functions
     a = (fix, mov, fix_spacing, mov_spacing)
     b = {'fix_mask':fix_mask, 'mov_mask':mov_mask,

@@ -25,7 +25,6 @@ def _prepare_compute_block_spatial_transform_params(block_info,
                                                     fix_fullmask_shape=None,
                                                     mov_fullmask_shape=None,
                                                     static_transform_list=[]):
-
     logger.debug(f'Prepare block coords {block_info}')
     block_index, fix_block_coords, fix_block_neighbors = block_info
     (fix_block_voxel_coords,
@@ -50,24 +49,57 @@ def _prepare_compute_block_spatial_transform_params(block_info,
             transform)
         updated_block_transform_list.append(block_transform)
 
+    logger.debug((
+        f'Block {block_index} :'
+        f'moving block physical coords {mov_block_phys_coords},'
+    ))
+
     block_transform_list = updated_block_transform_list[::-1]  # reverse it
+
+    mov_start_phys_coords = np.min(mov_block_phys_coords, axis=0)
+    mov_stop_phys_coords = np.max(mov_block_phys_coords, axis=0)
+
+    logger.debug((
+        f'Block {block_index} : '
+        f'fix block start physical coords: {fix_block_voxel_coords[0]} '
+        f'fix block stop physical coords: {fix_block_voxel_coords[-1]} '
+        f'moving block start physical coords: {mov_start_phys_coords} '
+        f'moving block stop physical coords: {mov_stop_phys_coords} '
+    ))
+
+    # get moving image origin
+    new_origin = mov_start_phys_coords - fix_block_phys_coords[0]
+
     # get moving image crop, read moving data
     mov_block_coords = np.round(
         mov_block_phys_coords / mov_spacing).astype(int)
+
+    logger.debug((
+        f'Block {block_index} :'
+        f'moving block voxel coords {mov_block_coords},'
+    ))
+
     mov_start = np.min(mov_block_coords, axis=0)
-    mov_start = np.maximum(0, mov_start)
     mov_stop = np.max(mov_block_coords, axis=0)
+
+    logger.debug((
+        f'Block {block_index} : '
+        f'non-truncated moving block start (voxel coords): {mov_start} '
+        f'non-truncated moving block stop (voxel coords): {mov_stop} '
+    ))
+
+    mov_start = np.maximum(0, mov_start)
     mov_stop = np.minimum(np.array(mov_shape)-1, mov_stop)
     mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
 
-    # get moving image origin
-    new_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
-
-    logger.debug(f'Block {block_index} :' +
-                 f'fix voxel coords {fix_block_voxel_coords},' +
-                 f'fix phys coords {fix_block_phys_coords} -> ' +
-                 f'mov coords {mov_slices},' +
-                 f'mov phys coords {mov_block_phys_coords}')
+    logger.debug((
+        f'!!!!!!!Block {block_index} : '
+        f'fix voxel coords {fix_block_voxel_coords}, '
+        f'fix phys coords {fix_block_phys_coords} -> '
+        f'mov origin phys coords {fix_block_phys_coords} -> '
+        f'mov block slices {mov_slices}, '
+        f'mov phys coords {mov_block_phys_coords} '
+    ))
 
     # read masks
     fix_blockmask_coords, mov_blockmask_coords = None, None
@@ -167,13 +199,14 @@ def _get_spatial_block_corner_coords(block_slice_coords, voxel_spacing):
 
 
 def _get_spatial_moving_block_coords(fix_shape,
-                             fix_spacing,
-                             fix_block_min_voxel_coords,
-                             fix_block_max_voxel_coords,
-                             fix_block_phys_coords,
-                             original_mov_block_phys_coords,
-                             original_transform):
+                                     fix_spacing,
+                                     fix_block_min_voxel_coords,
+                                     fix_block_max_voxel_coords,
+                                     fix_block_phys_coords,
+                                     original_mov_block_phys_coords,
+                                     original_transform):
     if len(original_transform.shape) == 2:
+        logger.debug(f'Apply affine transform {original_transform} to moving block at: {original_mov_block_phys_coords}')
         mov_block_phys_coords = bst.apply_transform_to_coordinates(
             original_mov_block_phys_coords,
             [original_transform,],
@@ -181,15 +214,16 @@ def _get_spatial_moving_block_coords(fix_shape,
         block_transform = bst.change_affine_matrix_origin(
             original_transform, fix_block_phys_coords[0])
     else:
+        logger.debug(f'Apply deform field of shape {original_transform.shape} to {original_mov_block_phys_coords}')
+        spacing = ut.relative_spacing(original_transform.shape,
+                                      fix_shape,
+                                      fix_spacing)
         ratio = np.array(original_transform.shape[:-1]) / fix_shape
         start = np.round(ratio * fix_block_min_voxel_coords).astype(int)
         stop = np.round(ratio * (fix_block_max_voxel_coords + 1)).astype(int)
         transform_slices = tuple(slice(a, b)
                                  for a, b in zip(start, stop))
         block_transform = original_transform[transform_slices]
-        spacing = ut.relative_spacing(block_transform.shape,
-                                      fix_shape,
-                                      fix_spacing)
         origin = spacing * start
         mov_block_phys_coords = bst.apply_transform_to_coordinates(
             original_mov_block_phys_coords, [block_transform,], spacing, origin

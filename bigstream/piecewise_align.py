@@ -314,7 +314,7 @@ def distributed_piecewise_alignment_pipeline(
     
             ################ Read fix and moving data ########################
             fix = fix_zarr[fix_slices]
-            mov = mov_zarr[mov_slices]
+            mov = mov_zarr[mov_slices] if np.all(mov_stop > 0) else None  # edge case: mov block outside domain
             fix_mask, mov_mask = fix_mask_zarr, mov_mask_zarr
             if isinstance(fix_mask_zarr, zarr.core.Array):
                 ratio = np.array(fix_mask_zarr.shape) / fix_zarr.shape
@@ -327,7 +327,7 @@ def distributed_piecewise_alignment_pipeline(
                 start = np.round( ratio * mov_start ).astype(int)
                 stop = np.round( ratio * mov_stop ).astype(int)
                 mov_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
-                mov_mask = mov_mask_zarr[mov_mask_slices]
+                mov_mask = mov_mask_zarr[mov_mask_slices] if np.all(stop > 0) else None
             ##################################################################
     
             ################ Parse steps #####################################
@@ -339,9 +339,10 @@ def distributed_piecewise_alignment_pipeline(
     
             ############################ Align ###############################
             # run alignment pipeline
+            mov_shape = mov.shape if mov is not None else 0
             logger.info(f'Compute block transform' +
                         f'{block_index}: {fix_slices}, {mov_origin}' +
-                        f'fix shape: {fix.shape}, mov_shape: {mov.shape}' +
+                        f'fix shape: {fix.shape}, mov_shape: {mov_shape}' +
                         f'{static_transform_list}')
             transform = alignment_pipeline(
                 fix, mov, fix_spacing, mov_spacing, steps,

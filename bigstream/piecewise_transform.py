@@ -303,8 +303,8 @@ def distributed_apply_transform(
         block_coords.append( tuple(slice(x, y) for x, y in zip(start, stop)) )
 
         start = blocksize * index - overlap
-        start = np.maximum(0, start)
         stop = start + blocksize + 2 * overlap
+        start = np.maximum(0, start)
         stop = np.minimum(fix_zarr[:-1], stop)
         block_coords_w_overlap.append( tuple(slice(x, y) for x, y in zip(start, stop)) )
 
@@ -632,9 +632,9 @@ def distributed_invert_displacement_vector_field(
         start = blocksize * (i, j, k)
         stop = start + blocksize
         start_ol = start - overlap
-        start_ol = np.maximum(0, start_ol)
-
         stop_ol = stop + overlap
+
+        start_ol = np.maximum(0, start_ol)
         stop = np.minimum(field_zarr.shape[:-1], stop)
         stop_ol = np.minimum(field_zarr.shape[:-1], stop_ol)
 

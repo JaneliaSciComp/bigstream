@@ -109,8 +109,8 @@ def distributed_apply_transform(
     blocks_coords = []
     for bi in np.ndindex(*nblocks):
         start = block_partition_size * bi - overlaps
-        start = np.maximum(0, start)
         stop = start + block_partition_size + 2 * overlaps
+        start = np.maximum(0, start)
         stop = np.minimum(fix_spatial_dims, stop)
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
         blocks_coords.append(block_coords)
@@ -613,8 +613,8 @@ def distributed_invert_displacement_vector_field(
     blocks_coords = []
     for bi in np.ndindex(*nblocks):
         start = block_partition_size * bi - overlaps
-        start = np.maximum(0, start)
         stop = start + block_partition_size + 2 * overlaps
+        start = np.maximum(0, start)
         stop = np.minimum(vectorfield_array.shape[:-1], stop)
         coords = tuple(slice(x, y) for x, y in zip(start, stop))
         blocks_coords.append(coords)

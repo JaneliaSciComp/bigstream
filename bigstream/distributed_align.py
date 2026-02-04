@@ -6,8 +6,9 @@ import bigstream.utility as ut
 import time
 import traceback
 
-from dask.distributed import as_completed
+from dask.distributed import as_completed, MultiLock
 from itertools import product
+from toolz import partition_all
 
 from .align import alignment_pipeline
 from .image_data import (ImageData, as_image_data, get_spatial_values)
@@ -324,12 +325,26 @@ def _compute_block_transform(compute_transform_params,
                  f'block  {block_index} transform in {end_time-start_time}s')
 
     if output_transform is not None:
-        # write result to disk
-        logger.info(f'Writing block {block_index} at {block_coords}')
-        output_block = output_transform[block_coords] + transform
-        output_transform[block_coords] = output_block
-        del output_block
-        logger.info(f'Finished writing block {block_index} at {block_coords}')
+        # acquire a lock for writing this block and block all the neighbors from writing
+        lock_strs = []
+        for neighbor_offset in product((-1, 0, 1), repeat=len(block_index)):
+            if block_neighbors.get(neighbor_offset, False):
+                lock_index = tuple(x + y for x, y in zip(block_index, neighbor_offset))
+                lock_strs.append(str(lock_index))
+        lock = MultiLock(lock_strs)
+        lock.acquire()
+        logger.debug(f'Block {block_index} lock {lock_strs}')
+        try:
+            # write result to disk
+            logger.info(f'Writing block {block_index} at {block_coords}')
+            output_block = output_transform[block_coords] + transform
+            output_transform[block_coords] = output_block
+            del output_block
+            logger.info(f'Finished writing block {block_index} at {block_coords}')
+        finally:
+            # release the lock
+            lock.release()
+            logger.debug(f'Block {block_index} released lock {lock_strs}')
 
     # Explicitly release memory
     del transform, weights, fix_block, mov_block
@@ -404,6 +419,7 @@ def distributed_alignment_pipeline(
     foreground_percentage=0.5,
     static_transform_list=[],
     output_transform=None,
+    max_cluster_jobs=0,
     **kwargs,
 ):
     """
@@ -628,28 +644,21 @@ def distributed_alignment_pipeline(
         r2 = read_block_method(r1)
         return compute_block_transform_method(r2)
 
-    # Partition blocks so non-adjacent blocks are processed together.
-    # With 50% overlap, blocks spaced 3 apart in each dimension don't overlap.
-    # Using a dict avoids creating empty partitions.
-    logger.info(f'Split {len(fix_blocks_infos)} into partitions of non-adjacent blocks')
-    partition_dict = {}
-    for fix_block_info in fix_blocks_infos:
-        block_index = fix_block_info[0]
-        partition_key = tuple(i % 3 for i in block_index)
-        if partition_key not in partition_dict:
-            partition_dict[partition_key] = []
-        partition_dict[partition_key].append(fix_block_info)
-    logger.info(f'Created {len(partition_dict)} non-empty partitions')
+    if max_cluster_jobs > 0:
+        logger.info(f'Split {len(fix_blocks_infos)} total blocks into partitions of up to {max_cluster_jobs} blocks')
+        partitioned_fix_blocks = partition_all(max_cluster_jobs, fix_blocks_infos)
+    else:
+        partitioned_fix_blocks = partition_all(len(fix_blocks_infos), fix_blocks_infos)
 
     res = True
-    for pidx, (partition_key, part_fix_blocks_infos) in enumerate(partition_dict.items()):
-        logger.info(f'Process partition {pidx} key={partition_key} ({len(part_fix_blocks_infos)} blocks)')
+    for pidx, part_fix_blocks_infos in enumerate(partitioned_fix_blocks):
+        logger.info(f'Process partition {pidx} ({len(part_fix_blocks_infos)} blocks)')
         blocks_transform_res = cluster_client.map(block_processing_method, part_fix_blocks_infos, pure=False)
         logger.info('Collect compute transform results for ' +
                     f'{len(blocks_transform_res)} blocks')
         part_res = _collect_results(blocks_transform_res)
         if not part_res:
-            logger.warning(f'Partition {pidx} key={partition_key} had errors while collecting block results')
+            logger.warning(f'Partition {pidx} had errors while collecting block results')
             res = False
         # Clear references and collect garbage between partitions
         del blocks_transform_res

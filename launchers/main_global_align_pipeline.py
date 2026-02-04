@@ -110,7 +110,9 @@ def _align_global_data(fix_image, fix_mask,
 
     logger.info(f'Calculate global transform using: {steps}')
     fix_spacing = get_spatial_values(fix_image.voxel_spacing)
+    logger.info(f'Fix image voxel spacing: {fix_spacing}')
     mov_spacing = get_spatial_values(mov_image.voxel_spacing)
+    logger.info(f'Moving image voxel spacing: {mov_spacing}')
 
     affine = alignment_pipeline(fix_image.image_array,
                                 mov_image.image_array,

@@ -154,9 +154,20 @@ def _read_blocks_for_processing(blocks_info,
     #    block_transforms
     logger.debug(f'Read blocks: {blocks_info}')
     fix_block = _read_imagedata_block(blocks_info[1], fix)
-    mov_block = _read_imagedata_block(blocks_info[3], mov)
+
+    mov_block_coords = blocks_info[3]
+    if mov_block_coords is None or any(s.stop <= 0 for s in mov_block_coords):
+        mov_block = None
+    else:
+        mov_block = _read_imagedata_block(mov_block_coords, mov)
+
     fix_mask_block = _read_imagedata_block(blocks_info[4], fix_mask)
-    mov_mask_block = _read_imagedata_block(blocks_info[5], mov_mask)
+
+    mov_mask_block_coords = blocks_info[5]
+    if mov_mask_block_coords is None or any(s.stop <= 0 for s in mov_mask_block_coords):
+        mov_mask_block = None
+    else:
+        mov_mask_block = _read_imagedata_block(mov_mask_block_coords, mov_mask)
 
     return (blocks_info,
             fix_block,
@@ -258,11 +269,11 @@ def _compute_block_transform(compute_transform_params,
      fix_mask_block, # this can be a mask descriptor
      mov_mask_block, # this can be a mask descriptor
      ) = compute_transform_params
-    logger.debug((
+    logger.info((
         'Compute block transform '
         f'{block_index}: {block_coords}, {new_origin_phys} '
-        f'fix shape: {fix_block.shape}, '
-        f'mov_shape: {mov_block.shape} '
+        f'fix shape: {fix_block.shape if fix_block is not None else 0}, '
+        f'mov_shape: {mov_block.shape if mov_block is not None else 0} '
         f'using {len(static_block_transform_list)} transforms '
     ))
     # run alignment pipeline

@@ -1006,7 +1006,8 @@ def affine_align(
     """
     logger.info(f'Affine align {context} -> {kwargs}')
     # determine the correct default
-    if default is None: default = np.eye(fix.ndim + 1)
+    if default is None:
+        default = np.eye(fix.ndim + 1)
     initial_transform_given = isinstance(initial_condition, np.ndarray)
     if initial_transform_given and np.all(default == np.eye(fix.ndim + 1)):
         default = initial_condition

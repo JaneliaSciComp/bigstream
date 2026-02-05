@@ -20,7 +20,7 @@ from bigstream.image_data import (ImageData, get_spatial_values,
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, extract_align_pipeline,
                   extract_registration_input_args, get_input_images,
-                  inttuple, floattuple)
+                  inttuple, floattuple, stringlist)
 
 
 logger:logging.Logger
@@ -38,6 +38,19 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--align-config',
                              dest='align_config',
                              help='Align config file')
+    args_parser.add_argument('--static-transforms',
+                             dest='static_transforms',
+                             type=stringlist,
+                             default=[],
+                             help='Static transforms applied before computing the alignment, which will not incorporated in the final deform result')
+    args_parser.add_argument('--initial-condition',
+                             dest='initial_condition',
+                             type=str,
+                             help='Initial condition applied before computing the alignment which will be incorporated in the final deform result')
+    args_parser.add_argument('--initial-condition-transform',
+                             dest='initial_condition_transform',
+                             type=str,
+                             help='Initial transforms applied before computing the alignment which will be incorporated in the final deform result')
     args_parser.add_argument('--global-affine-transform',
                              dest='global_affine',
                              help='Global affine transform path')
@@ -128,7 +141,9 @@ def _define_args(local_descriptor):
 
 
 def _run_local_alignment(reg_args: RegistrationInputs,
-                         align_config, global_affine,
+                         align_config,
+                         initial_condition,
+                         static_transforms,
                          processing_size=None,
                          processing_overlap=None,
                          transform_overlap=0.1,
@@ -249,7 +264,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             local_steps,
             local_processing_size,
             local_processing_overlap_factor,
-            [global_affine] if global_affine is not None else [],
+            initial_condition,
+            static_transforms,
             reg_args.transform_path(),
             transform_subpath,
             transform_blocksize,
@@ -284,7 +300,8 @@ def _align_local_data(fix_image: ImageData,
                       steps,
                       processing_size,
                       processing_overlap_factor,
-                      global_affine_transforms,
+                      initial_condition,
+                      static_transforms,
                       transform_path,
                       transform_subpath,
                       transform_blocksize,
@@ -373,7 +390,8 @@ def _align_local_data(fix_image: ImageData,
             overlap_factor=processing_overlap_factor,
             fix_mask=fix_mask,
             mov_mask=mov_mask,
-            static_transform_list=global_affine_transforms,
+            initial_condition=initial_condition,
+            static_transform_list=static_transforms,
             output_transform=transform,
             max_cluster_jobs=max_cluster_jobs,
         )
@@ -476,21 +494,21 @@ def _align_local_data(fix_image: ImageData,
             downsamplingFactors=calc_downsampling_attr(mov_image.voxel_downsampling),
             zarr_format=2,
         )
-        logger.info(f'Apply affine transform {global_affine_transforms}' +
+        logger.info(f'Apply static transforms {static_transforms}' +
                     f'and local transform {transform_path}:{transform_subpath}' +
                     f'to warp {mov_image} -> {align_path}:{align_subpath}')
         if deform_ok:
             deform_transforms = [transform]
         else:
             deform_transforms = []
-        affine_spacings = [(1.,) * mov_image.spatial_ndim for i in range(len(global_affine_transforms))]
+        affine_spacings = [(1.,) * mov_image.spatial_ndim for i in range(len(static_transforms))]
         transform_spacing = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing)])
         logger.info(f'Transforms spacings: {transform_spacing}')
 
         distributed_apply_transform(
             fix_image, mov_image,
             align_blocksize, # use block chunk size for distributing work
-            global_affine_transforms + deform_transforms, # transform_list
+            static_transforms + deform_transforms, # transform_list
             cluster_client,
             overlap_factor=transform_overlap_factor,
             aligned_data=align,
@@ -516,10 +534,29 @@ def main():
 
     logger.info(f'Local registration: {args}')
 
+    initial_condition = None
+    initial_condition = None
+    if args.initial_condition:
+        initial_condition = args.initial_condition
+    elif args.initial_condition_transform and os.path.exists(args.initial_condition_transform):
+        logger.info(f'Read initial condition transform from {args.initial_condition_transform}')
+        initial_condition = np.loadtxt(args.initial_condition_transform)
+
     global_affine = None
     if args.global_affine and os.path.exists(args.global_affine):
         logger.info(f'Read global affine from {args.global_affine}')
         global_affine = np.loadtxt(args.global_affine)
+
+    static_transforms = []
+    if len(args.static_transforms) > 0:
+        for transform_file in args.static_transforms:
+            logger.info(f'Load static transform from {transform_file}')
+            transform = np.loadtxt(transform_file)
+            static_transforms.append(transform)
+
+    if global_affine is not None:
+        # append global affine after the other static transformations
+        static_transforms.append(global_affine)
 
     reg_inputs = extract_registration_input_args(args, local_descriptor)
 
@@ -530,7 +567,8 @@ def main():
     _run_local_alignment(
         reg_inputs,
         args.align_config,
-        global_affine,
+        initial_condition,
+        static_transforms,
         processing_size=args.local_processing_size,
         processing_overlap=args.local_processing_overlap_factor,
         transform_overlap=args.local_transform_overlap_factor,

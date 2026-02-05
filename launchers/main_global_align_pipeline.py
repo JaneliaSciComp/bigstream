@@ -13,7 +13,8 @@ from bigstream.transform import apply_transform
 
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, extract_align_pipeline,
-                  extract_registration_input_args, get_input_images)
+                  extract_registration_input_args, get_input_images,
+                  stringlist)
 
 
 logger:logging.Logger
@@ -31,6 +32,15 @@ def _define_args(args_descriptor):
     args_parser.add_argument('--align-config',
                              dest='align_config',
                              help='Align config file')
+    args_parser.add_argument('--initial-transform',
+                             dest='initial_transform',
+                             type=str,
+                             help='Initial transform applied before computing the alignment - this will be incorporated in the transform result')
+    args_parser.add_argument('--static-transforms',
+                             dest='static_transforms',
+                             type=stringlist,
+                             default=[],
+                             help='Static transforms applied before computing the alignment that are not incorporated in the final transform result')
     args_parser.add_argument('--reuse-existing-transform',
                              dest='reuse_existing_transform',
                              action='store_true',
@@ -57,7 +67,11 @@ def _define_args(args_descriptor):
     return args_parser
 
 
-def _run_global_align(regArgs:RegistrationInputs, align_config, compressor):
+def _run_global_align(regArgs:RegistrationInputs,
+                      align_config,
+                      initial_transform,
+                      static_transforms,
+                      compressor):
     global_steps, _ = extract_align_pipeline(align_config,
                                              'global_align',
                                              regArgs.registration_steps)
@@ -68,7 +82,10 @@ def _run_global_align(regArgs:RegistrationInputs, align_config, compressor):
     (fix, fix_mask, mov, mov_mask) = get_input_images(regArgs)
     if fix.has_data() and mov.has_data():
         # calculate and apply the global transform
-        affine, aligned = _align_global_data(fix, fix_mask, mov, mov_mask, global_steps)
+        affine, aligned = _align_global_data(fix, fix_mask, mov, mov_mask,
+                                             global_steps,
+                                             initial_transform,
+                                             static_transforms)
         logger.debug(f'Global affine: {affine}')
         # save the global transform
         _save_global_transform(regArgs, affine)
@@ -93,7 +110,9 @@ def _run_global_align(regArgs:RegistrationInputs, align_config, compressor):
 
 def _align_global_data(fix_image, fix_mask,
                        mov_image, mov_mask,
-                       steps):
+                       steps,
+                       initial_transform,
+                       static_transforms):
     logger.info('Read image data for global alignment')
     fix_image.read_image()
     mov_image.read_image()
@@ -114,13 +133,20 @@ def _align_global_data(fix_image, fix_mask,
     mov_spacing = get_spatial_values(mov_image.voxel_spacing)
     logger.info(f'Moving image voxel spacing: {mov_spacing}')
 
+    if initial_transform is not None:
+        mov_origin = initial_transform[:3, 3]
+    else:
+        mov_origin = None
     affine = alignment_pipeline(fix_image.image_array,
                                 mov_image.image_array,
                                 fix_spacing,
                                 mov_spacing,
                                 steps,
                                 fix_mask=fix_mask,
-                                mov_mask=mov_mask)
+                                mov_mask=mov_mask,
+                                fix_origin=None,
+                                mov_origin=mov_origin,
+                                static_transform_list=static_transforms)
 
     logger.info('Apply affine transform')
     # apply transform
@@ -257,6 +283,18 @@ def main():
 
     logger.info(f'Global registration: {args}')
 
+    initial_transform = None
+    if args.initial_transform and os.path.exists(args.initial_transform):
+        logger.info(f'Read initial transform from {args.initial_transform}')
+        initial_transform = np.loadtxt(args.initial_transform)
+
+    static_transforms = []
+    if len(args.static_transforms) > 0:
+        for transform_file in args.static_transforms:
+            logger.info(f'Load static transform from {transform_file}')
+            transform = np.loadtxt(transform_file)
+            static_transforms.append(transform)
+
     reg_inputs = extract_registration_input_args(args, global_descriptor)
     global_transform = None
     global_transform_file = reg_inputs.transform_path()
@@ -272,7 +310,11 @@ def main():
 
     if global_transform is None:
         # no global transform found -> calculate it and then apply it
-        _run_global_align(reg_inputs, args.align_config, args.compression)
+        _run_global_align(reg_inputs,
+                          args.align_config,
+                          initial_transform,
+                          static_transforms,
+                          args.compression)
     else:
         # global transform found -> just apply it
         _apply_global_transform(reg_inputs, global_transform, args.compression)

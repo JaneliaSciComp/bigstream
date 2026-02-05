@@ -417,6 +417,7 @@ def distributed_alignment_pipeline(
     fix_mask=None,
     mov_mask=None,
     foreground_percentage=0.5,
+    initial_condition:str|np.ndarray|None=None,
     static_transform_list=[],
     output_transform=None,
     max_cluster_jobs=0,

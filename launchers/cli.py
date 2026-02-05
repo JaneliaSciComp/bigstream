@@ -146,6 +146,15 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       type=inttuple,
                       help='Moving volume mask descriptor')
 
+    args.add_argument(args_descriptor.argflag('initial-transform'),
+                      dest=args_descriptor.argdest('initial_transform'),
+                      type=str,
+                      help='Initial transform applied before computing the alignment - this will be incorporated in the transform result')
+    args.add_argument(args_descriptor.argflag('static-transforms'),
+                      dest=args_descriptor.argdest('static_transforms'),
+                      type=stringlist,
+                      help='Static transforms applied before computing the alignment that are not incorporated in the final transform result')
+
     args.add_argument(args_descriptor.argflag('output-dir'),
                       dest=args_descriptor.argdest('default_output_dir'),
                       help='Default output directory')

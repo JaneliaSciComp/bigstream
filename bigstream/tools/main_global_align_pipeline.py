@@ -13,8 +13,7 @@ from bigstream.transform import apply_transform
 
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, extract_align_pipeline,
-                  extract_registration_input_args, get_input_images,
-                  stringlist)
+                  extract_registration_input_args, get_input_images)
 
 
 logger:logging.Logger
@@ -32,15 +31,6 @@ def _define_args(args_descriptor):
     args_parser.add_argument('--align-config',
                              dest='align_config',
                              help='Align config file')
-    args_parser.add_argument('--initial-transform',
-                             dest='initial_transform',
-                             type=str,
-                             help='Initial transform applied before computing the alignment - this will be incorporated in the transform result')
-    args_parser.add_argument('--static-transforms',
-                             dest='static_transforms',
-                             type=stringlist,
-                             default=[],
-                             help='Static transforms applied before computing the alignment that are not incorporated in the final transform result')
     args_parser.add_argument('--reuse-existing-transform',
                              dest='reuse_existing_transform',
                              action='store_true',

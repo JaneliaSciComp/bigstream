@@ -20,7 +20,7 @@ from bigstream.image_data import (ImageData, get_spatial_values,
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, extract_align_pipeline,
                   extract_registration_input_args, get_input_images,
-                  inttuple, floattuple, stringlist)
+                  inttuple, floattuple)
 
 
 logger:logging.Logger
@@ -290,7 +290,7 @@ def _align_local_data(fix_image: ImageData,
                       steps,
                       processing_size,
                       processing_overlap_factor,
-                      initial_condition,
+                      initial_transform,
                       static_transforms,
                       transform_path,
                       transform_subpath,
@@ -380,7 +380,7 @@ def _align_local_data(fix_image: ImageData,
             overlap_factor=processing_overlap_factor,
             fix_mask=fix_mask,
             mov_mask=mov_mask,
-            initial_condition=initial_condition,
+            initial_transform=initial_transform,
             static_transform_list=static_transforms,
             output_transform=transform,
             max_cluster_jobs=max_cluster_jobs,

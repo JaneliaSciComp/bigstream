@@ -25,6 +25,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
                                                     mov_spacing=None,
                                                     fix_fullmask_shape=None,
                                                     mov_fullmask_shape=None,
+                                                    initial_transform=None,
                                                     static_transform_list=[]):
     logger.debug(f'Prepare block coords {block_info}')
     block_index, fix_block_coords, fix_block_neighbors = block_info
@@ -41,6 +42,11 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     # recenter affines, read deforms, apply transforms to crop coordinates
     updated_block_transform_list = []
     mov_block_phys_coords = np.copy(fix_block_phys_coords)
+    if initial_transform is not None:
+        # Convert to homogeneous coordinates (n, 3) -> (n, 4)
+        homogeneous = np.c_[mov_block_phys_coords, np.ones(mov_block_phys_coords.shape[0])]
+        # Apply transform and extract first 3 columns
+        mov_block_phys_coords = (initial_transform @ homogeneous.T).T[:, :3]
     # traverse current transformations in reverse order
     for transform in static_transform_list[::-1]:
         mov_block_phys_coords, block_transform = _get_spatial_moving_block_coords(
@@ -417,7 +423,7 @@ def distributed_alignment_pipeline(
     fix_mask=None,
     mov_mask=None,
     foreground_percentage=0.5,
-    initial_condition:str|np.ndarray|None=None,
+    initial_transform:np.ndarray|None=None,
     static_transform_list=[],
     output_transform=None,
     max_cluster_jobs=0,
@@ -615,6 +621,7 @@ def distributed_alignment_pipeline(
             mov_spacing=mov_spacing,
             fix_fullmask_shape=fix_mask_spatial_dims,
             mov_fullmask_shape=mov_mask_spatial_dims,
+            initial_transform=initial_transform,
             static_transform_list=static_transform_list,
         )
 

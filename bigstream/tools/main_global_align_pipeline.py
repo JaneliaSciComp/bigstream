@@ -67,30 +67,30 @@ def _define_args(args_descriptor):
     return args_parser
 
 
-def _run_global_align(regArgs:RegistrationInputs,
+def _run_global_align(reg_args:RegistrationInputs,
                       align_config,
                       compressor):
     global_steps, _ = extract_align_pipeline(align_config,
                                              'global_align',
-                                             regArgs.registration_steps)
+                                             reg_args.registration_steps)
     if len(global_steps) == 0:
         logger.info('Skip global alignment because no global steps were specified.')
         return None
 
-    (fix, fix_mask, mov, mov_mask) = get_input_images(regArgs)
+    (fix, fix_mask, mov, mov_mask) = get_input_images(reg_args)
     if fix.has_data() and mov.has_data():
         # calculate and apply the global transform
         affine, aligned = _align_global_data(fix, fix_mask, mov, mov_mask,
                                              global_steps,
-                                             regArgs.get_initial_transform(),
-                                             regArgs.get_static_transforms())
+                                             reg_args.get_initial_transform(),
+                                             reg_args.get_static_transforms())
         logger.debug(f'Global affine: {affine}')
         # save the global transform
-        _save_global_transform(regArgs, affine)
+        _save_global_transform(reg_args, affine)
 
         # save global aligned volume
         return _save_aligned_volume(
-            regArgs,
+            reg_args,
             fix,
             aligned,
             mov.get_attr('axes'),
@@ -152,7 +152,7 @@ def _align_global_data(fix_image, fix_mask,
                               mov_image.image_array,
                               fix_spacing,
                               mov_spacing,
-                              transform_list=[affine,])
+                              transform_list=static_transforms + [affine,])
 
     return affine, aligned
 
@@ -163,11 +163,12 @@ def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor):
         fix_image.read_image()
         mov_image.read_image()
         # apply transform
+        transform_list = reg_args.get_static_transforms() + [affine,]
         aligned = apply_transform(fix_image.image_array,
                                   mov_image.image_array,
                                   fix_image.voxel_spacing,
                                   mov_image.voxel_spacing,
-                                  transform_list=[affine,])
+                                  transform_list=transform_list)
         _save_aligned_volume(
             reg_args,
             fix_image,

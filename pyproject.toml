@@ -18,6 +18,7 @@ dependencies = [
     "flatten_json==0.1.14",
     "fishspot @ git+https://github.com/GFleishman/fishspot.git@84f5b8187b",
     "h5py>=3.15.1",
+    "imagecodecs==2026.1.14",
     "morphsnakes>=2.0.0",
     "numcodecs>=0.16.5",
     "numpy>2,<3",
@@ -32,7 +33,7 @@ dependencies = [
     "tensorstore==0.1.80",
     "tifffile>=2025.10.16",
     "toolz==1.1.0",
-    "zarr>3,<4",
+    "zarr==3.1.5",
 ]
 
 [project.urls]

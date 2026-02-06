@@ -153,6 +153,8 @@ def _run_compute_inverse(args):
                              if args.inv_transform_blocksize
                              else deform_blocksize[0:-1])
 
+    print('!!!!! DEFORM FIELD AXES ',local_deform_field.get_attr('axes'))
+    print('!!!!! DEFORM FIELD COORD ',local_deform_field.get_attr('coordinateTransformations'))
     inv_transform_attrs = io_utility.prepare_parent_group_attrs(
         inv_transform_path,
         inv_transform_subpath,

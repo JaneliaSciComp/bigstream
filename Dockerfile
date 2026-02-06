@@ -24,7 +24,6 @@ COPY conda-env.yaml .
 RUN mamba env update -n base -f conda-env.yaml
 
 # install bigstream
-COPY launchers launchers
 COPY bigstream bigstream
 COPY configs configs
 

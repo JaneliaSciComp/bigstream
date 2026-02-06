@@ -878,7 +878,7 @@ def _get_array_selector(axes, timeindex: int | None,
                 # try to select the data using the selector
                 return a[tuple(selector)]
             except Exception  as e:
-                logger.exception(f'Error selecting data with selector {selector}')
+                logger.exception(f'Error selecting data from {a} with selector {selector}')
                 raise e
         else:
             # no selection was made, so return the whole array

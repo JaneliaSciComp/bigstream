@@ -329,8 +329,9 @@ def _align_local_data(fix_image: ImageData,
         transform_axes = get_spatial_values(fix_image.get_attr('axes'))
         if transform_axes is not None:
             transform_axes.append({
-                'name': 'c',
-                'type': 'channel',
+                'name': 'd',
+                'type': 'displacement',
+                'discrete': True,
             })
         coordinate_transformations = fix_image.get_attr('coordinateTransformations')
         if coordinate_transformations is not None:

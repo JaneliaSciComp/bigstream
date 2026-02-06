@@ -776,7 +776,7 @@ def _open_ome_zarr(data_container, data_subpath,
         return ba, a.attrs.asdict()
 
     logger.debug((
-        f'Open dataset {dataset_subpath}, timeindex: {data_timeindex}, '
+        f'Open {data_container} - dataset: {dataset_subpath}, timeindex: {data_timeindex}, '
         f'channels: {data_channels}, block_coords {block_coords} '
     ))
 
@@ -822,7 +822,7 @@ def _open_ome_zarr(data_container, data_subpath,
     dataset_axes = multiscale_metadata.get('axes')
     dataset_path = dataset_metadata.get('path')
     dataset_transformations = dataset_metadata.get('coordinateTransformations')
-    logger.debug(f'Get array using array path: {dataset_path}:{data_timeindex}:{data_channels}')
+    logger.debug(f'Get array {data_container}:{data_subpath} using: {dataset_path}:{data_timeindex}:{data_channels}')
     a = multiscales_group[dataset_path]
     # a is potentially a 5-dim array: [timepoint?, channel?, z, y, x]
     if block_coords is not None:

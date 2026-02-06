@@ -69,8 +69,6 @@ def _define_args(args_descriptor):
 
 def _run_global_align(regArgs:RegistrationInputs,
                       align_config,
-                      initial_transform,
-                      static_transforms,
                       compressor):
     global_steps, _ = extract_align_pipeline(align_config,
                                              'global_align',
@@ -84,8 +82,8 @@ def _run_global_align(regArgs:RegistrationInputs,
         # calculate and apply the global transform
         affine, aligned = _align_global_data(fix, fix_mask, mov, mov_mask,
                                              global_steps,
-                                             initial_transform,
-                                             static_transforms)
+                                             regArgs.get_initial_transform(),
+                                             regArgs.get_static_transforms())
         logger.debug(f'Global affine: {affine}')
         # save the global transform
         _save_global_transform(regArgs, affine)
@@ -283,18 +281,6 @@ def main():
 
     logger.info(f'Global registration: {args}')
 
-    initial_transform = None
-    if args.initial_transform and os.path.exists(args.initial_transform):
-        logger.info(f'Read initial transform from {args.initial_transform}')
-        initial_transform = np.loadtxt(args.initial_transform)
-
-    static_transforms = []
-    if len(args.static_transforms) > 0:
-        for transform_file in args.static_transforms:
-            logger.info(f'Load static transform from {transform_file}')
-            transform = np.loadtxt(transform_file)
-            static_transforms.append(transform)
-
     reg_inputs = extract_registration_input_args(args, global_descriptor)
     global_transform = None
     global_transform_file = reg_inputs.transform_path()
@@ -312,8 +298,6 @@ def main():
         # no global transform found -> calculate it and then apply it
         _run_global_align(reg_inputs,
                           args.align_config,
-                          initial_transform,
-                          static_transforms,
                           args.compression)
     else:
         # global transform found -> just apply it

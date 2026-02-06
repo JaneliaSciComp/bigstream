@@ -38,19 +38,6 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--align-config',
                              dest='align_config',
                              help='Align config file')
-    args_parser.add_argument('--static-transforms',
-                             dest='static_transforms',
-                             type=stringlist,
-                             default=[],
-                             help='Static transforms applied before computing the alignment, which will not incorporated in the final deform result')
-    args_parser.add_argument('--initial-condition',
-                             dest='initial_condition',
-                             type=str,
-                             help='Initial condition applied before computing the alignment which will be incorporated in the final deform result')
-    args_parser.add_argument('--initial-condition-transform',
-                             dest='initial_condition_transform',
-                             type=str,
-                             help='Initial transforms applied before computing the alignment which will be incorporated in the final deform result')
     args_parser.add_argument('--global-affine-transform',
                              dest='global_affine',
                              help='Global affine transform path')
@@ -142,8 +129,7 @@ def _define_args(local_descriptor):
 
 def _run_local_alignment(reg_args: RegistrationInputs,
                          align_config,
-                         initial_condition,
-                         static_transforms,
+                         global_affine,
                          processing_size=None,
                          processing_overlap=None,
                          transform_overlap=0.1,
@@ -256,6 +242,10 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                                           worker_cpus=worker_cpus)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
     try:
+        if global_affine is not None:
+            static_transforms = reg_args.get_static_transforms() + [ global_affine, ]
+        else:
+            static_transforms = reg_args.get_static_transforms()
         _align_local_data(
             fix_image,
             fix_mask,
@@ -264,7 +254,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             local_steps,
             local_processing_size,
             local_processing_overlap_factor,
-            initial_condition,
+            reg_args.get_initial_transform(),
             static_transforms,
             reg_args.transform_path(),
             transform_subpath,
@@ -534,29 +524,10 @@ def main():
 
     logger.info(f'Local registration: {args}')
 
-    initial_condition = None
-    initial_condition = None
-    if args.initial_condition:
-        initial_condition = args.initial_condition
-    elif args.initial_condition_transform and os.path.exists(args.initial_condition_transform):
-        logger.info(f'Read initial condition transform from {args.initial_condition_transform}')
-        initial_condition = np.loadtxt(args.initial_condition_transform)
-
     global_affine = None
     if args.global_affine and os.path.exists(args.global_affine):
         logger.info(f'Read global affine from {args.global_affine}')
         global_affine = np.loadtxt(args.global_affine)
-
-    static_transforms = []
-    if len(args.static_transforms) > 0:
-        for transform_file in args.static_transforms:
-            logger.info(f'Load static transform from {transform_file}')
-            transform = np.loadtxt(transform_file)
-            static_transforms.append(transform)
-
-    if global_affine is not None:
-        # append global affine after the other static transformations
-        static_transforms.append(global_affine)
 
     reg_inputs = extract_registration_input_args(args, local_descriptor)
 
@@ -567,8 +538,7 @@ def main():
     _run_local_alignment(
         reg_inputs,
         args.align_config,
-        initial_condition,
-        static_transforms,
+        global_affine,
         processing_size=args.local_processing_size,
         processing_overlap=args.local_processing_overlap_factor,
         transform_overlap=args.local_transform_overlap_factor,

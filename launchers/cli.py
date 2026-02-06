@@ -1,4 +1,6 @@
 import logging
+import numpy as np
+import os
 import pydantic.v1.utils as pu
 import yaml
 
@@ -50,6 +52,26 @@ class CliArgsHelper:
 
 
 class RegistrationInputs:
+
+    def get_initial_transform(self):
+        if self.initial_transform and os.path.exists(self.initial_transform):
+            logger.info(f'Read initial transform from {self.initial_transform}')
+            return np.loadtxt(self.initial_transform)
+        elif self.initial_transform:
+            logger.warning(f'Initial transform file not found: {transform_path}')
+        return None
+
+    def get_static_transforms(self):
+        if not self.static_transforms:
+            return []
+        transforms = []
+        for transform_path in self.static_transforms:
+            if transform_path and os.path.exists(transform_path):
+                logger.info(f'Read static transform from {transform_path}')
+                transforms.append(np.loadtxt(transform_path))
+            elif transform_path:
+                logger.warning(f'Static transform file not found: {transform_path}')
+        return transforms
 
     def transform_path(self):
         output_dir = (self.transform_dir if self.transform_dir
@@ -280,6 +302,8 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'align_channel', registration_args)
     _extract_arg(args, args_descriptor, 'align_blocksize', registration_args)
     _extract_arg(args, args_descriptor, 'registration_steps', registration_args)
+    _extract_arg(args, args_descriptor, 'initial_transform', registration_args)
+    _extract_arg(args, args_descriptor, 'static_transforms', registration_args)
     registration_inputs = RegistrationInputs()
     registration_inputs.__dict__.update(registration_args)
     return registration_inputs

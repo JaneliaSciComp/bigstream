@@ -453,7 +453,14 @@ def _align_local_data(fix_image: ImageData,
         if not inv_transform_path:
             logger.info('Skip the inverse because it is not set')
 
-    if (deform_ok or len(global_affine_transforms) > 0) and align_path:
+    all_static_transforms = []
+    if initial_transform is not None:
+        all_static_transforms.append(initial_transform)
+
+    if len(static_transforms) > 0:
+        all_static_transforms.extend(static_transforms)
+
+    if (deform_ok or len(all_static_transforms) > 0) and align_path:
         # Apply local transformation only if 
         # highres aligned output name is set
         align_attrs = io_utility.prepare_parent_group_attrs(
@@ -491,14 +498,14 @@ def _align_local_data(fix_image: ImageData,
             deform_transforms = [transform]
         else:
             deform_transforms = []
-        affine_spacings = [(1.,) * mov_image.spatial_ndim for i in range(len(static_transforms))]
+        affine_spacings = [(1.,) * mov_image.spatial_ndim for i in range(len(all_static_transforms))]
         transform_spacing = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing)])
         logger.info(f'Transforms spacings: {transform_spacing}')
 
         distributed_apply_transform(
             fix_image, mov_image,
             align_blocksize, # use block chunk size for distributing work
-            static_transforms + deform_transforms, # transform_list
+            all_static_transforms + deform_transforms, # transform_list
             cluster_client,
             overlap_factor=transform_overlap_factor,
             aligned_data=align,

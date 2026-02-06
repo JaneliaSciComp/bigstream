@@ -63,6 +63,16 @@ def _define_args():
                              type=floattuple,
                              help='Moving image voxel spacing')
 
+    args_parser.add_argument('--initial-transform',
+                             dest='initial_transform',
+                             type=str,
+                             help='Initial transformations')
+
+    args_parser.add_argument('--static-transforms',
+                             dest='static_transforms',
+                             type=stringlist,
+                             help='Static transformations')
+
     args_parser.add_argument('--affine-transform', '--affine-transformations',
                              dest='affine_transformations',
                              type=stringlist,
@@ -216,17 +226,31 @@ def _run_apply_transform(args):
             zarr_format=2,
         )
 
+        applied_affines = []
+        affine_transforms_list = []
+
+        # read initial transformation
+        if args.initial_transform:
+            logger.info(f'Load initial transformation from {args.initial_transform}')
+            applied_affines.append(args.initial_transform)
+            affine_transforms_list.append(np.loadtxt(args.initial_transform))
+
+        # read static transformations
+        if args.static_transforms:
+            logger.info(f'Static transformations arg: {args.static_transforms}')
+            applied_affines.append(args.static_transforms)
+            affine_transforms_list.extend([np.loadtxt(tfile) for tfile in args.static_transforms])
+
         # read affine transformations
         if args.affine_transformations:
             logger.info(f'Affine transformations arg: {args.affine_transformations}')
             applied_affines = [args.affine_transformations]
-            affine_transforms_list = [np.loadtxt(tfile)
-                                      for tfile in args.affine_transformations]
+            affine_transforms_list.extend([np.loadtxt(tfile) for tfile in args.affine_transformations])
+
+        if len(affine_transforms_list) > 0:
             affine_spacing = (1.,) * mov_data.spatial_ndim
-            transforms_spacings = (affine_spacing,) * len(applied_affines)
+            transforms_spacings = (affine_spacing,) * len(affine_transforms_list)
         else:
-            applied_affines = []
-            affine_transforms_list = []
             transforms_spacings = ()
 
         logger.info(f'Check if {local_deform_field} has data')

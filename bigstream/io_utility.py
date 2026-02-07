@@ -432,7 +432,8 @@ def open(container_path, subpath,
 def prepare_parent_group_attrs(container_path,
                                dataset_path,
                                axes=None,
-                               coordinateTransformations=None):
+                               dataset_transformations=None,
+                               global_transformations=[]):
     """
     Prepare an attributes dictionary for a dataset in an OME-ZARR container
 
@@ -448,7 +449,7 @@ def prepare_parent_group_attrs(container_path,
         Which axes are present in the dataset
         See ome_zarr_models.v04.axes.Axis
 
-    coordinateTransformations : tuple of VectorScale and/or VectorTranslation (default: None)
+    dataset_transformations : tuple of VectorScale and/or VectorTranslation (default: None)
         The scale and translation of the dataset.
         See ome_zarr_models.v04.coordinate_transformations.VectorScale
         See ome_zarr_models.v04.coordinate_transformations.VectorTranslation
@@ -460,7 +461,7 @@ def prepare_parent_group_attrs(container_path,
     """
 
     # case of no relevant metadata
-    if ((coordinateTransformations is None or coordinateTransformations == []) and
+    if ((dataset_transformations is None or dataset_transformations == []) and
         axes is None):
         return {}
 
@@ -476,10 +477,10 @@ def prepare_parent_group_attrs(container_path,
         logger.info('No dataset was provided - will use "." for dataset subpath')
         dataset_scale_subpath = '.'
 
-    # pull scales and translations out of coordinateTransformations
+    # pull scales and translations out of dataset_transformations
     scales, translations = None, None
-    if coordinateTransformations is not None:
-        for t in coordinateTransformations:
+    if dataset_transformations is not None:
+        for t in dataset_transformations:
             if t['type'] == 'scale':
                 scales = t['scale']
             elif t['type'] == 'translation':
@@ -497,6 +498,11 @@ def prepare_parent_group_attrs(container_path,
         dataset = Dataset.build(path=dataset_scale_subpath, scale=scales, translation=translations)
         multiscale_attrs.update({
             'datasets': (dataset.dict(exclude_none=True),),
+        })
+
+    if global_transformations is not None and len(global_transformations) > 0:
+        multiscale_attrs.update({
+            'coordinateTransformations': global_transformations,
         })
 
     # format and return

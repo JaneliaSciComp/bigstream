@@ -211,7 +211,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             align_path,
             reg_args.align_dataset(),
             axes=axes,
-            coordinateTransformations=coordinateTransformations,
+            dataset_transformations=coordinateTransformations,
         )
         fix_shape = fix_image.shape
 

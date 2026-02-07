@@ -201,7 +201,7 @@ def _run_apply_transform(args):
             args.output,
             output_subpath,
             axes=mov_data.get_attr('axes'),
-            coordinateTransformations=mov_data.get_attr('coordinateTransformations'),
+            dataset_transformations=mov_data.get_attr('coordinateTransformations'),
         )
         output_shape = fix_data.shape
         if len(output_blocks) < len(output_shape):

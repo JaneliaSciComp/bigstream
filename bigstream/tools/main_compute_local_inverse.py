@@ -160,7 +160,7 @@ def _run_compute_inverse(args):
         inv_transform_path,
         inv_transform_subpath,
         axes=local_deform_field.get_attr('axes'),
-        coordinateTransformations=local_deform_field.get_attr('coordinateTransformations'),
+        dataset_transformations=local_deform_field.get_attr('coordinateTransformations'),
     )
     inv_deform_field = io_utility.create_dataset_array(
         inv_transform_path,

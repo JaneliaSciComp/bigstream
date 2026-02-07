@@ -349,7 +349,7 @@ def _align_local_data(fix_image: ImageData,
             transform_path,
             transform_subpath,
             axes=transform_axes,
-            coordinateTransformations=coordinate_transformations,
+            dataset_transformations=coordinate_transformations,
         )
         transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
         transform = io_utility.create_dataset_array(
@@ -410,7 +410,7 @@ def _align_local_data(fix_image: ImageData,
             inv_transform_path,
             inv_transform_subpath,
             axes=transform_axes,
-            coordinateTransformations=coordinate_transformations,
+            dataset_transformations=coordinate_transformations,
         )
         inv_transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
         inv_transform = io_utility.create_dataset_array(
@@ -468,7 +468,7 @@ def _align_local_data(fix_image: ImageData,
             align_path,
             align_subpath,
             axes=mov_image.get_attr('axes'),
-            coordinateTransformations=mov_image.get_attr('coordinateTransformations'),
+            dataset_transformations=mov_image.get_attr('coordinateTransformations'),
         )
         align_shape = fix_image.shape
         if len(align_blocksize) < len(align_shape):

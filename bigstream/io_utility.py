@@ -704,19 +704,20 @@ def _open_zarr(data_path, data_subpath,
     """
     Open a zarr container, optionally read a region into memory
     """
-
-    # "There is no try, only do" -Yoda :D
     try:
-
         # guarantee a metadata file is in the container folder, identify store, open
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath)
         data_store = _get_data_store(zarr_container_path)
         data_container = zarr.open(store=data_store, mode='r')
-        data_container_attrs = data_container.attrs.asdict()
-
-        # if ome-zarr parse appropriately, otherwise apply subpath and block_coords and return
-        if _is_ome_zarr(data_container_attrs):
-            return _open_ome_zarr(data_container, zarr_subpath,
+        multiscales_group, dataset_subpath, multiscale_attrs = _find_ome_multiscales(data_container, zarr_subpath)
+        if multiscales_group is not None:
+            # if ome-zarr parse appropriately, otherwise apply subpath and block_coords and return
+            logger.debug((
+                f'Open OME container {data_container}, '
+                f'dataset: {dataset_subpath}, timeindex: {data_timeindex}, '
+                f'channels: {data_channels}, block_coords {block_coords} '
+            ))
+            return _open_ome_zarr(multiscales_group, multiscale_attrs, dataset_subpath,
                                   data_timeindex=data_timeindex,
                                   data_channels=data_channels,
                                   block_coords=block_coords)
@@ -724,26 +725,9 @@ def _open_zarr(data_path, data_subpath,
             a = data_container[zarr_subpath] if zarr_subpath else data_container
             ba = a[block_coords] if block_coords is not None else a
             return ba, a.attrs.asdict()
-
-    # log error before raising exception
     except Exception as e:
         logger.exception(f'Error opening {data_path} : {data_subpath}')
         raise e
-
-
-def _is_ome_zarr(data_container_attrs: dict | None) -> bool:
-    """Determine if attributes are consistent with ome-zarr spec"""
-
-    print('!!!!! DATA CONTAINER ATTRS ', data_container_attrs)
-    # no attributes? obviously not ome-zarr.
-    if data_container_attrs is None:
-        return False
-
-    # two conditions indicate ome-zarr, bioformats2raw.layout == 3 or multiscales present
-    # test if multiscales attribute exists - if it does assume OME-ZARR
-    bioformats_layout = data_container_attrs.get("bioformats2raw.layout", None)
-    multiscales = data_container_attrs.get('multiscales', [])
-    return bioformats_layout == 3 or not (multiscales == [])
 
 
 def _find_ome_multiscales(data_container, data_subpath):
@@ -771,22 +755,8 @@ def _find_ome_multiscales(data_container, data_subpath):
         return data_container, '', data_container_attrs
 
 
-def _open_ome_zarr(data_container, data_subpath,
+def _open_ome_zarr(multiscales_group, multiscales_attrs, dataset_subpath,
                    data_timeindex=None, data_channels=None, block_coords=None):
-    multiscales_group, dataset_subpath, multiscales_attrs  = _find_ome_multiscales(data_container, data_subpath)
-
-    if multiscales_group is None:
-        a = (data_container[data_subpath]
-             if data_subpath and data_subpath != '.'
-             else data_container)
-        ba = a[block_coords] if block_coords is not None else a
-        return ba, a.attrs.asdict()
-
-    logger.debug((
-        f'Open {data_container} - dataset: {dataset_subpath}, timeindex: {data_timeindex}, '
-        f'channels: {data_channels}, block_coords {block_coords} '
-    ))
-
     dataset_comps = [c for c in dataset_subpath.split('/') if c]
     # ome_metadata = ImageAttrs.construct(**multiscales_attrs)
     multiscale_metadata = multiscales_attrs.get('multiscales', [])[0]
@@ -829,7 +799,6 @@ def _open_ome_zarr(data_container, data_subpath,
     dataset_axes = multiscale_metadata.get('axes')
     dataset_path = dataset_metadata.get('path')
     dataset_transformations = dataset_metadata.get('coordinateTransformations')
-    logger.debug(f'Get array {data_container}:{data_subpath} using: {dataset_path}:{data_timeindex}:{data_channels}')
     a = multiscales_group[dataset_path]
     # a is potentially a 5-dim array: [timepoint?, channel?, z, y, x]
     if block_coords is not None:
@@ -941,10 +910,9 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath)
         data_store = _get_data_store(zarr_container_path)
         data_container = zarr.open(store=data_store, mode='r')
-        data_container_attrs = data_container.attrs.asdict()
-
-        if _is_ome_zarr(data_container_attrs):
-            a, dataset_attrs = _open_ome_zarr(data_container, zarr_subpath)
+        multiscales_group, dataset_subpath, multiscale_attrs = _find_ome_multiscales(data_container, zarr_subpath)
+        if multiscales_group is not None:
+            a, dataset_attrs = _open_ome_zarr(multiscales_group, multiscale_attrs, dataset_subpath)
             dataset_attrs.update(a.attrs.asdict())
         else:
             a = data_container[zarr_subpath] if zarr_subpath else data_container

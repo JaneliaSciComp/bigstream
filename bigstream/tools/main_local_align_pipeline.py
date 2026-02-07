@@ -13,9 +13,10 @@ from bigstream.configure_dask import (ConfigureWorkerPlugin,
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.distributed_transform import (distributed_apply_transform,
         distributed_invert_displacement_vector_field)
-from bigstream.image_data import (ImageData, get_spatial_values,
+from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
                                   calc_downsampling_attr)
+from bigstream.ome_utils import (get_spatial_values, compose_initial_transform)
 
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, extract_align_pipeline,
@@ -246,6 +247,12 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             static_transforms = reg_args.get_static_transforms() + [ global_affine, ]
         else:
             static_transforms = reg_args.get_static_transforms()
+        # compose initial transform from user affine + OME translations
+        initial_transform = compose_initial_transform(
+            reg_args.get_initial_transform(),
+            mov_image.get_attr('globalCoordinateTransformations'),
+            mov_image.get_attr('coordinateTransformations'),
+        )
         _align_local_data(
             fix_image,
             fix_mask,
@@ -254,7 +261,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             local_steps,
             local_processing_size,
             local_processing_overlap_factor,
-            reg_args.get_initial_transform(),
+            initial_transform,
             static_transforms,
             reg_args.transform_path(),
             transform_subpath,

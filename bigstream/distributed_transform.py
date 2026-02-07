@@ -10,7 +10,8 @@ from itertools import product
 
 from dask.distributed import as_completed
 
-from .image_data import ImageData, get_spatial_values
+from .image_data import ImageData
+from .ome_utils import get_spatial_values
 from .io_utility import read_block as io_utility_read_block
 
 

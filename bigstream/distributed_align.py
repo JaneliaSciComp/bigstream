@@ -11,7 +11,8 @@ from itertools import product
 from toolz import partition_all
 
 from .align import alignment_pipeline
-from .image_data import (ImageData, as_image_data, get_spatial_values)
+from .image_data import (ImageData, as_image_data)
+from .ome_utils import get_spatial_values
 from .io_utility import read_block as io_utility_read_block
 
 

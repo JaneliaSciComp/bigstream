@@ -163,19 +163,6 @@ def as_image_data(image_data, image_timeindex=None, image_channels=None):
         raise ValueError(f'image data cannot be created from {type(image_data)}')
 
 
-def get_spatial_values(values, reverse_axes=False):
-    if values is None:
-        return None
-
-    if len(values) > 3:
-        if reverse_axes:
-            return values[:3]
-        else:
-            return values[-3:]
-
-    return values if not reverse_axes else values[::-1]
-
-
 def calc_full_voxel_resolution_attr(voxel_spacing, downsampling):
     """
     Calculate voxel resolution in order to store it in the dataset attribute.

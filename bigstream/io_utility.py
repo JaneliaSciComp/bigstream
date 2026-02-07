@@ -799,6 +799,7 @@ def _open_ome_zarr(multiscales_group, multiscales_attrs, dataset_subpath,
     dataset_axes = multiscale_metadata.get('axes')
     dataset_path = dataset_metadata.get('path')
     dataset_transformations = dataset_metadata.get('coordinateTransformations')
+    global_transformations = multiscale_metadata.get('coordinateTransformations')
     a = multiscales_group[dataset_path]
     # a is potentially a 5-dim array: [timepoint?, channel?, z, y, x]
     if block_coords is not None:
@@ -815,6 +816,7 @@ def _open_ome_zarr(multiscales_group, multiscales_attrs, dataset_subpath,
         'timeindex': data_timeindex,
         'channels': data_channels,
         'coordinateTransformations': dataset_transformations,
+        'globalCoordinateTransformations': global_transformations,
     })
     return ba, multiscales_attrs
 

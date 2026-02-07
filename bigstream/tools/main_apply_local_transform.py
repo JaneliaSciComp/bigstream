@@ -9,9 +9,10 @@ from bigstream.configure_bigstream import (configure_logging)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
 from bigstream.distributed_transform import distributed_apply_transform
-from bigstream.image_data import (ImageData, get_spatial_values,
+from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
                                   calc_downsampling_attr)
+from bigstream.ome_utils import get_spatial_values
 
 from .cli import (inttuple, floattuple, stringlist)
 

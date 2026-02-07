@@ -7,8 +7,9 @@ import bigstream.io_utility as io_utility
 from bigstream.align import alignment_pipeline
 from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
-from bigstream.image_data import (ImageData, get_spatial_values,
+from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr, calc_downsampling_attr)
+from bigstream.ome_utils import (get_spatial_values, compose_initial_transform)
 from bigstream.transform import apply_transform
 
 from .cli import (CliArgsHelper, RegistrationInputs,
@@ -69,10 +70,16 @@ def _run_global_align(reg_args:RegistrationInputs,
 
     (fix, fix_mask, mov, mov_mask) = get_input_images(reg_args)
     if fix.has_data() and mov.has_data():
+        # compose initial transform from user affine + OME translations
+        initial_transform = compose_initial_transform(
+            reg_args.get_initial_transform(),
+            mov.get_attr('globalCoordinateTransformations'),
+            mov.get_attr('coordinateTransformations'),
+        )
         # calculate and apply the global transform
         affine, aligned = _align_global_data(fix, fix_mask, mov, mov_mask,
                                              global_steps,
-                                             reg_args.get_initial_transform(),
+                                             initial_transform,
                                              reg_args.get_static_transforms())
         logger.debug(f'Global affine: {affine}')
         # save the global transform
@@ -206,12 +213,29 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          downsampling,
                          compressor):
     align_path = reg_args.align_path()
+    # prepare global coordinate transform from reg_args.initial_transform
+    global_transformations = []
+    initial_transform = reg_args.get_initial_transform()
+    if initial_transform is not None:
+        spatial_translation = initial_transform[:3, 3].tolist()
+        # prepend 0 for each non-spatial axis (time, channel)
+        non_spatial_count = sum(
+            1
+            for a in (axes or []) if a.get('type') != 'space'
+        )
+        translation = [0,] * non_spatial_count + spatial_translation
+        global_transformations.append({
+            'type': 'translation',
+            'translation': translation,
+        })
+
     if align_path:
         align_attrs = io_utility.prepare_parent_group_attrs(
             align_path,
             reg_args.align_dataset(),
             axes=axes,
             dataset_transformations=coordinateTransformations,
+            global_transformations=global_transformations,
         )
         fix_shape = fix_image.shape
 

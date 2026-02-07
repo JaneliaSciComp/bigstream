@@ -127,6 +127,7 @@ def _run_compute_inverse(args):
                       if args.transform_name
                       else args.transform_dir)
     local_deform_field = ImageData(transform_path, args.transform_subpath)
+    print('!!!!!! LOCAL DEFORM ATTRS ', local_deform_field.attrs)
     if args.local_transform_spacing:
         # in case the transform spacing arg has the channel dimension - truncate it
         local_deform_spacing = args.local_transform_spacing[::-1][:3]  # xyz -> zyx

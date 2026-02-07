@@ -728,6 +728,7 @@ def _open_zarr(data_path, data_subpath,
 def _is_ome_zarr(data_container_attrs: dict | None) -> bool:
     """Determine if attributes are consistent with ome-zarr spec"""
 
+    print('!!!!! DATA CONTAINER ATTRS ', data_container_attrs)
     # no attributes? obviously not ome-zarr.
     if data_container_attrs is None:
         return False

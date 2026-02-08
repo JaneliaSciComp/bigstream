@@ -176,6 +176,10 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       dest=args_descriptor.argdest('static_transforms'),
                       type=stringlist,
                       help='Static transforms applied before computing the alignment that are not incorporated in the final transform result')
+    args.add_argument(args_descriptor.argflag('persist-initial-transform'),
+                      dest=args_descriptor.argdest('persist_initial_transform'),
+                      action='store_true',
+                      help='Persist initial transform with aligned result metadata')
 
     args.add_argument(args_descriptor.argflag('output-dir'),
                       dest=args_descriptor.argdest('default_output_dir'),
@@ -304,6 +308,7 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'registration_steps', registration_args)
     _extract_arg(args, args_descriptor, 'initial_transform', registration_args)
     _extract_arg(args, args_descriptor, 'static_transforms', registration_args)
+    _extract_arg(args, args_descriptor, 'persist_initial_transform', registration_args)
     registration_inputs = RegistrationInputs()
     registration_inputs.__dict__.update(registration_args)
     return registration_inputs

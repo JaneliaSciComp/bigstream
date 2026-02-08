@@ -154,7 +154,9 @@ def _align_global_data(fix_image, fix_mask,
     return affine, aligned
 
 
-def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor):
+def _apply_global_transform(reg_args:RegistrationInputs,
+                            affine,
+                            compressor):
     (fix_image, _, mov_image, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
         fix_image.read_image()
@@ -208,7 +210,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          fix_image,
                          aligned_array,
                          axes,
-                         coordinateTransformations,
+                         dataset_transformations,
                          voxel_resolution,
                          downsampling,
                          compressor):
@@ -216,7 +218,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
     # prepare global coordinate transform from reg_args.initial_transform
     global_transformations = []
     initial_transform = reg_args.get_initial_transform()
-    if initial_transform is not None:
+    if initial_transform is not None and reg_args.persist_initial_transform:
         spatial_translation = initial_transform[:3, 3].tolist()
         # prepend 0 for each non-spatial axis (time, channel)
         non_spatial_count = sum(
@@ -234,7 +236,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             align_path,
             reg_args.align_dataset(),
             axes=axes,
-            dataset_transformations=coordinateTransformations,
+            dataset_transformations=dataset_transformations,
             global_transformations=global_transformations,
         )
         fix_shape = fix_image.shape

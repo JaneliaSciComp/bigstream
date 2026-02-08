@@ -263,6 +263,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             local_processing_overlap_factor,
             initial_transform,
             static_transforms,
+            reg_args.persist_initial_transform,
             reg_args.transform_path(),
             transform_subpath,
             transform_blocksize,
@@ -299,6 +300,7 @@ def _align_local_data(fix_image: ImageData,
                       processing_overlap_factor,
                       initial_transform,
                       static_transforms,
+                      persist_initial_transform,
                       transform_path,
                       transform_subpath,
                       transform_blocksize,
@@ -469,13 +471,30 @@ def _align_local_data(fix_image: ImageData,
         all_static_transforms.extend(static_transforms)
 
     if (deform_ok or len(all_static_transforms) > 0) and align_path:
+        axes = mov_image.get_attr('axes')
+        # prepare global coordinate transform from initial_transform
+        global_transformations = []
+        if initial_transform is not None and persist_initial_transform:
+            spatial_translation = initial_transform[:3, 3].tolist()
+            # prepend 0 for each non-spatial axis (time, channel)
+            non_spatial_count = sum(
+                1
+                for a in (axes or []) if a.get('type') != 'space'
+            )
+            translation = [0,] * non_spatial_count + spatial_translation
+            global_transformations.append({
+                'type': 'translation',
+                'translation': translation,
+            })
+
         # Apply local transformation only if 
         # highres aligned output name is set
         align_attrs = io_utility.prepare_parent_group_attrs(
             align_path,
             align_subpath,
-            axes=mov_image.get_attr('axes'),
+            axes=axes,
             dataset_transformations=mov_image.get_attr('coordinateTransformations'),
+            global_transformations=global_transformations,
         )
         align_shape = fix_image.shape
         if len(align_blocksize) < len(align_shape):

@@ -577,13 +577,13 @@ def feature_point_ransac_affine_align(
         correlations, match_threshold,
         max_distance=max_spot_match_distance,
     )
-    logger.info(f'{len(fix_spots)} - {len(mov_spots)} matched spots')
+    logger.info(f'{context} {len(fix_spots)} - {len(mov_spots)} matched spots')
     if len(fix_spots) < point_matches_threshold or len(mov_spots) < point_matches_threshold:
-        logger.info('insufficient point matches found')
+        logger.info(f'{context} - insufficient point matches found')
         if safeguard_exceptions:
             raise ValueError('point matches safeguard failed')
         else:
-            logger.info('returning default')
+            logger.info(f'{context} - returning default')
             return default
 
     # align
@@ -880,7 +880,7 @@ def random_affine_search(
         scores[iii] = score_affine(bst.physical_parameters_to_affine_matrix_3d(ppp, center))
         if scores[iii] < current_best_score:
             current_best_score = scores[iii]
-            logger.debug(f'Best score found {iii} : {current_best_score}')
+            logger.debug(f'{context} - best score found {iii} : {current_best_score}')
 
     # return top results
     partition_indx = np.argpartition(scores, nreturn)[:nreturn]
@@ -1455,7 +1455,7 @@ def alignment_pipeline(
     for alignment, arguments in steps:
         logger.debug(f'Run {context} {alignment} {arguments}')
         arguments = {**kwargs, **arguments}
-        logger.debug(f'All {alignment} args: {arguments}')
+        logger.debug(f'All {context} {alignment} args: {arguments}')
         arguments['static_transform_list'] = static_transform_list + new_transforms
         alignment_result = align[alignment](context=context, **arguments)
         logger.debug(f'Completed {context} {alignment} {arguments}')

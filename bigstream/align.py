@@ -584,7 +584,7 @@ def feature_point_ransac_affine_align(
         if safeguard_exceptions:
             raise ValueError('point matches safeguard failed')
         else:
-            logger.info(f'{context} - returning default')
+            logger.info(f'{context} - RANSAC returning default affine')
             return default
 
     # align
@@ -600,16 +600,17 @@ def feature_point_ransac_affine_align(
 
     # ensure affine is sensible
     if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
-        logger.info(f'{context} Degenerate affine produced')
+        logger.info(f'{context} RANSAC produced degenerate affine: {Aff}')
         if safeguard_exceptions:
             raise ValueError('diagonal_constraint safeguard failed')
         else:
-            logger.info(f'{context} returning default')
+            logger.info(f'{context} - RANSAC returning default affine')
             return default
 
     # augment matrix and return
     affine = np.eye(fix.ndim + 1)
     affine[:fix.ndim, :] = Aff
+    logger.debug(f'{context} - RANSAC affine: {Aff}')
     return affine
 
 

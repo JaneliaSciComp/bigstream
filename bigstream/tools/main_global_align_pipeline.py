@@ -74,7 +74,6 @@ def _run_global_align(reg_args:RegistrationInputs,
         initial_transform = compose_initial_transform(
             reg_args.get_initial_transform(),
             mov.get_attr('globalCoordinateTransformations'),
-            mov.get_attr('coordinateTransformations'),
         )
         # calculate and apply the global transform
         affine, aligned = _align_global_data(fix, fix_mask, mov, mov_mask,

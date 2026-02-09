@@ -251,7 +251,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         initial_transform = compose_initial_transform(
             reg_args.get_initial_transform(),
             mov_image.get_attr('globalCoordinateTransformations'),
-            mov_image.get_attr('coordinateTransformations'),
         )
         _align_local_data(
             fix_image,

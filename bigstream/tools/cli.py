@@ -53,11 +53,11 @@ class CliArgsHelper:
 
 class RegistrationInputs:
 
-    def get_initial_transform(self):
-        if self.initial_transform and os.path.exists(self.initial_transform):
-            logger.info(f'Read initial transform from {self.initial_transform}')
-            return np.loadtxt(self.initial_transform)
-        elif self.initial_transform:
+    def get_mov_origin_transform(self):
+        if self.mov_origin_transform and os.path.exists(self.mov_origin_transform):
+            logger.info(f'Read moving image origin transform from {self.mov_origin_transform}')
+            return np.loadtxt(self.mov_origin_transform)
+        elif self.mov_origin_transform:
             logger.warning(f'Initial transform file not found: {transform_path}')
         return None
 
@@ -168,16 +168,16 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       type=inttuple,
                       help='Moving volume mask descriptor')
 
-    args.add_argument(args_descriptor.argflag('initial-transform'),
-                      dest=args_descriptor.argdest('initial_transform'),
+    args.add_argument(args_descriptor.argflag('mov-origin-transform'),
+                      dest=args_descriptor.argdest('mov_origin_transform'),
                       type=str,
-                      help='Initial transform applied before computing the alignment - this will be incorporated in the transform result')
+                      help='Moving image origin transform applied before computing the alignment - this will be incorporated in the transform result')
     args.add_argument(args_descriptor.argflag('static-transforms'),
                       dest=args_descriptor.argdest('static_transforms'),
                       type=stringlist,
                       help='Static transforms applied before computing the alignment that are not incorporated in the final transform result')
-    args.add_argument(args_descriptor.argflag('persist-initial-transform'),
-                      dest=args_descriptor.argdest('persist_initial_transform'),
+    args.add_argument(args_descriptor.argflag('persist-mov-origin-transform'),
+                      dest=args_descriptor.argdest('persist_mov_origin_transform'),
                       action='store_true',
                       help='Persist initial transform with aligned result metadata')
 
@@ -306,9 +306,9 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'align_channel', registration_args)
     _extract_arg(args, args_descriptor, 'align_blocksize', registration_args)
     _extract_arg(args, args_descriptor, 'registration_steps', registration_args)
-    _extract_arg(args, args_descriptor, 'initial_transform', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_origin_transform', registration_args)
     _extract_arg(args, args_descriptor, 'static_transforms', registration_args)
-    _extract_arg(args, args_descriptor, 'persist_initial_transform', registration_args)
+    _extract_arg(args, args_descriptor, 'persist_mov_origin_transform', registration_args)
     registration_inputs = RegistrationInputs()
     registration_inputs.__dict__.update(registration_args)
     return registration_inputs

@@ -26,7 +26,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
                                                     mov_spacing=None,
                                                     fix_fullmask_shape=None,
                                                     mov_fullmask_shape=None,
-                                                    initial_transform=None,
+                                                    mov_origin_transform=None,
                                                     static_transform_list=[]):
     logger.debug(f'Prepare block coords {block_info}')
     block_index, fix_block_coords, fix_block_neighbors = block_info
@@ -43,11 +43,11 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     # recenter affines, read deforms, apply transforms to crop coordinates
     updated_block_transform_list = []
     mov_block_phys_coords = np.copy(fix_block_phys_coords)
-    if initial_transform is not None:
+    if mov_origin_transform is not None:
         # Convert to homogeneous coordinates (n, 3) -> (n, 4)
         homogeneous = np.c_[mov_block_phys_coords, np.ones(mov_block_phys_coords.shape[0])]
         # Apply transform and extract first 3 columns
-        mov_block_phys_coords = (initial_transform @ homogeneous.T).T[:, :3]
+        mov_block_phys_coords = (mov_origin_transform @ homogeneous.T).T[:, :3]
     # traverse current transformations in reverse order
     for transform in static_transform_list[::-1]:
         mov_block_phys_coords, block_transform = _get_spatial_moving_block_coords(
@@ -227,26 +227,26 @@ def _get_spatial_moving_block_coords(fix_shape,
                                      fix_block_max_voxel_coords,
                                      fix_block_phys_coords,
                                      original_mov_block_phys_coords,
-                                     original_transform):
-    if len(original_transform.shape) == 2:
-        logger.debug(f'Apply affine transform {original_transform} to moving block at: {original_mov_block_phys_coords}')
+                                     static_transform):
+    if len(static_transform.shape) == 2:
+        logger.debug(f'Apply affine transform {static_transform} to moving block at: {original_mov_block_phys_coords}')
         mov_block_phys_coords = bst.apply_transform_to_coordinates(
             original_mov_block_phys_coords,
-            [original_transform,],
+            [static_transform,],
         )
         block_transform = bst.change_affine_matrix_origin(
-            original_transform, fix_block_phys_coords[0])
+            static_transform, fix_block_phys_coords[0])
     else:
-        logger.debug(f'Apply deform field of shape {original_transform.shape} to {original_mov_block_phys_coords}')
-        spacing = ut.relative_spacing(original_transform.shape,
+        logger.debug(f'Apply deform field of shape {static_transform.shape} to {original_mov_block_phys_coords}')
+        spacing = ut.relative_spacing(static_transform.shape,
                                       fix_shape,
                                       fix_spacing)
-        ratio = np.array(original_transform.shape[:-1]) / fix_shape
+        ratio = np.array(static_transform.shape[:-1]) / fix_shape
         start = np.round(ratio * fix_block_min_voxel_coords).astype(int)
         stop = np.round(ratio * (fix_block_max_voxel_coords + 1)).astype(int)
         transform_slices = tuple(slice(a, b)
                                  for a, b in zip(start, stop))
-        block_transform = original_transform[transform_slices]
+        block_transform = static_transform[transform_slices]
         origin = spacing * start
         mov_block_phys_coords = bst.apply_transform_to_coordinates(
             original_mov_block_phys_coords, [block_transform,], spacing, origin
@@ -424,7 +424,7 @@ def distributed_alignment_pipeline(
     fix_mask=None,
     mov_mask=None,
     foreground_percentage=0.5,
-    initial_transform:np.ndarray|None=None,
+    mov_origin_transform:np.ndarray|None=None,
     static_transform_list=[],
     output_transform=None,
     max_cluster_jobs=0,
@@ -622,7 +622,7 @@ def distributed_alignment_pipeline(
             mov_spacing=mov_spacing,
             fix_fullmask_shape=fix_mask_spatial_dims,
             mov_fullmask_shape=mov_mask_spatial_dims,
-            initial_transform=initial_transform,
+            mov_origin_transform=mov_origin_transform,
             static_transform_list=static_transform_list,
         )
 

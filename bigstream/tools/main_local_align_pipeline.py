@@ -16,7 +16,7 @@ from bigstream.distributed_transform import (distributed_apply_transform,
 from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
                                   calc_downsampling_attr)
-from bigstream.ome_utils import (get_spatial_values, compose_initial_transform)
+from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, extract_align_pipeline,
@@ -247,9 +247,9 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             static_transforms = reg_args.get_static_transforms() + [ global_affine, ]
         else:
             static_transforms = reg_args.get_static_transforms()
-        # compose initial transform from user affine + OME translations
-        initial_transform = compose_initial_transform(
-            reg_args.get_initial_transform(),
+        # compose mov origin transform from user affine + OME translations
+        mov_origin_transform = compose_origin_transform(
+            reg_args.get_mov_origin_transform(),
             mov_image.get_attr('globalCoordinateTransformations'),
         )
         _align_local_data(
@@ -260,9 +260,9 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             local_steps,
             local_processing_size,
             local_processing_overlap_factor,
-            initial_transform,
+            mov_origin_transform,
             static_transforms,
-            reg_args.persist_initial_transform,
+            reg_args.persist_mov_origin_transform,
             reg_args.transform_path(),
             transform_subpath,
             transform_blocksize,
@@ -297,9 +297,9 @@ def _align_local_data(fix_image: ImageData,
                       steps,
                       processing_size,
                       processing_overlap_factor,
-                      initial_transform,
+                      mov_origin_transform,
                       static_transforms,
-                      persist_initial_transform,
+                      persist_mov_origin_transform,
                       transform_path,
                       transform_subpath,
                       transform_blocksize,
@@ -389,7 +389,7 @@ def _align_local_data(fix_image: ImageData,
             overlap_factor=processing_overlap_factor,
             fix_mask=fix_mask,
             mov_mask=mov_mask,
-            initial_transform=initial_transform,
+            mov_origin_transform=mov_origin_transform,
             static_transform_list=static_transforms,
             output_transform=transform,
             max_cluster_jobs=max_cluster_jobs,
@@ -462,19 +462,12 @@ def _align_local_data(fix_image: ImageData,
         if not inv_transform_path:
             logger.info('Skip the inverse because it is not set')
 
-    all_static_transforms = []
-    if initial_transform is not None:
-        all_static_transforms.append(initial_transform)
-
-    if len(static_transforms) > 0:
-        all_static_transforms.extend(static_transforms)
-
-    if (deform_ok or len(all_static_transforms) > 0) and align_path:
+    if (deform_ok or len(static_transforms) > 0) and align_path:
         axes = mov_image.get_attr('axes')
-        # prepare global coordinate transform from initial_transform
+        # prepare global coordinate transform from mov_origin_transform
         global_transformations = []
-        if initial_transform is not None and persist_initial_transform:
-            spatial_translation = initial_transform[:3, 3].tolist()
+        if mov_origin_transform is not None and persist_mov_origin_transform:
+            spatial_translation = mov_origin_transform[:3, 3].tolist()
             # prepend 0 for each non-spatial axis (time, channel)
             non_spatial_count = sum(
                 1
@@ -524,14 +517,14 @@ def _align_local_data(fix_image: ImageData,
             deform_transforms = [transform]
         else:
             deform_transforms = []
-        affine_spacings = [(1.,) * mov_image.spatial_ndim for i in range(len(all_static_transforms))]
+        affine_spacings = [None for i in range(len(static_transforms))]
         transform_spacing = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing)])
         logger.info(f'Transforms spacings: {transform_spacing}')
 
         distributed_apply_transform(
             fix_image, mov_image,
             align_blocksize, # use block chunk size for distributing work
-            all_static_transforms + deform_transforms, # transform_list
+            static_transforms + deform_transforms, # transform_list
             cluster_client,
             overlap_factor=transform_overlap_factor,
             aligned_data=align,

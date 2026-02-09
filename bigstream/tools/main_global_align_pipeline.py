@@ -9,7 +9,7 @@ from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
 from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr, calc_downsampling_attr)
-from bigstream.ome_utils import (get_spatial_values, compose_initial_transform)
+from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 from bigstream.transform import apply_transform
 
 from .cli import (CliArgsHelper, RegistrationInputs,
@@ -70,15 +70,15 @@ def _run_global_align(reg_args:RegistrationInputs,
 
     (fix, fix_mask, mov, mov_mask) = get_input_images(reg_args)
     if fix.has_data() and mov.has_data():
-        # compose initial transform from user affine + OME translations
-        initial_transform = compose_initial_transform(
-            reg_args.get_initial_transform(),
+        # compose mov origin transform from user affine + OME translations
+        mov_origin_transform = compose_origin_transform(
+            reg_args.get_mov_origin_transform(),
             mov.get_attr('globalCoordinateTransformations'),
         )
         # calculate and apply the global transform
         affine, aligned = _align_global_data(fix, fix_mask, mov, mov_mask,
                                              global_steps,
-                                             initial_transform,
+                                             mov_origin_transform,
                                              reg_args.get_static_transforms())
         logger.debug(f'Global affine: {affine}')
         # save the global transform
@@ -105,7 +105,7 @@ def _run_global_align(reg_args:RegistrationInputs,
 def _align_global_data(fix_image, fix_mask,
                        mov_image, mov_mask,
                        steps,
-                       initial_transform,
+                       mov_origin_transform,
                        static_transforms):
     logger.info('Read image data for global alignment')
     fix_image.read_image()
@@ -127,8 +127,8 @@ def _align_global_data(fix_image, fix_mask,
     mov_spacing = get_spatial_values(mov_image.voxel_spacing)
     logger.info(f'Moving image voxel spacing: {mov_spacing}')
 
-    if initial_transform is not None:
-        mov_origin = initial_transform[:3, 3]
+    if mov_origin_transform is not None:
+        mov_origin = mov_origin_transform[:3, 3]
     else:
         mov_origin = None
     affine = alignment_pipeline(fix_image.image_array,
@@ -142,7 +142,7 @@ def _align_global_data(fix_image, fix_mask,
                                 mov_origin=mov_origin,
                                 static_transform_list=static_transforms)
 
-    logger.info('Apply affine transform')
+    logger.info(f'Apply affine transform: {affine}')
     # apply transform
     aligned = apply_transform(fix_image.image_array,
                               mov_image.image_array,
@@ -214,11 +214,11 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          downsampling,
                          compressor):
     align_path = reg_args.align_path()
-    # prepare global coordinate transform from reg_args.initial_transform
+    # prepare global coordinate transform from reg_args.mov_origin_transform
     global_transformations = []
-    initial_transform = reg_args.get_initial_transform()
-    if initial_transform is not None and reg_args.persist_initial_transform:
-        spatial_translation = initial_transform[:3, 3].tolist()
+    mov_origin_transform = reg_args.get_mov_origin_transform()
+    if mov_origin_transform is not None and reg_args.persist_mov_origin_transform:
+        spatial_translation = mov_origin_transform[:3, 3].tolist()
         # prepend 0 for each non-spatial axis (time, channel)
         non_spatial_count = sum(
             1

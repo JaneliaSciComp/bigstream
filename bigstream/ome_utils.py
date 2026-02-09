@@ -24,12 +24,12 @@ def get_ome_spatial_translation(coordinate_transformations):
     return None
 
 
-def compose_initial_transform(initial_transform, global_coord_transforms):
+def compose_origin_transform(origin_transform, global_coord_transforms):
     """
-    Compose initial transform from a user-provided 4x4 affine and
-    OME-ZARR coordinateTransformations (global and dataset level).
+    Compose the transform for the origin from a user-provided 4x4 affine and
+    global coordinateTransformations from the OME-ZARR metadata
 
-    Composition order: initial_transform @ T_global @ T_dataset
+    Composition order: origin_transform @ T_global
     """
     global_translation = get_ome_spatial_translation(global_coord_transforms)
 
@@ -37,11 +37,11 @@ def compose_initial_transform(initial_transform, global_coord_transforms):
     if global_translation is not None:
         translations.append(global_translation)
 
-    if initial_transform is None and len(translations) == 0:
+    if origin_transform is None and len(translations) == 0:
         return None
 
-    result = (initial_transform
-              if initial_transform is not None
+    result = (origin_transform
+              if origin_transform is not None
               else np.eye(4))
 
     for t in translations:

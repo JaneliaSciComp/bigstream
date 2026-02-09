@@ -115,7 +115,8 @@ def apply_transform(
 
     # format transform spacing
     fix_spacing = np.array(fix_spacing)
-    if transform_spacing is None: transform_spacing = fix_spacing
+    if transform_spacing is None:
+        transform_spacing = fix_spacing
     if not isinstance(transform_spacing, tuple):
         transform_spacing = (transform_spacing,) * len(transform_list)
 

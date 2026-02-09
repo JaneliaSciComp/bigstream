@@ -64,11 +64,6 @@ def _define_args():
                              type=floattuple,
                              help='Moving image voxel spacing')
 
-    args_parser.add_argument('--initial-transform',
-                             dest='initial_transform',
-                             type=str,
-                             help='Initial transformations')
-
     args_parser.add_argument('--static-transforms',
                              dest='static_transforms',
                              type=stringlist,
@@ -229,12 +224,6 @@ def _run_apply_transform(args):
 
         applied_affines = []
         affine_transforms_list = []
-
-        # read initial transformation
-        if args.initial_transform:
-            logger.info(f'Load initial transformation from {args.initial_transform}')
-            applied_affines.append(args.initial_transform)
-            affine_transforms_list.append(np.loadtxt(args.initial_transform))
 
         # read static transformations
         if args.static_transforms:

@@ -260,6 +260,7 @@ def feature_point_ransac_affine_align(
     fix_spots_count_threshold=100,
     mov_spots=None,
     mov_spots_count_threshold=100,
+    affine_estimate_confidence=0.999,
     fix_mask=None,
     mov_mask=None,
     fix_origin=None,
@@ -593,7 +594,7 @@ def feature_point_ransac_affine_align(
     _, Aff, _ = cv2.estimateAffine3D(
         fix_spots, mov_spots,
         ransacThreshold=align_threshold,
-        confidence=0.999,
+        confidence=affine_estimate_confidence,
         **kwargs,
     )
 

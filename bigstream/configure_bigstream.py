@@ -54,6 +54,7 @@ ransac: &ransac_args
   max_spot_match_distance:
   point_matches_threshold: 50
   align_threshold: 2.0
+  affine_estimate_confidence: 0.999
   diagonal_constraint: 0.25
   fix_spots_count_threshold: 100
   fix_spot_detection_kwargs:

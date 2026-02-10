@@ -72,11 +72,11 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     mov_stop_phys_coords = np.max(mov_block_phys_coords, axis=0)
 
     logger.debug((
-        f'Block {block_index} : '
-        f'fix block start physical coords: {fix_block_voxel_coords[0]} '
-        f'fix block stop physical coords: {fix_block_voxel_coords[-1]} '
-        f'moving block start physical coords: {mov_start_phys_coords} '
-        f'moving block stop physical coords: {mov_stop_phys_coords} '
+        f'Block {block_index}\n'
+        f'fix block start physical coords: {fix_block_voxel_coords[0]}\n'
+        f'fix block stop physical coords: {fix_block_voxel_coords[-1]}\n'
+        f'moving block start physical coords: {mov_start_phys_coords}\n'
+        f'moving block stop physical coords: {mov_stop_phys_coords}\n'
     ))
 
     # get moving image origin
@@ -106,11 +106,11 @@ def _prepare_compute_block_spatial_transform_params(block_info,
 
     logger.debug((
         f'Block {block_index} : '
-        f'fix voxel coords {fix_block_voxel_coords}, '
-        f'fix phys coords {fix_block_phys_coords} -> '
-        f'mov origin phys coords {fix_block_phys_coords} -> '
+        f'fix voxel coords:\n {fix_block_voxel_coords}\n'
+        f'fix phys coords:\n {fix_block_phys_coords}\n'
+        f'mov origin phys coords: {new_origin}, '
         f'mov block slices {mov_slices}, '
-        f'mov phys coords {mov_block_phys_coords} '
+        f'mov phys coords: \n{mov_block_phys_coords}\n'
     ))
 
     # read masks

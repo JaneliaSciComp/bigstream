@@ -1436,11 +1436,13 @@ def alignment_pipeline(
     # check default case
     if fix is None or mov is None:
         ndim = len(fix_spacing)
-        default = np.eye(ndim + 1)
         if 'deform' in [x[0] for x in steps]:
+            # if deform is one of the steps create a displacement field
             shape = fix.shape if fix is not None else mov.shape
-            default = np.zeros(shape + (ndim,), dtype=np.float32)
-        return default
+            return np.zeros(shape + (ndim,), dtype=np.float32)
+        else:
+            # otherwise return the identity
+            return np.eye(ndim + 1)
 
     # define how to run alignment functions
     a = (fix, mov, fix_spacing, mov_spacing)

@@ -328,7 +328,7 @@ def _compute_block_transform(compute_transform_params,
 
     end_time = time.time()
 
-    logger.debug(f'Finished computing {transform.shape}' +
+    logger.debug(f'Finished computing {transform.shape} ' +
                  f'block  {block_index} transform in {end_time-start_time}s')
 
     if output_transform is not None:

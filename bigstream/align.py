@@ -589,7 +589,7 @@ def feature_point_ransac_affine_align(
 
     # align
     logger.debug(f'{context} Found enough spots to estimate the affine ' +
-                 f'fix: {len(fix_spots)}' +
+                 f'fix: {len(fix_spots)} ' +
                  f'moving: {len(mov_spots)}')
     _, Aff, _ = cv2.estimateAffine3D(
         fix_spots, mov_spots,

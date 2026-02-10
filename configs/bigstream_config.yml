@@ -8,6 +8,7 @@ ransac:
   point_matches_threshold: 50
   align_threshold: 2.0
   diagonal_constraint: 0.5
+  confidence: 0.99
   fix_spots_count_threshold: 100
   fix_spot_detection_kwargs:
     blob_method: log

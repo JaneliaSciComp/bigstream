@@ -12,12 +12,14 @@ ransac:
   fix_spots_count_threshold: 100
   fix_spot_detection_kwargs:
     blob_method: log
+    background_subtract: false
     threshold: 0.0001
     threshold_rel: 0.001
     winsorize_limits: [0.01, 0.02]
   mov_spots_count_threshold: 100
   mov_spot_detection_kwargs:
     blob_method: log
+    background_subtract: false
     threshold: 0.001
     threshold_rel: 0.01
     winsorize_limits: [0.01, 0.02]

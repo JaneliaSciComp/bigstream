@@ -493,7 +493,8 @@ def feature_point_ransac_affine_align(
     mov_mask_spacing = X[7]
 
     # format inputs
-    if type(cc_radius) not in (tuple,): cc_radius = (cc_radius,) * fix.ndim
+    if type(cc_radius) not in (tuple,):
+        cc_radius = (cc_radius,) * fix.ndim
     A, B = blob_sizes[0], blob_sizes[1]
     if not isinstance(A, (tuple, list, np.ndarray)):
         A = (A,)*fix.ndim

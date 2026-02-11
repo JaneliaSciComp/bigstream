@@ -165,6 +165,7 @@ def _read_blocks_for_processing(blocks_info,
 
     mov_block_coords = blocks_info[3]
     if mov_block_coords is None or any(s.stop <= 0 for s in mov_block_coords):
+        logger.info(f'Moving block corresponding to {blocks_info[0]} is out of range')
         mov_block = None
     else:
         mov_block = _read_imagedata_block(mov_block_coords, mov)

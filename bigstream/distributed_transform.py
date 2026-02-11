@@ -105,8 +105,11 @@ def distributed_apply_transform(
         transform_spacing_list = transform_spacing
 
     # prepare block coordinates
-    logger.info(f'Apply distributed transform to {fix_image.shape} ' +
-          f'partitioned in {nblocks} blocks using {block_partition_size}')
+    logger.info((
+        f'Apply distributed transform to {fix_image.shape} '
+        f'partitioned in {nblocks} blocks using {block_partition_size} '
+        f'using transform spacings {transform_spacing_list} '
+    ))
     blocks_coords = []
     for bi in np.ndindex(*nblocks):
         start = block_partition_size * bi - overlaps
@@ -208,12 +211,13 @@ def _transform_single_block(fix_block_read_method,
     """
     Block transform function
     """
-    fix_origin = fix_spacing * [s.start for s in block_coords]
+    # get the fix block origin in physical coordinates
+    fix_origin_physical_coords = fix_spacing * [s.start for s in block_coords]
     logger.debug((
         f'Transform block: {block_coords} from a full {full_mov_shape} image '
         f'using {len(transform_list)} transforms; '
         f'transform spacing: {transform_spacing_list} '
-        f'Block origin: {fix_origin} '
+        f'Block origin (physical coordinates): {fix_origin_physical_coords} '
         f'Spacing(fix/mov): {fix_spacing}/{mov_spacing} '
         f'Blocksize: {blocksize}, overlaps: {blockoverlaps} '
     ))
@@ -226,10 +230,11 @@ def _transform_single_block(fix_block_read_method,
 
     # read relevant region of transforms
     applied_transform_list = []
-    transform_origin = [fix_origin,] * len(transform_list)
+    transform_origin = [fix_origin_physical_coords,] * len(transform_list)
     for iii, transform in enumerate(transform_list):
         if transform.shape != (4, 4):
-            start = np.floor(fix_origin / transform_spacing_list[iii]).astype(int)
+            # for deformation fields find the corresponding block
+            start = np.floor(fix_origin_physical_coords / transform_spacing_list[iii]).astype(int)
             stop = [s.stop for s in block_coords] * fix_spacing / transform_spacing_list[iii]
             stop = np.ceil(stop).astype(int)
             transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
@@ -279,7 +284,7 @@ def _transform_single_block(fix_block_read_method,
             f'Apply {len(transform_list)} transforms '
             f'to a fix/mov block of shapes: {fix_block.shape}/{mov_block.shape}, '
             f'fix block coords: {block_coords} '
-            f'fix origin: {fix_origin}, '
+            f'fix origin: {fix_origin_physical_coords}, '
             f'mov origin: {mov_origin}, '
             f'transform origin: {transform_origin} '
         ))
@@ -288,7 +293,7 @@ def _transform_single_block(fix_block_read_method,
             fix_spacing, mov_spacing,
             transform_list=applied_transform_list,
             transform_origin=transform_origin,
-            fix_origin=fix_origin,
+            fix_origin=fix_origin_physical_coords,
             mov_origin=mov_origin,
             **additional_transform_args,
         )

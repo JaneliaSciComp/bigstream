@@ -238,7 +238,8 @@ def _run_apply_transform(args):
             affine_transforms_list.extend([np.loadtxt(tfile) for tfile in args.affine_transformations])
 
         if len(affine_transforms_list) > 0:
-            affine_spacing = (1.,) * mov_data.spatial_ndim
+            # affines should already be in physical space of the fixed image
+            affine_spacing = None
             transforms_spacings = (affine_spacing,) * len(affine_transforms_list)
         else:
             transforms_spacings = ()
@@ -256,7 +257,7 @@ def _run_apply_transform(args):
 
         logger.info((
             f'Apply {applied_transforms} to '
-            f'{mov_data} -> {args.output}:{output_subpath} '
+            f'{mov_data} -> {args.output}:{output_subpath}, '
             f'transform spacing: {transforms_spacings} '
         ))
 

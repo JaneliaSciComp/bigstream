@@ -129,7 +129,16 @@ def _run_apply_transform(args):
         return
 
     # Read the input coordinates (as x,y,z)
-    input_coords = np.float32(np.loadtxt(args.input_coords, delimiter=','))
+    # Handle optional header row (e.g. "x,y,z,...")
+    header = None
+    with open(args.input_coords, 'r') as f:
+        first_line = f.readline().strip()
+        try:
+            [float(v) for v in first_line.split(',')]
+        except ValueError:
+            header = first_line
+    input_coords = np.float32(np.loadtxt(args.input_coords, delimiter=',',
+                                         skiprows=1 if header else 0))
     # flip them to z,y,x
     zyx_coords = np.empty_like(input_coords)
     zyx_coords[:, 0:3] = input_coords[:, [2, 1, 0]]
@@ -185,8 +194,16 @@ def _run_apply_transform(args):
         # flip z,y,x back to x,y,z before writing them to file
         output_coords[:, 0:3] = warped_zyx_coords[:, [2, 1, 0]]
         output_coords[:, 3:] = warped_zyx_coords[:, 3:]
+
         logger.info(f'Save warped coords to {args.output_coords}')
-        np.savetxt(args.output_coords, output_coords, delimiter=',', fmt='%4.4f')
+        if header:
+            with open(args.output_coords, 'w') as f:
+                f.write(header + '\n')
+            with open(args.output_coords, 'ab') as f:
+                np.savetxt(f, output_coords, delimiter=',', fmt='%4.4f')
+        else:
+            np.savetxt(args.output_coords, output_coords, delimiter=',', fmt='%4.4f')
+
         return args.output_coords
     else:
         return None

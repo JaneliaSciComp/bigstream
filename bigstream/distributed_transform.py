@@ -523,6 +523,16 @@ def _transform_coords(block_index,
 
             # for vector displacement fields crop the transformation
             cropped_transform = transform[tuple(crop_slices)]
+            if any(s == 0 for s in cropped_transform.shape[:-1]):
+                logger.warning((
+                    f'Block {block_index}: cropped transform has empty '
+                    f'spatial dimension {cropped_transform.shape} '
+                    f'from crop slices {crop_slices} - '
+                    f'replacing with identity (zero displacement)'
+                ))
+                # create a minimal 1-voxel zero displacement field
+                min_shape = (1,) * (transform.ndim - 1) + (transform.shape[-1],)
+                cropped_transform = np.zeros(min_shape, dtype=transform.dtype)
             logger.debug((
                 f'Crop transform {block_index}: '
                 f'to {crop_slices} from {transform.shape} to {cropped_transform.shape} '

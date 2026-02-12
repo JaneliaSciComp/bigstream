@@ -92,8 +92,10 @@ def blob_detection(
         **kwargs,
     ).astype(int)
     done_spots_time = time.time()
-    logger.debug(f'Spot detection ({min_blob_radius}, {max_blob_radius})' +
-                 f'found {len(spots)} spots in {done_spots_time-start_time}s')
+    logger.debug((
+        f'Spot detection ({min_blob_radius}, {max_blob_radius}) '
+        f'found {len(spots)} spots in {done_spots_time-start_time}s '
+    ))
     if mask is not None:
         spots = apply_foreground_mask(spots, mask)
 

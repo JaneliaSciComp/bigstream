@@ -171,12 +171,19 @@ def _run_apply_transform(args):
                                           worker_cpus=args.worker_cpus)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
 
+    # get input image spacing
+    voxel_spacing = _get_coords_spacing(args.input_volume,
+                                        args.input_dataset,
+                                        args.pixel_resolution,
+                                        args.downsampling)
+    spatial_ndim = len(voxel_spacing)
+
     local_deform_field = ImageData(args.local_transform, args.local_transform_subpath)
     if args.local_transform_spacing:
         # in case the transform spacing arg has the channel dimension - truncate it
-        local_deform_spacing = args.local_transform_spacing[::-1][:fix_data.spatial_ndim]  # xyz -> zyx
+        local_deform_spacing = args.local_transform_spacing[::-1][:spatial_ndim]  # xyz -> zyx
     else:
-        local_deform_spacing = local_deform_field.voxel_spacing[:fix_data.spatial_ndim]
+        local_deform_spacing = local_deform_field.voxel_spacing[:spatial_ndim]
 
     applied_affines = []
     affine_transforms_list = []
@@ -221,12 +228,6 @@ def _run_apply_transform(args):
             f'to {args.input_coords} -> {args.output_coords}, '
             f'transform spacing: {transforms_spacings} '
         ))
-
-        # get input image spacing
-        voxel_spacing = _get_coords_spacing(args.input_volume,
-                                            args.input_dataset,
-                                            args.pixel_resolution,
-                                            args.downsampling)
 
         if (args.processing_blocksize is not None and
             len(args.processing_blocksize) > 0):

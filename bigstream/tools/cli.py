@@ -325,12 +325,14 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
         args.fix, args.fix_subpath,
         image_timeindex=args.fix_timeindex,
         image_channel=args.fix_channel,
+        open_image=True,
     )
     logger.info(f'Open fix vol {fix} for registration')
     mov = ImageData(
         args.mov, args.mov_subpath,
         image_timeindex=args.mov_timeindex,
         image_channel=args.mov_channel,
+        open_image=True,
     )
     logger.info(f'Open moving vol {mov} for registration')
     # get voxel spacing for fix and moving volume
@@ -345,13 +347,13 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
     logger.info(f'Mov volume attributes: {mov.shape} {mov.attrs} {mov.voxel_spacing}')
 
     if args.fix_mask:
-        fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath)
+        fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath, open_image=True)
     elif args.fix_mask_descriptor:
         fix_mask = args.fix_mask_descriptor
     else:
         fix_mask = None
     if args.mov_mask:
-        mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath)
+        mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath, open_image=True)
     elif args.mov_mask_descriptor:
         mov_mask = args.mov_mask_descriptor
     else:

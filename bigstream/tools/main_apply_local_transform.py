@@ -160,12 +160,14 @@ def _run_apply_transform(args):
         fix_subpath,
         image_timeindex=args.fixed_timeindex,
         image_channel=args.fixed_channel,
+        open_image=True,
     )
     mov_data = ImageData(
         args.moving,
         mov_subpath,
         image_timeindex=args.moving_timeindex,
         image_channel=args.moving_channel,
+        open_image=True
     )
     if args.fixed_spacing:
         fix_data.voxel_spacing = args.fixed_spacing[::-1] # xyz -> zyx

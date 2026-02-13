@@ -41,7 +41,7 @@ def skip_sample(image, spacing, ss_spacing):
     return image[slc], spacing * ss
 
 
-def numpy_to_sitk(image, spacing=None, origin=None, vector=False):
+def numpy_to_sitk(image_array, spacing=None, origin=None, vector=False):
     """
     Convert a numpy array to a sitk image object
 
@@ -67,15 +67,16 @@ def numpy_to_sitk(image, spacing=None, origin=None, vector=False):
 
     # check endianness of data - some sitk operations seem to
     # only work with little endian
-    if str(image.dtype)[0] == '>':
-        error = "Array cannot be big endian. Convert arrays with ndarray.astype\n"
-        error += "Given array dtype is " + str(image.dtype)
-        raise TypeError(error)
+    array_dtype = image_array.dtype
+    if array_dtype.byteorder == '>':
+        image_array = image_array.astype(array_dtype.newbyteorder('<'))
 
-    image = sitk.GetImageFromArray(image, isVector=vector)
-    if spacing is None: spacing = np.ones(image.GetDimension())
+    image = sitk.GetImageFromArray(image_array, isVector=vector)
+    if spacing is None:
+        spacing = np.ones(image.GetDimension())
     image.SetSpacing(spacing[::-1].astype(float))
-    if origin is None: origin = np.zeros(image.GetDimension())
+    if origin is None:
+        origin = np.zeros(image.GetDimension())
     image.SetOrigin(origin[::-1].astype(float))
     return image
 

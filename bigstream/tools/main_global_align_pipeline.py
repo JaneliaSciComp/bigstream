@@ -7,6 +7,7 @@ import bigstream.io_utility as io_utility
 from bigstream.align import alignment_pipeline
 from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
+from bigstream.io_utility import read_block
 from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr, calc_downsampling_attr)
 from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
@@ -108,15 +109,11 @@ def _align_global_data(fix_image, fix_mask,
                        mov_origin_transform,
                        static_transforms):
     logger.info('Read image data for global alignment')
-    fix_image.read_image()
-    mov_image.read_image()
     if isinstance(fix_mask, ImageData):
-        fix_mask.read_image()
         fix_mask = fix_mask.image_array
     else:
         fix_mask = fix_mask
     if isinstance(mov_mask, ImageData):
-        mov_mask.read_image()
         mov_mask = mov_mask.image_array
     else:
         mov_mask = mov_mask
@@ -131,8 +128,25 @@ def _align_global_data(fix_image, fix_mask,
         mov_origin = mov_origin_transform[:3, 3]
     else:
         mov_origin = None
-    affine = alignment_pipeline(fix_image.image_array,
-                                mov_image.image_array,
+    full_image_coords = tuple(slice(None) for _ in range(fix_image.spatial_ndim))
+    fix_image_array = read_block(
+        full_image_coords,
+        image=fix_image.image_array,
+        image_path=fix_image.image_path,
+        image_subpath=fix_image.image_subpath,
+        image_timeindex=fix_image.image_timeindex,
+        image_channel=fix_image.image_channel,
+    )
+    mov_image_array = read_block(
+        full_image_coords,
+        image=mov_image.image_array,
+        image_path=mov_image.image_path,
+        image_subpath=mov_image.image_subpath,
+        image_timeindex=mov_image.image_timeindex,
+        image_channel=mov_image.image_channel,
+    )
+    affine = alignment_pipeline(fix_image_array,
+                                mov_image_array,
                                 fix_spacing,
                                 mov_spacing,
                                 steps,
@@ -144,8 +158,8 @@ def _align_global_data(fix_image, fix_mask,
 
     logger.info(f'Apply affine transform: {affine}')
     # apply transform
-    aligned = apply_transform(fix_image.image_array,
-                              mov_image.image_array,
+    aligned = apply_transform(fix_image_array,
+                              mov_image_array,
                               fix_spacing,
                               mov_spacing,
                               transform_list=static_transforms + [affine,])

@@ -11,6 +11,7 @@ from itertools import product
 from dask.distributed import as_completed
 
 from .image_data import ImageData
+from .distutils import validate_processing_block_size
 from .ome_utils import get_spatial_values
 from .io_utility import read_block as io_utility_read_block
 
@@ -89,6 +90,9 @@ def distributed_apply_transform(
     nblocks = np.ceil(np.array(fix_spatial_dims) / block_partition_size).astype(int)
     overlaps = np.round(block_partition_size * overlap_factor).astype(int)
 
+    # verify output zarr chunk size <= block size to prevent race conditions
+    validate_processing_block_size(aligned_data, block_partition_size)
+
     # ensure there's a 1:1 correspondence between transform spacing 
     # and transform list
     if transform_spacing is None:
@@ -110,17 +114,17 @@ def distributed_apply_transform(
         f'partitioned in {nblocks} blocks using {block_partition_size} '
         f'using transform spacings {transform_spacing_list} '
     ))
-    blocks_coords = []
+    blocks = []
     for bi in np.ndindex(*nblocks):
         start = block_partition_size * bi - overlaps
         stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
         stop = np.minimum(fix_spatial_dims, stop)
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
-        blocks_coords.append(block_coords)
+        blocks.append((bi, block_coords))
 
     logger.info((
-        f'Transform {len(blocks_coords)} blocks '
+        f'Transform {len(blocks)} blocks '
         f'with partition size {block_partition_size} '
     ))
 
@@ -174,7 +178,7 @@ def distributed_apply_transform(
     # apply transformation to all blocks
     transform_block_res = cluster_client.map(
         transform_block,
-        blocks_coords,
+        blocks,
     )
 
     res = True
@@ -196,7 +200,7 @@ def distributed_apply_transform(
 
 def _transform_single_block(fix_block_read_method,
                             mov_block_read_method,
-                            block_coords,
+                            block_info,
                             full_mov_shape=(),
                             fix_spacing=[],
                             mov_spacing=[],
@@ -212,9 +216,10 @@ def _transform_single_block(fix_block_read_method,
     Block transform function
     """
     # get the fix block origin in physical coordinates
+    block_index, block_coords = block_info
     fix_origin_physical_coords = fix_spacing * [s.start for s in block_coords]
     logger.debug((
-        f'Transform block: {block_coords} from a full {full_mov_shape} image '
+        f'Transform block {block_index}: {block_coords} from a full {full_mov_shape} image '
         f'using {len(transform_list)} transforms; '
         f'transform spacing: {transform_spacing_list} '
         f'Block origin (physical coordinates): {fix_origin_physical_coords} '
@@ -222,7 +227,7 @@ def _transform_single_block(fix_block_read_method,
         f'Blocksize: {blocksize}, overlaps: {blockoverlaps} '
     ))
     # fetch fixed image slices and read fix
-    logger.debug(f'Read fix block from {block_coords}')
+    logger.debug(f'Read fix block {block_index} from {block_coords}')
     # read the fix block and 
     fix_block = fix_block_read_method(block_coords)
     if fix_block.dtype.byteorder == '>':
@@ -240,13 +245,13 @@ def _transform_single_block(fix_block_read_method,
             transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
             transform = transform[transform_slice]
             transform_origin[iii] = start * transform_spacing_list[iii]
-            logger.info(f'Transform slice and origin for block {block_coords}:' +
+            logger.info(f'Transform slice and origin for block {block_index} at {block_coords}:' +
                         f'{transform_slice}, {transform_origin[iii]}')
 
         applied_transform_list.append(transform)
 
     transform_origin = tuple(transform_origin)
-    logger.info(f'Transform origin for block at {block_coords}: ' +
+    logger.info(f'Transform origin for block {block_index} at {block_coords}: ' +
                 f'{transform_origin}')
 
     try:
@@ -262,7 +267,7 @@ def _transform_single_block(fix_block_read_method,
             transform_spacing_list,
             transform_origin,
         )
-        logger.info(f'Transformed moving block {block_coords} coords: ' +
+        logger.info(f'Transformed moving block {block_index} at {block_coords} coords: ' +
                     f'{fix_block_coords} -> {mov_block_coords}')
 
         mov_block_coords = np.round(mov_block_coords / mov_spacing).astype(int)
@@ -282,7 +287,7 @@ def _transform_single_block(fix_block_read_method,
         # resample
         logger.info((
             f'Apply {len(transform_list)} transforms '
-            f'to a fix/mov block of shapes: {fix_block.shape}/{mov_block.shape}, '
+            f'to {block_index} block of shapes (fix/mov): {fix_block.shape}/{mov_block.shape}, '
             f'fix block coords: {block_coords} '
             f'fix origin: {fix_origin_physical_coords}, '
             f'mov origin: {mov_origin}, '
@@ -341,10 +346,10 @@ def _transform_single_block(fix_block_read_method,
                 (1,)*missing_dims + aligned_block.shape)
 
         logger.info((
-            f'Finished deforming block at {block_coords}, '
+            f'Finished deforming block {block_index} at {block_coords}, '
             f'moving coords: {mov_block_coords}, '
             f'final coords: {final_block_coords} '))
-        written_coords = _write_block(final_block_coords, aligned_block,
+        written_coords = _write_block(block_index, final_block_coords, aligned_block,
                                       output=output)
         del fix_block, mov_block, aligned_block
         return written_coords
@@ -639,15 +644,18 @@ def distributed_invert_displacement_vector_field(
         f'partition size {block_partition_size} '
         f'invert displacement args: {kwargs} '
     ))
+
+    validate_processing_block_size(inv_vectorfield_array, block_partition_size)
+
     # store block coordinates in a dask array
-    blocks_coords = []
+    blocks = []
     for bi in np.ndindex(*nblocks):
         start = block_partition_size * bi - overlaps
         stop = start + block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
         stop = np.minimum(vectorfield_array.shape[:-1], stop)
         coords = tuple(slice(x, y) for x, y in zip(start, stop))
-        blocks_coords.append(coords)
+        blocks.append((bi, coords))
 
     # invert all blocks
     invert_block = functools.partial(
@@ -659,8 +667,8 @@ def distributed_invert_displacement_vector_field(
         blockoverlaps=overlaps,
         **kwargs
     )
-    logger.info(f'Submit Invert for {len(blocks_coords)} blocks')
-    invert_res = cluster_client.map(invert_block, blocks_coords)
+    logger.info(f'Submit Invert for {len(blocks)} blocks')
+    invert_res = cluster_client.map(invert_block, blocks)
     for f, r in as_completed(invert_res, with_results=True):
         if f.cancelled():
             exc = f.exception()
@@ -675,7 +683,7 @@ def distributed_invert_displacement_vector_field(
     return inv_vectorfield_array
 
 
-def _invert_block(block_coords,
+def _invert_block(block_info,
                   full_vectorfield=[],
                   inv_vectorfield_result=[],
                   spacing=[],
@@ -685,8 +693,9 @@ def _invert_block(block_coords,
     """
     Invert block function
     """
+    block_index, block_coords = block_info
     logger.info((
-        f'Invert block: {block_coords}, '
+        f'Invert block {block_index} at {block_coords}, '
         f'blocksize: {blocksize}, spacing: {spacing}, blockoverlaps: {blockoverlaps}'
         f'invert args: {kwargs} '
     ))
@@ -726,20 +735,20 @@ def _invert_block(block_coords,
     inverse_block_coords = tuple(inverse_block_coords_list)
     logger.info((
         'Completed inverse vector field for block '
-        f'{block_coords}, {block_vectorfield.shape} -> '
+        f'{block_info} at {block_coords}, {block_vectorfield.shape} -> '
         f'{inverse_block_coords}, {inverse_block.shape} '
     ))
-    written_coords = _write_block(inverse_block_coords, inverse_block,
+    written_coords = _write_block(block_index, inverse_block_coords, inverse_block,
                                   output=inv_vectorfield_result)
     del block_vectorfield, inverse_block
     return written_coords
 
 
-def _write_block(block_coords, block_data, output=None):
+def _write_block(block_index, block_coords, block_data, output=None):
     if output is not None and block_data is not None:
-        logger.debug(f'Write {block_data.shape} block at {block_coords} to {output}({output.shape})')
+        logger.debug(f'Write {block_data.shape} block {block_index} at {block_coords} to {output}({output.shape})')
         output[block_coords] = block_data
-        logger.debug(f'Done writing {block_data.shape} block at {block_coords} to {output}({output.shape})')
+        logger.debug(f'Done writing {block_data.shape} block {block_index} at {block_coords} to {output}({output.shape})')
         return block_coords
 
     return None

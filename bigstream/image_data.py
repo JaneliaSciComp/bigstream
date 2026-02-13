@@ -9,7 +9,8 @@ class ImageData:
     def __init__(self, image_path=None, image_subpath=None,
                  image_arraydata=None, image_attrs=None,
                  image_timeindex:int|None=None, image_channel:int|None=None,
-                 read_attrs=True):
+                 read_attrs=True,
+                 open_image=False):
         self.image_path = image_path
         self.image_subpath = image_subpath
         self.image_timeindex = image_timeindex
@@ -18,7 +19,9 @@ class ImageData:
         self.image_voxel_spacing = None
         self.image_downsampling = None
         self.image_attrs = image_attrs
-        if image_attrs is None and read_attrs:
+        if open_image:
+            self._open_image()
+        elif image_attrs is None and read_attrs:
             self.read_attrs()
 
     def __str__(self):
@@ -42,7 +45,14 @@ class ImageData:
     def read_attrs(self):
         if self.image_path:
             self.image_attrs = read_attributes(self.image_path, self.image_subpath)
-    
+
+    def _open_image(self):
+        if self.image_path:
+            self.image_ndarray, self.image_attrs = img_open(
+                self.image_path,
+                self.image_subpath,
+            )
+
     def read_image(self, convert_to_little_endian=True):
         if self.image_path:
             imgarray, self.image_attrs = img_open(

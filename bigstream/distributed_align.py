@@ -11,6 +11,7 @@ from itertools import product
 from toolz import partition_all
 
 from .align import alignment_pipeline
+from .distutils import validate_processing_block_size
 from .image_data import (ImageData, as_image_data)
 from .ome_utils import get_spatial_values
 from .io_utility import read_block as io_utility_read_block
@@ -302,6 +303,10 @@ def _compute_block_transform(compute_transform_params,
         transform = bst.matrix_to_displacement_field(
             transform, fix_block.shape, spacing=fix_spacing,
         )
+    else:
+        #  if it's a displacement field validate it
+        _validate_transform(transform)
+
     # Finished computing transformation for current block_index
     logger.info((
         'Finished block alignment for '
@@ -326,6 +331,8 @@ def _compute_block_transform(compute_transform_params,
                  f'Apply weights {weights.shape},' +
                  f'to transform {transform.shape}')
     transform = transform * weights[..., None]
+    # validate it again after applying the weights
+    _validate_transform(transform)
 
     end_time = time.time()
 
@@ -413,6 +420,26 @@ def _get_transform_weights(block_index,
             weights = weights[tuple(region)]
 
     return weights
+
+
+def _validate_transform(transform, correct=False, throw_exc=True):
+    """Check displacement field for NaN/Inf values and zero them out."""
+    bad = np.isnan(transform)
+    if bad.any():
+        count = np.count_nonzero(bad)
+        logger.warning(f'Transform has {count} NaN values - replacing with 0')
+        if correct:
+            transform[bad] = 0.
+        elif throw_exc:
+            raise ValueError(f'Invalid value error found at {bad}')
+    bad = np.isinf(transform)
+    if bad.any():
+        count = np.count_nonzero(bad)
+        logger.warning(f'Transform has {count} +Inf values - replacing with 0')
+        if correct:
+            transform[bad] = 0.
+        elif throw_exc:
+            raise ValueError(f'Invalid value error found at {bad}')
 
 
 def distributed_alignment_pipeline(
@@ -540,6 +567,9 @@ def distributed_alignment_pipeline(
                              else None)
 
     block_partition_size = np.array(get_spatial_values(blocksize))
+
+    # verify output zarr chunk size <= block size to prevent race conditions
+    validate_processing_block_size(output_transform, block_partition_size)
 
     # from here on we only use spatial coordinates
     # except for the block reading where we also use the 

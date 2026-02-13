@@ -228,7 +228,7 @@ def create_dataset_array(
 
     # write to log before erroring out
     except Exception as e:
-        logger.error(f'Error creating a dataset at {container_path}:{container_subpath}: {e}')
+        logger.exception(f'Error creating a dataset at {container_path}:{container_subpath}')
         raise e
 
 
@@ -726,7 +726,7 @@ def _open_zarr(data_path, data_subpath,
             ba = a[block_coords] if block_coords is not None else a
             return ba, a.attrs.asdict()
     except Exception as e:
-        logger.exception(f'Error opening {data_path} : {data_subpath}')
+        logger.exception(f'Error opening {data_path} : {data_subpath} : {data_timeindex} : {data_channels} : {block_coords} -> {e}')
         raise e
 
 

@@ -3,6 +3,7 @@ channels:
 dependencies:
   - python=3.12
   - pip
-  - psutil=7.1.3
+  - psutil=7.2.2
+  - zstd
   - pip:
       - git+https://github.com/GFleishman/ClusterWrap.git@fa718ac49

@@ -496,7 +496,7 @@ def _transform_coords(block_index,
                       coord_indexed_values,
                       coord_indices,
                       coords_spacing=(1,),
-                      transform_spacing=(1,),
+                      transform_spacing=(None,),
                       transform_list=[]):
     # read relevant region of transform
     logger.info((
@@ -510,15 +510,27 @@ def _transform_coords(block_index,
     points_values = coord_indexed_values[:, 3:]
 
     cropped_transforms = []
-    for _, transform in enumerate(transform_list):
+    for ti, transform in enumerate(transform_list):
         if len(transform.shape) not in [1, 2]:
+            # resolve per-transform spacing
+            if isinstance(transform_spacing, tuple):
+                t_spacing = transform_spacing[ti]
+            else:
+                t_spacing = transform_spacing
+
+            logger.debug(f'Apply ({ti}) deformation using transform spacing: {t_spacing} ')
+
+            if t_spacing is None:
+                logger.warning(f'Invalid transform spacing found using coordinates spacing instead: {coords_spacing}')
+                t_spacing = np.array(coords_spacing)
+
             crop_slices = []
             # convert block voxel coordinates into corresponding transform voxel coordinates
             # keeping in mind that block voxel uses coords_spacing
             # and transform block uses transform_spacing
             for axis in range(transform.ndim-1):
-                start = max(math.floor(block_slice_coords[axis].start * coords_spacing[axis] / transform_spacing[axis]), 0)
-                stop = min(math.ceil(block_slice_coords[axis].stop * coords_spacing[axis] / transform_spacing[axis]), transform.shape[axis])
+                start = max(math.floor(block_slice_coords[axis].start * coords_spacing[axis] / t_spacing[axis]), 0)
+                stop = min(math.ceil(block_slice_coords[axis].stop * coords_spacing[axis] / t_spacing[axis]), transform.shape[axis])
                 crop_slices.append(slice(start, stop))
 
             # for vector displacement fields crop the transformation
@@ -540,6 +552,7 @@ def _transform_coords(block_index,
             cropped_transforms.append(cropped_transform)
         else:
             # no need to do any cropping if it's an affine matrix
+            logger.debug(f'Apply ({ti}) affine {transform}')
             cropped_transforms.append(transform)
 
     try:

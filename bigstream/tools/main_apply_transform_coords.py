@@ -219,13 +219,14 @@ def _run_apply_transform(args):
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines
 
+        all_transforms = all_transforms[::-1] if args.inverse_transforms else all_transforms
         applied_transforms = applied_transforms[::-1] if args.inverse_transforms else applied_transforms
         transforms_spacings = transforms_spacings[::-1] if args.inverse_transforms else transforms_spacings
 
         logger.info((
-            f'Apply {applied_transforms}'
-            ' (inversed) ' if args.inverse_transforms else ' '
-            f'to {args.input_coords} -> {args.output_coords}, '
+            f'Apply {applied_transforms} '
+            + ('(inversed) ' if args.inverse_transforms else '')
+            + f'to {args.input_coords} -> {args.output_coords}, '
             f'transform spacing: {transforms_spacings} '
         ))
 

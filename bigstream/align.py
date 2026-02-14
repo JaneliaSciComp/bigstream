@@ -1087,20 +1087,20 @@ def affine_align(
         irm.Execute(fix, mov)
         final_metric_value = irm.MetricEvaluate(fix, mov)
     except Exception as e:
-        logger.error(f'{context} Registration failed due to ITK exception: {e}')
-        logger.info(f'{context} Returning default')
+        logger.error(f'{context} Affine align failed due to ITK exception: {e}')
+        logger.info(f'{context} Affine align returning default')
         return default
 
     # if registration improved metric return result
     # otherwise return default
     if final_metric_check and final_metric_value > initial_metric_value:
-        logger.warning(f'{context} Optimization failed to improve metric')
+        logger.warning(f'{context} Affine align optimization failed to improve metric')
         logger.info((f'METRIC VALUES initial: {context} ',
                     f'{initial_metric_value} final: {final_metric_value}'))
-        logger.info(f'{context} Returning default')
+        logger.info(f'{context} Affine align returning default')
         return default
     else:
-        logger.info(f'{context} Registration succeeded')
+        logger.info(f'{context} Affine align succeeded')
         return bst.affine_transform_to_matrix(transform)
 
 

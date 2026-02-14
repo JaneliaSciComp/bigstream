@@ -1076,8 +1076,10 @@ def affine_align(
         transform = bst.matrix_to_affine_transform(initial_condition)
     irm.SetInitialTransform(transform, inPlace=True)
     # set masks
-    if fix_mask is not None: irm.SetMetricFixedMask(fix_mask)
-    if mov_mask is not None: irm.SetMetricMovingMask(mov_mask)
+    if fix_mask is not None:
+        irm.SetMetricFixedMask(fix_mask)
+    if mov_mask is not None:
+        irm.SetMetricMovingMask(mov_mask)
 
     # execute alignment, for any exceptions return default
     try:

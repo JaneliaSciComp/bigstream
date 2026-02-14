@@ -48,16 +48,19 @@ local_align:
     smooth_sigmas: [0.25]
     optimizer: RSGD
     optimizer_args:
-      learningRate: 0.25
-      minStep: 0
-      numberOfIterations: 25
+      learningRate: 2.0
+      minStep: 0.0001
+      relaxationFactor: 0.5
+      numberOfIterations: 200
   deform:
     alignment_spacing: 2.0
     control_point_spacing: 50.0
     control_point_levels: [1]
     smooth_sigmas: [0.25]
-    optimizer: RSGD
+    metric: MS
+    metric_args: {}
+    optimizer: GD
     optimizer_args:
-      learningRate: 2.5
-      minStep: 0
-      numberOfIterations: 25
+      learningRate: 1.0
+      convergenceMinimumValue: 0.00001
+      numberOfIterations: 300

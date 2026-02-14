@@ -322,7 +322,7 @@ def _compute_block_transform(compute_transform_params,
     # handle end blocks
     if np.any(weights.shape != transform.shape[:-1]):
         crop = tuple(slice(0, s) for s in transform.shape[:-1])
-        logger.debug(f'Crop weights for {block_index}' + 
+        logger.debug(f'Crop weights for {block_index} ' +
                      f'from {transform.shape} to {weights.shape}')
         weights = weights[crop]
 

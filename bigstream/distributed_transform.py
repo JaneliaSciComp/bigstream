@@ -645,7 +645,7 @@ def distributed_invert_displacement_vector_field(
         f'invert displacement args: {kwargs} '
     ))
 
-    validate_processing_block_size(inv_vectorfield_array, block_partition_size)
+    validate_processing_block_size(inv_vectorfield_array, block_partition_size, reverse_output_axes=True)
 
     # store block coordinates in a dask array
     blocks = []

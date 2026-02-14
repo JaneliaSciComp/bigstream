@@ -569,7 +569,7 @@ def distributed_alignment_pipeline(
     block_partition_size = np.array(get_spatial_values(blocksize))
 
     # verify output zarr chunk size <= block size to prevent race conditions
-    validate_processing_block_size(output_transform, block_partition_size)
+    validate_processing_block_size(output_transform, block_partition_size, reverse_output_axes=True)
 
     # from here on we only use spatial coordinates
     # except for the block reading where we also use the 

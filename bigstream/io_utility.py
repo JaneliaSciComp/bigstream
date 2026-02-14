@@ -145,9 +145,14 @@ def create_dataset_array(
                 f'parent attrs: {parent_attrs} '
                 f'{dataset_attrs} '
             ))
-            root_group = zarr.open_group(store=store,
-                                         mode='a',
-                                         zarr_format=zarr_format)
+            try:
+                root_group = zarr.open_group(store=store,
+                                             mode='a',
+                                             zarr_format=zarr_format)
+            except zarr.errors.ContainsGroupError:
+                # group already exists - open without zarr_format
+                # to let zarr auto-detect the existing format
+                root_group = zarr.open_group(store=store, mode='a')
 
             # total replacement with empty container
             if overwrite:

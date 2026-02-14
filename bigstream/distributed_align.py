@@ -263,6 +263,7 @@ def _compute_block_transform(compute_transform_params,
                              block_overlaps=None,
                              nblocks=None,
                              output_transform=None,
+                             foreground_check_pct=0.,
                              align_steps=[]):
     start_time = time.time()
     ((block_index,
@@ -286,26 +287,49 @@ def _compute_block_transform(compute_transform_params,
         f'mov_shape: {mov_block.shape if mov_block is not None else 0} '
         f'using {len(static_block_transform_list)} transforms '
     ))
-    # run alignment pipeline
-    # some pipeline algorithms use "fancy indexing" (list of tuples)
-    # which is not supported yet by dask arrays
-    # so in order to avoid the problem we materialize the fix and moving blocks
-    transform = alignment_pipeline(
-        fix_block, mov_block, fix_spacing, mov_spacing, align_steps,
-        fix_mask=fix_mask_block,
-        mov_mask=mov_mask_block,
-        mov_origin=new_origin_phys,
-        static_transform_list=static_block_transform_list,
-        context=f'{block_index}',
-    )
-    # ensure transform is a vector field
-    if len(transform.shape) == 2:
-        transform = bst.matrix_to_displacement_field(
-            transform, fix_block.shape, spacing=fix_spacing,
-        )
+
+    # check if blocks have sufficient foreground content
+    skip_alignment = False
+    if fix_block is None or mov_block is None:
+        logger.warning(f'Block {block_index} has no data, skipping alignment')
+        skip_alignment = True
+    elif foreground_check_pct > 0:
+        fix_fg = np.count_nonzero(fix_block) / fix_block.size
+        mov_fg = np.count_nonzero(mov_block) / mov_block.size
+        if fix_fg < foreground_check_pct or mov_fg < foreground_check_pct:
+            logger.warning((
+                f'Block {block_index} has insufficient foreground '
+                f'(fix: {fix_fg:.4f}, mov: {mov_fg:.4f}), skipping alignment'
+            ))
+            skip_alignment = True
+
+    if skip_alignment:
+        # identity deform: zero displacement field
+        block_shape = tuple(s.stop - s.start for s in block_coords)
+        transform = np.zeros(block_shape + (len(block_coords),), dtype=np.float32)
     else:
-        #  if it's a displacement field validate it
-        _validate_transform(transform)
+        # run alignment pipeline
+        # some pipeline algorithms use "fancy indexing" (list of tuples)
+        # which is not supported yet by dask arrays
+        # so in order to avoid the problem we materialize the fix and moving blocks
+        transform = alignment_pipeline(
+            fix_block, mov_block,
+            fix_spacing, mov_spacing,
+            align_steps,
+            fix_mask=fix_mask_block,
+            mov_mask=mov_mask_block,
+            mov_origin=new_origin_phys,
+            static_transform_list=static_block_transform_list,
+            context=f'{block_index}',
+        )
+        # ensure transform is a vector field
+        if len(transform.shape) == 2:
+            transform = bst.matrix_to_displacement_field(
+                transform, fix_block.shape, spacing=fix_spacing,
+            )
+        else:
+            #  if it's a displacement field validate it
+            _validate_transform(transform)
 
     # Finished computing transformation for current block_index
     logger.info((
@@ -555,16 +579,27 @@ def distributed_alignment_pipeline(
     mov_spatial_dims = mov_image.spatial_dims
     fix_spacing = get_spatial_values(fix_image.voxel_spacing)
     mov_spacing = get_spatial_values(mov_image.voxel_spacing)
-    # fix/mov mask shape gets set only the corresponding masks
-    # refer to an image array (either ImageData or ndarray)
-    fix_mask_image = as_image_data(fix_mask)
-    mov_mask_image = as_image_data(mov_mask)
-    fix_mask_spatial_dims = (fix_mask_image.spatial_dims
-                             if fix_mask_image is not None
-                             else None)
-    mov_mask_spatial_dims = (mov_mask_image.spatial_dims
-                             if mov_mask_image is not None
-                             else None)
+    if fix_mask is not None:
+        if isinstance(fix_mask, (tuple, list)):
+            fix_mask_image = None
+            fix_mask_spatial_dims = np.array(fix_mask[3:]) - np.array(fix_mask[:3])
+        else:
+            fix_mask_image = as_image_data(fix_mask)
+            fix_mask_spatial_dims = fix_mask_image.spatial_dims
+    else:
+        fix_mask_image = None
+        fix_mask_spatial_dims = None
+
+    if mov_mask is not None:
+        if isinstance(mov_mask, (tuple, list)):
+            mov_mask_image = None
+            mov_mask_spatial_dims = np.array(mov_mask[3:]) - np.array(mov_mask[:3])
+        else:
+            mov_mask_image = as_image_data(mov_mask)
+            mov_mask_spatial_dims = mov_mask_image.spatial_dims
+    else:
+        mov_mask_image = None
+        mov_mask_spatial_dims = None
 
     block_partition_size = np.array(get_spatial_values(blocksize))
 
@@ -591,35 +626,32 @@ def distributed_alignment_pipeline(
         block_slice = tuple(slice(x, y) for x, y in zip(start, stop))
 
         foreground = True
-        if fix_mask is not None:
-            logger.info(f'Use mask for block {bi}')
+        if fix_mask_image is not None:
+            # mask is provided as an image
+            logger.info(f'Use image mask for block {bi}')
             mask_start = block_partition_size * bi
             mask_stop = mask_start + block_partition_size
-            if fix_mask_image is not None:
-                ratio = fix_mask_spatial_dims / fix_spatial_dims
-            else:
-                ratio = 1
+            ratio = fix_mask_spatial_dims / fix_spatial_dims
             mask_start = np.round(ratio * mask_start).astype(int)
             mask_stop = np.round(ratio * mask_stop).astype(int)
             fix_mask_block_coords = tuple(slice(a, b)
                                                 for a, b in zip(mask_start, mask_stop))
-            if fix_mask_image is not None:
-                # mask is provided as an image
-                fix_mask_crop = _read_imagedata_block(fix_mask_block_coords, fix_mask_image)
-                foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
-                logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
-                if foreground_ratio < foreground_percentage:
-                    logger.debug(f'Ignore ndarray masked block {bi}')
-                    foreground = False
-            elif isinstance(fix_mask, (tuple, list)):
-                # mask is provided as a tuple
-                fix_mask_crop = _read_imagedata_block(fix_mask_block_coords, fix_mask_image)
-                fix_mask_crop = np.isin(fix_mask_crop, fix_mask, invert=True).astype(np.uint8)
-                foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
-                logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
-                if foreground_ratio < foreground_percentage:
-                    logger.debug(f'Ignore tuple masked block {bi}')
-                    foreground = False
+            fix_mask_crop = _read_imagedata_block(fix_mask_block_coords, fix_mask_image)
+            foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
+            logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
+            if foreground_ratio < foreground_percentage:
+                logger.debug(f'Ignore masked block {bi}')
+                foreground = False
+        elif fix_mask is not None:
+            # mask is provided as 6 voxel coordinates: (z_min, y_min, x_min, z_max, y_max, x_max)
+            mask_min = np.array(fix_mask[:3])
+            mask_max = np.array(fix_mask[3:])
+            block_min = np.array([s.start for s in block_slice])
+            block_max = np.array([s.stop for s in block_slice])
+            # check if block intersects the mask bounding box
+            if np.any(block_max <= mask_min) or np.any(block_min >= mask_max):
+                logger.debug(f'Block {bi} outside mask bbox {fix_mask}, skipping')
+                foreground = False
 
         if foreground:
             fix_blocks_ids.append(bi)
@@ -662,8 +694,8 @@ def distributed_alignment_pipeline(
             blocks_info,
             fix=fix_image,
             mov=mov_image,
-            fix_mask=fix_mask,
-            mov_mask=mov_mask,
+            fix_mask=fix_mask_image,
+            mov_mask=mov_mask_image,
         )
 
     def compute_block_transform_method(transform_params):

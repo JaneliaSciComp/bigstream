@@ -182,15 +182,26 @@ def create_dataset_array(
                 else:
                     # this is a new dataset
                     dataset_shape = shape
-                    dataset_array = root_group.create_array(
-                        container_subpath,
-                        shape=_to_native_type(dataset_shape),
-                        chunks=chunks,
-                        dtype=dtype,
-                        overwrite=overwrite,
-                        chunk_key_encoding=chunk_key_separator,
-                        **compressor_args,
-                    )
+                    try:
+                        dataset_array = root_group.create_array(
+                            container_subpath,
+                            shape=_to_native_type(dataset_shape),
+                            chunks=chunks,
+                            dtype=dtype,
+                            overwrite=overwrite,
+                            chunk_key_encoding=chunk_key_separator,
+                            **compressor_args,
+                        )
+                    except zarr.errors.ContainsArrayError:
+                        # array exists but was not found by __contains__
+                        logger.info((
+                            f'Dataset {container_path}:{container_subpath} '
+                            f'already exists (detected on create) '
+                        ))
+                        dataset_array = root_group[container_subpath]
+                        dataset_shape = dataset_array.shape
+                        _resize_dataset_array(dataset_array, dataset_shape,
+                                              for_timeindex, for_channel)
 
             # add group and dataset metadata
             _update_dataset_attrs(root_group, dataset_array,

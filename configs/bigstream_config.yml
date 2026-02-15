@@ -44,23 +44,23 @@ local_align:
   transform_overlap: 0.1
   affine:
     alignment_spacing: 2.0
-    shrink_factors: [1]
-    smooth_sigmas: [0.25]
+    shrink_factors: [2]
+    smooth_sigmas: [2.0]
+    metric: MMI
     optimizer: RSGD
     optimizer_args:
-      learningRate: 2.0
+      learningRate: 0.25
       minStep: 0.0001
-      relaxationFactor: 0.5
-      numberOfIterations: 200
+      numberOfIterations: 100
   deform:
-    alignment_spacing: 2.0
-    control_point_spacing: 50.0
+    alignment_spacing: 1.0
+    control_point_spacing: 128.0
     control_point_levels: [1]
-    smooth_sigmas: [0.25]
-    metric: MS
-    metric_args: {}
+    shrink_factors: [1]
+    smooth_sigmas: [1.0]
+    metric: MMI
     optimizer: GD
     optimizer_args:
-      learningRate: 1.0
-      convergenceMinimumValue: 0.00001
-      numberOfIterations: 300
+      learningRate: 0.5
+      convergenceMinimumValue: 0.001
+      numberOfIterations: 200

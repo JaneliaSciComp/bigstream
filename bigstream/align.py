@@ -1487,12 +1487,27 @@ def alignment_pipeline(
     # loop over steps
     new_transforms = []
     for alignment, arguments in steps:
-        logger.debug(f'Run {context} {alignment} {arguments}')
         arguments = {**kwargs, **arguments}
         logger.debug(f'All {context} {alignment} args: {arguments}')
+        # append new transforms to the static transforms
         arguments['static_transform_list'] = static_transform_list + new_transforms
+        # update mov origin after the last transform
+        arguments['mov_origin'] = mov_origin
+        logger.debug(f'Run {context} {alignment} {arguments}')
         alignment_result = align[alignment](context=f'{alignment} {context}', **arguments)
         logger.debug(f'Completed {context} {alignment} {arguments}')
+        if mov_origin is not None:
+            if len(alignment_result.shape) == 2:
+                # update mov_origin by applying the affine transform
+                homogeneous = np.append(mov_origin, 1.0)
+                mov_origin = (alignment_result @ homogeneous)[:3]
+            else:
+                # update mov_origin by interpolating the displacement field
+                mov_origin = bst.apply_transform_to_coordinates(
+                    mov_origin.reshape(1, -1),
+                    [alignment_result],
+                    transform_spacing=fix_spacing,
+                ).flatten()
         new_transforms.append(alignment_result)
 
     # return in the requested format

@@ -1094,7 +1094,6 @@ def affine_align(
         transform = bst.matrix_to_affine_transform(initial_condition)
     else:
         transform = None
-    logger.debug(f'Set initial transform: {transform}')
     irm.SetInitialTransform(transform, inPlace=True)
     # set masks
     if fix_mask is not None:
@@ -1115,9 +1114,11 @@ def affine_align(
     # if registration improved metric return result
     # otherwise return default
     if final_metric_check and final_metric_value > initial_metric_value:
-        logger.warning(f'{context} Affine align optimization failed to improve metric')
-        logger.info((f'METRIC VALUES initial: {context} ',
-                    f'{initial_metric_value} final: {final_metric_value}'))
+        logger.warning((
+            f'{context} Affine align optimization failed to improve metric: '
+            f'initial: {initial_metric_value}, '
+            f'final: {final_metric_value} '
+        ))
         logger.info(f'{context} Affine align returning default')
         return default
     else:
@@ -1330,9 +1331,11 @@ def deformable_align(
     # if registration improved metric return result
     # otherwise return default
     if final_metric_check and final_metric_value > initial_metric_value:
-        logger.warning(f'{context} Deformable align optimization failed to improve metric')
-        logger.info((f'{context} METRIC VALUES initial: {initial_metric_value} ',
-                     f'final: {final_metric_value}'))
+        logger.warning((
+            f'{context} Deformable align optimization failed to improve metric: '
+            f'initial: {initial_metric_value}, '
+            f'final: {final_metric_value} '
+        ))
         logger.info(f'{context} Deformable align returning default')
         return default
     else:
@@ -1487,12 +1490,13 @@ def alignment_pipeline(
     # loop over steps
     new_transforms = []
     for alignment, arguments in steps:
+        logger.debug(f'{context} {alignment} args: {arguments}')
         arguments = {**kwargs, **arguments}
-        logger.debug(f'All {context} {alignment} args: {arguments}')
         # append new transforms to the static transforms
         arguments['static_transform_list'] = static_transform_list + new_transforms
-        # update mov origin after the last transform
-        arguments['mov_origin'] = mov_origin
+        if mov_origin is not None:
+            # update mov origin after the last transform
+            arguments['mov_origin'] = mov_origin
         logger.debug(f'Run {context} {alignment} {arguments}')
         alignment_result = align[alignment](context=f'{alignment} {context}', **arguments)
         logger.debug(f'Completed {context} {alignment} {arguments}')

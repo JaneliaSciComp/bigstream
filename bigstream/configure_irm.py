@@ -239,16 +239,22 @@ def configure_irm(
                  f'Smooth sigmas: {smooth_sigmas}')
 
     # set callback function
+    def default_callback(irm):
+        level = irm.GetCurrentLevel()
+        iteration = irm.GetOptimizerIteration()
+        metric = irm.GetMetricValue()
+        logger.debug((
+            f'{context} LEVEL: {level} '
+            f'ITERATION: {iteration} '
+            f'METRIC: {metric}'
+        ))
+
     if callback is None:
-        def callback(irm):
-            level = irm.GetCurrentLevel()
-            iteration = irm.GetOptimizerIteration()
-            metric = irm.GetMetricValue()
-            logger.debug(f'{context} LEVEL: {level} ' +
-                         f'ITERATION: {iteration} ' +
-                         f'METRIC: {metric}')
+        callback = default_callback
+
     irm.AddCommand(sitk.sitkIterationEvent, lambda: callback(irm))
 
     # return configured irm
     return irm
+
 

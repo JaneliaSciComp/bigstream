@@ -84,7 +84,6 @@ def _run_global_align(reg_args:RegistrationInputs,
         logger.debug(f'Global affine: {affine}')
         # save the global transform
         _save_global_transform(reg_args, affine)
-
         # save global aligned volume
         return _save_aligned_volume(
             reg_args,
@@ -99,8 +98,6 @@ def _run_global_align(reg_args:RegistrationInputs,
     else:
         logger.info('Skip global alignment - both fix and moving image are needed')
         return None
-
-
 
 
 def _align_global_data(fix_image, fix_mask,
@@ -155,7 +152,6 @@ def _align_global_data(fix_image, fix_mask,
                                 fix_origin=None,
                                 mov_origin=mov_origin,
                                 static_transform_list=static_transforms)
-
     logger.info(f'Apply affine transform: {affine}')
     # apply transform
     aligned = apply_transform(fix_image_array,
@@ -163,7 +159,6 @@ def _align_global_data(fix_image, fix_mask,
                               fix_spacing,
                               mov_spacing,
                               transform_list=static_transforms + [affine,])
-
     return affine, aligned
 
 
@@ -172,12 +167,27 @@ def _apply_global_transform(reg_args:RegistrationInputs,
                             compressor):
     (fix_image, _, mov_image, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
-        fix_image.read_image()
-        mov_image.read_image()
+        full_image_coords = tuple(slice(None) for _ in range(fix_image.spatial_ndim))
+        fix_image_array = read_block(
+            full_image_coords,
+            image=fix_image.image_array,
+            image_path=fix_image.image_path,
+            image_subpath=fix_image.image_subpath,
+            image_timeindex=fix_image.image_timeindex,
+            image_channel=fix_image.image_channel,
+        )
+        mov_image_array = read_block(
+            full_image_coords,
+            image=mov_image.image_array,
+            image_path=mov_image.image_path,
+            image_subpath=mov_image.image_subpath,
+            image_timeindex=mov_image.image_timeindex,
+            image_channel=mov_image.image_channel,
+        )
         # apply transform
         transform_list = reg_args.get_static_transforms() + [affine,]
-        aligned = apply_transform(fix_image.image_array,
-                                  mov_image.image_array,
+        aligned = apply_transform(fix_image_array,
+                                  mov_image_array,
                                   fix_image.voxel_spacing,
                                   mov_image.voxel_spacing,
                                   transform_list=transform_list)
@@ -260,29 +270,28 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             align_blocksize = (128,) * fix_image.spatial_ndim
 
         if len(aligned_array.shape) < len(fix_shape):
-            align_shape = (1,) * (len(fix_shape) - len(aligned_array.shape)) + aligned_array.shape
-            logger.info(f'Reshape align ndarray to: {align_shape}')
-            aligned_array = aligned_array.reshape(align_shape)
+            aligned_dataset_shape = (1,) * (len(fix_shape) - len(aligned_array.shape)) + aligned_array.shape
+            logger.info(f'Reshape align dataset to: {aligned_dataset_shape}')
         else:
-            align_shape = aligned_array.shape
+            aligned_dataset_shape = aligned_array.shape
 
         if len(align_blocksize) < len(fix_shape):
             # align_blocksize is not set, so use default block size
-            align_chunk_size = (1,) * (len(fix_shape)-len(align_blocksize)) + align_blocksize
+            aligned_dataset_chunksize = (1,) * (len(fix_shape)-len(align_blocksize)) + align_blocksize
         else:
-            align_chunk_size = align_blocksize
+            aligned_dataset_chunksize = align_blocksize
 
         logger.info((
             f'Save global aligned volume to {align_path} '
-            f'shape: {align_shape} '
-            f'blocksize {align_chunk_size} '
+            f'shape: {aligned_dataset_shape} '
+            f'blocksize {aligned_dataset_chunksize} '
             f'attrs: {align_attrs} '
         ))
         dataset_array = io_utility.create_dataset_array(
             align_path,
             reg_args.align_dataset(),
-            align_shape,
-            align_chunk_size,
+            aligned_dataset_shape,
+            aligned_dataset_chunksize,
             aligned_array.dtype,
             overwrite=False,
             compressor=compressor,
@@ -294,7 +303,15 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             downsamplingFactors=calc_downsampling_attr(downsampling),
             zarr_format=2,
         )
-        dataset_array[...] = aligned_array
+        write_coords = []
+        if reg_args.align_timeindex is not None and len(dataset_array.shape) > 3:
+            write_coords.append(reg_args.align_timeindex)
+        if reg_args.align_channel is not None and len(dataset_array.shape) > 3:
+            write_coords.append(reg_args.align_channel)
+        if write_coords:
+            dataset_array[tuple(write_coords)] = aligned_array
+        else:
+            dataset_array[...] = aligned_array
         return dataset_array
     else:
         logger.info('Skip saving global aligned volume')

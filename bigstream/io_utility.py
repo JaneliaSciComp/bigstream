@@ -154,12 +154,13 @@ def create_dataset_array(
                 # to let zarr auto-detect the existing format
                 root_group = zarr.open_group(store=store, mode='a')
 
-            # total replacement with empty container
             if overwrite:
-                dataset_shape = shape
+                # total replacement with empty container
+                final_dataset_shape = _get_array_shape(shape, for_timeindex, for_channel)
+                dataset_shape = final_dataset_shape
                 dataset_array = root_group.create_array(
                     container_subpath,
-                    shape=_to_native_type(shape),
+                    shape=_to_native_type(dataset_shape),
                     chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
@@ -167,7 +168,6 @@ def create_dataset_array(
                     **compressor_args,
                 )
             else:
-
                 # get dataset shape, either from given data or existing dataset
                 if container_subpath in root_group:
                     # if the dataset already exists, get its shape
@@ -178,10 +178,14 @@ def create_dataset_array(
                         f'already exists with shape {dataset_shape} '
                     ))
                     # if array already exists ensure time and channel axes are sufficient length
-                    _resize_dataset_array(dataset_array, dataset_shape, for_timeindex, for_channel)
+                    final_dataset_shape = _get_array_shape(dataset_shape, for_timeindex, for_channel)
+                    if final_dataset_shape != dataset_shape:
+                        logger.info(f'Resize {dataset_array.store}:{dataset_array.path} to {final_dataset_shape}')
+                        dataset_array.resize(final_dataset_shape)
                 else:
                     # this is a new dataset
-                    dataset_shape = shape
+                    final_dataset_shape = _get_array_shape(shape, for_timeindex, for_channel)
+                    dataset_shape = final_dataset_shape
                     try:
                         dataset_array = root_group.create_array(
                             container_subpath,
@@ -200,8 +204,10 @@ def create_dataset_array(
                         ))
                         dataset_array = root_group[container_subpath]
                         dataset_shape = dataset_array.shape
-                        _resize_dataset_array(dataset_array, dataset_shape,
-                                              for_timeindex, for_channel)
+                        final_dataset_shape = _get_array_shape(dataset_shape, for_timeindex, for_channel)
+                        if final_dataset_shape != dataset_shape:
+                            logger.info(f'Resize {dataset_array.store}:{dataset_array.path} to {final_dataset_shape}')
+                            dataset_array.resize(final_dataset_shape)
 
             # add group and dataset metadata
             _update_dataset_attrs(root_group, dataset_array,
@@ -225,7 +231,10 @@ def create_dataset_array(
             elif zarr.storage.contains_array(store):
                 # the array already exists
                 dataset_array = zarr.open(store=store, mode='a')
-                _resize_dataset_array(dataset_array, shape, for_timeindex, for_channel)
+                final_dataset_shape = _get_array_shape(shape, for_timeindex, for_channel)
+                if final_dataset_shape != shape:
+                    logger.info(f'Resize {dataset_array.store}:{dataset_array.path} to {final_dataset_shape}')
+                    dataset_array.resize(final_dataset_shape)
             else:
                 # this is a new array
                 dataset_array = zarr.create_array(
@@ -248,9 +257,9 @@ def create_dataset_array(
         raise e
 
 
-def _resize_dataset_array(dataset, dataset_shape, for_timeindex, for_channel):
+def _get_array_shape(dataset_shape, for_timeindex, for_channel):
     """
-    Resize the dataset to accommodate the timeindex and channel
+    Compute dataset shape to accommodate the timeindex and channel
 
     The time and channels axes are assumed to be the 0 and 1 index axes
     respectively. If these axes shapes are smaller than for_timeindex or
@@ -258,37 +267,30 @@ def _resize_dataset_array(dataset, dataset_shape, for_timeindex, for_channel):
     """
 
     # initializations
-    resized_shape = ()
-    to_resize = False
+    final_shape = ()
     i = 0
 
     # time axis
     if for_timeindex is not None:
         if dataset_shape[i] <= for_timeindex:
-            resized_shape = resized_shape + (for_timeindex + 1,)
-            to_resize = True
+            final_shape = final_shape + (for_timeindex + 1,)
         else:
-            resized_shape = resized_shape + (dataset_shape[i],)
+            final_shape = final_shape + (dataset_shape[i],)
         i = i + 1
 
     # channel axis
     if for_channel is not None:
         if dataset_shape[i] <= for_channel:
-            resized_shape = resized_shape + (for_channel + 1,)
-            to_resize = True
+            final_shape = final_shape + (for_channel + 1,)
         else:
-            resized_shape = resized_shape + (dataset_shape[i],)
+            final_shape = final_shape + (dataset_shape[i],)
         i = i + 1
 
-    # if we have to expand
-    if to_resize:
-        while i < len(dataset_shape):
-            resized_shape = resized_shape + (dataset_shape[i],)
-            i = i + 1
+    while i < len(dataset_shape):
+        final_shape = final_shape + (dataset_shape[i],)
+        i = i + 1
 
-        # log and then resize in place
-        logger.info(f'Resize {dataset.store}:{dataset.path} to {resized_shape}')
-        dataset.resize(resized_shape)
+    return final_shape
 
 
 def _update_dataset_attrs(root_container, dataset,

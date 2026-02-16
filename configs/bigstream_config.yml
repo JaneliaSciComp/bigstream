@@ -1,14 +1,13 @@
 ransac:
   blob_sizes: [6, 14]
-  nspots: 2000
-  num_sigma_max: 7
-  cc_radius: 20
+  nspots: 5000
+  num_sigma_max: 5
+  cc_radius: 15
   match_threshold: 0.6
   max_spot_match_distance:
   point_matches_threshold: 50
   align_threshold: 2.0
   diagonal_constraint: 0.7
-  confidence: 0.999
   fix_spots_count_threshold: 50
   fix_spot_detection_kwargs:
     blob_method: log
@@ -25,17 +24,20 @@ ransac:
     winsorize_limits: [0.01, 0.01]
 
 global_align:
-  steps: [affine]
+  ransac:
+    # overriden parameters
+    num_sigma_max: 7
+    point_matches_threshold: 25
   affine:
-    initial_condition: CENTER
-    alignment_spacing: 4.0
-    shrink_factors: [4]
-    smooth_sigmas: [4]
+    alignment_spacing: 2.0
+    shrink_factors: [2]
+    smooth_sigmas: [2]
+    metric: C
     optimizer: RSGD
     optimizer_args:
-      learningRate: 2.25
-      minStep: 0.001
-      numberOfIterations: 400
+      learningRate: 0.25
+      minStep: 0.0001
+      numberOfIterations: 4000
 
 local_align:
   steps: [ransac, affine, deform]

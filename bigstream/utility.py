@@ -198,8 +198,6 @@ def get_number_of_cores():
 
     if "LSB_DJOB_NUMPROC" in os.environ:
         ncores = int(os.environ["LSB_DJOB_NUMPROC"])
-        logger.debug(f'Found {ncores} CPUs using LSB_DJOB_NUMPROC')
     else:
         ncores = psutil.cpu_count(logical=False)
-        logger.debug(f'Found {ncores} CPUs using psutil')
     return ncores

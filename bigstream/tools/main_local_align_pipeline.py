@@ -54,6 +54,11 @@ def _define_args(local_descriptor):
                              dest='local_transform_overlap_factor',
                              type=float,
                              help='partition overlap when splitting the work for applying a transformation - a fractional number between 0 - 1')
+    args_parser.add_argument('--foreground-percentage', '--foreground_percentage',
+                             dest='foreground_percentage',
+                             default=0.0,
+                             type=float,
+                             help='Signal percentage per block in order for the block to be considered')
 
     args_parser.add_argument('--inv-step',
                              dest='inv_step',
@@ -150,6 +155,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          logging_config=None,
                          compressor=None,
                          verbose=False,
+                         foreground_percentage=0,
                          max_cluster_jobs=0,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
@@ -284,6 +290,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             inv_use_root,
             cluster_client,
             compressor,
+            foreground_percentage,
             max_cluster_jobs,
         )
     finally:
@@ -321,6 +328,7 @@ def _align_local_data(fix_image: ImageData,
                       inv_use_root,
                       cluster_client,
                       compressor,
+                      foreground_percentage,
                       max_cluster_jobs):
     logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
                 f'using {ut.get_number_of_cores()} cpus')
@@ -392,6 +400,7 @@ def _align_local_data(fix_image: ImageData,
             mov_origin_transform=mov_origin_transform,
             static_transform_list=static_transforms,
             output_transform=transform,
+            foreground_percentage=foreground_percentage,
             max_cluster_jobs=max_cluster_jobs,
         )
         logger.info('Finished computing the deformation field ' +
@@ -582,6 +591,7 @@ def main():
         logging_config=args.logging_config,
         compressor=args.compression,
         verbose=args.verbose,
+        foreground_percentage=args.foreground_percentage,
         max_cluster_jobs=args.max_cluster_jobs,
     )
 

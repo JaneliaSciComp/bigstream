@@ -263,7 +263,7 @@ def _compute_block_transform(compute_transform_params,
                              block_overlaps=None,
                              nblocks=None,
                              output_transform=None,
-                             foreground_check_pct=0.,
+                             foreground_percentage=0.,
                              align_steps=[]):
     start_time = time.time()
     ((block_index,
@@ -293,10 +293,10 @@ def _compute_block_transform(compute_transform_params,
     if fix_block is None or mov_block is None:
         logger.warning(f'Block {block_index} has no data, skipping alignment')
         skip_alignment = True
-    elif foreground_check_pct > 0:
+    elif foreground_percentage > 0:
         fix_fg = np.count_nonzero(fix_block) / fix_block.size
         mov_fg = np.count_nonzero(mov_block) / mov_block.size
-        if fix_fg < foreground_check_pct or mov_fg < foreground_check_pct:
+        if fix_fg < foreground_percentage or mov_fg < foreground_percentage:
             logger.warning((
                 f'Block {block_index} has insufficient foreground '
                 f'(fix: {fix_fg:.4f}, mov: {mov_fg:.4f}), skipping alignment'
@@ -355,8 +355,6 @@ def _compute_block_transform(compute_transform_params,
                  f'Apply weights {weights.shape},' +
                  f'to transform {transform.shape}')
     transform = transform * weights[..., None]
-    # validate it again after applying the weights
-    _validate_transform(transform)
 
     end_time = time.time()
 
@@ -377,21 +375,14 @@ def _compute_block_transform(compute_transform_params,
             # write result to disk
             logger.info(f'Writing block {block_index} at {block_coords}')
             output_block = output_transform[block_coords] + transform
+            # validate it again after applying the weights
+            _validate_transform(output_block)
             output_transform[block_coords] = output_block
-            del output_block
             logger.info(f'Finished writing block {block_index} at {block_coords}')
         finally:
             # release the lock
             lock.release()
             logger.debug(f'Block {block_index} released lock {lock_strs}')
-
-    # Explicitly release memory
-    del transform, weights, fix_block, mov_block
-    if fix_mask_block is not None:
-        del fix_mask_block
-    if mov_mask_block is not None:
-        del mov_mask_block
-    gc.collect()
 
     return block_index, block_coords
 
@@ -475,7 +466,7 @@ def distributed_alignment_pipeline(
     overlap_factor=0.5,
     fix_mask=None,
     mov_mask=None,
-    foreground_percentage=0.5,
+    foreground_percentage=0.,
     mov_origin_transform:np.ndarray|None=None,
     static_transform_list=[],
     output_transform=None,
@@ -707,6 +698,7 @@ def distributed_alignment_pipeline(
             block_overlaps=overlaps,
             nblocks=nblocks,
             align_steps=block_align_steps,
+            foreground_percentage=foreground_percentage,
             output_transform=output_transform
         )
 

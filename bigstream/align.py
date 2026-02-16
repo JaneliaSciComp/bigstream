@@ -1058,14 +1058,32 @@ def affine_align(
     rigid_transform_constructor = sitk.Euler2DTransform if ndims == 2 else sitk.Euler3DTransform
 
     # set transform to optimize
-    # TODO: enable initialization with second moment as well
-    if isinstance(initial_condition, str) and initial_condition == "CENTER":
-        a, b = fix, mov
-        x = sitk.CenteredTransformInitializer(a, b, rigid_transform_constructor())
-        x = rigid_transform_constructor(x).GetTranslation()[::-1]
-        initial_condition = np.eye(ndims+1)
-        initial_condition[:ndims, -1] = x
-        initial_transform_given = True
+    if isinstance(initial_condition, str):
+        if initial_condition == 'CENTER':
+            a, b = fix, mov
+            initializer = sitk.CenteredTransformInitializer(
+                a, # fix
+                b, # mov
+                rigid_transform_constructor(), # EulerTransform
+                sitk.CenteredTransformInitializerFilter.GEOMETRY,
+            )
+            x = rigid_transform_constructor(initializer).GetTranslation()[::-1]
+            initial_condition = np.eye(ndims+1)
+            initial_condition[:ndims, -1] = x
+            logger.info(f'CENTER initial condition: {initial_condition}')
+            initial_transform_given = True
+        elif initial_condition == 'MOMENTS':
+            a, b = fix, mov
+            initial_transform = sitk.CenteredTransformInitializer(
+                a, # fix
+                b, # mov
+                rigid_transform_constructor(), # EulerTransform
+                sitk.CenteredTransformInitializerFilter.MOMENTS,
+            )
+            initial_condition = bst.affine_transform_to_matrix(initial_transform)
+            logger.info(f'MOMENTS initial condition: {initial_condition}')
+            initial_transform_given = True
+
     if rigid and not initial_transform_given:
         transform = rigid_transform_constructor()
     elif rigid and initial_transform_given:
@@ -1074,6 +1092,9 @@ def affine_align(
         transform = sitk.AffineTransform(fix.GetDimension())
     elif not rigid and initial_transform_given:
         transform = bst.matrix_to_affine_transform(initial_condition)
+    else:
+        transform = None
+    logger.debug(f'Set initial transform: {transform}')
     irm.SetInitialTransform(transform, inPlace=True)
     # set masks
     if fix_mask is not None:
@@ -1100,7 +1121,10 @@ def affine_align(
         logger.info(f'{context} Affine align returning default')
         return default
     else:
-        logger.info(f'{context} Affine align succeeded')
+        logger.info((
+            f'{context} Affine align succeeded: '
+            f'(initial_metric={initial_metric_value}, final_metric={final_metric_value}) '
+        ))
         return bst.affine_transform_to_matrix(transform)
 
 
@@ -1306,10 +1330,10 @@ def deformable_align(
     # if registration improved metric return result
     # otherwise return default
     if final_metric_check and final_metric_value > initial_metric_value:
-        logger.warning(f'{context} Optimization failed to improve metric')
+        logger.warning(f'{context} Deformable align optimization failed to improve metric')
         logger.info((f'{context} METRIC VALUES initial: {initial_metric_value} ',
                      f'final: {final_metric_value}'))
-        logger.info(f'{context} Returning default')
+        logger.info(f'{context} Deformable align returning default')
         return default
     else:
         params = np.concatenate((transform.GetFixedParameters(), transform.GetParameters()))
@@ -1318,7 +1342,10 @@ def deformable_align(
             spacing=initial_fix_spacing, origin=fix_origin,
             direction=np.eye(fix.GetDimension()),
         )
-        logger.info(f'{context} Registration succeeded')
+        logger.info((
+            f'{context} Deformable align succeeded: '
+            f'(initial_metric={initial_metric_value}, final_metric={final_metric_value}) '
+        ))
         return params, field
 
 
@@ -1464,7 +1491,7 @@ def alignment_pipeline(
         arguments = {**kwargs, **arguments}
         logger.debug(f'All {context} {alignment} args: {arguments}')
         arguments['static_transform_list'] = static_transform_list + new_transforms
-        alignment_result = align[alignment](context=context, **arguments)
+        alignment_result = align[alignment](context=f'{alignment} {context}', **arguments)
         logger.debug(f'Completed {context} {alignment} {arguments}')
         new_transforms.append(alignment_result)
 

@@ -256,26 +256,40 @@ def _transform_single_block(fix_block_read_method,
 
     try:
         # transform fixed block corners, read moving data
-        fix_block_coords = []
+        fix_block_voxel_coords = []
         for corner in list(product([0, 1], repeat=len(block_coords))):
             a = [x.stop-1 if y else x.start for x, y in zip(block_coords, corner)]
-            fix_block_coords.append(a)
-        fix_block_coords = np.array(fix_block_coords) * fix_spacing
-        mov_block_coords = bs_transform.apply_transform_to_coordinates(
-            fix_block_coords,
+            fix_block_voxel_coords.append(a)
+        fix_block_phys_coords = np.array(fix_block_voxel_coords) * fix_spacing
+        mov_block_phys_coords = bs_transform.apply_transform_to_coordinates(
+            fix_block_phys_coords,
             applied_transform_list,
             transform_spacing_list,
             transform_origin,
         )
-        logger.info(f'Transformed moving block {block_index} at {block_coords} coords: ' +
-                    f'{fix_block_coords} -> {mov_block_coords}')
 
-        mov_block_coords = np.round(mov_block_coords / mov_spacing).astype(int)
-        mov_block_coords = np.maximum(0, mov_block_coords)
-        mov_block_coords = np.minimum(full_mov_shape, mov_block_coords)
+        mov_block_voxel_coords = np.round(mov_block_phys_coords / mov_spacing).astype(int)
+        mov_start = np.maximum(0, np.min(mov_block_voxel_coords, axis=0))
+        mov_stop = np.minimum(full_mov_shape, np.max(mov_block_voxel_coords, axis=0))
 
-        mov_start = np.min(mov_block_coords, axis=0)
-        mov_stop = np.max(mov_block_coords, axis=0)
+        logger.info((
+            f'Transformed moving block {block_index} at {block_coords}:\n'
+            f'change in physical coords {fix_block_phys_coords} -> {mov_block_phys_coords}\n'
+            f'change in voxel coords {fix_block_voxel_coords} -> {mov_block_voxel_coords}\n'
+            f'mov block start: {mov_start}\n'
+            f'mov block end: {mov_stop}\n'
+        ))
+
+
+        # check if moving block is completely outside the moving image
+        if (np.any(mov_start >= full_mov_shape) or np.any(mov_stop <= 0) or np.any(mov_stop <= mov_start)):
+            logger.warning((
+                f'Block {block_index} moving region is outside the moving image '
+                f'(mov_start={mov_start}, mov_stop={mov_stop}, '
+                f'mov_shape={full_mov_shape}), skipping'
+            ))
+            return None
+
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
         mov_origin = mov_spacing * [s.start for s in mov_slices]
 
@@ -347,7 +361,7 @@ def _transform_single_block(fix_block_read_method,
 
         logger.info((
             f'Finished deforming block {block_index} at {block_coords}, '
-            f'moving coords: {mov_block_coords}, '
+            f'moving coords: {mov_block_voxel_coords}, '
             f'final coords: {final_block_coords} '))
         written_coords = _write_block(block_index, final_block_coords, aligned_block,
                                       output=output)

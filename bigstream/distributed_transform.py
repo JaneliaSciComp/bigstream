@@ -226,12 +226,16 @@ def _transform_single_block(fix_block_read_method,
         f'Spacing(fix/mov): {fix_spacing}/{mov_spacing} '
         f'Blocksize: {blocksize}, overlaps: {blockoverlaps} '
     ))
-    # fetch fixed image slices and read fix
-    logger.debug(f'Read fix block {block_index} from {block_coords}')
-    # read the fix block and 
-    fix_block = fix_block_read_method(block_coords)
-    if fix_block.dtype.byteorder == '>':
-        fix_block = fix_block.astype(fix_block.dtype.newbyteorder('<'))
+    try:
+        # fetch fixed image slices and read fix
+        logger.debug(f'Read fix block {block_index} from {block_coords}')
+        # read the fix block
+        fix_block = fix_block_read_method(block_coords)
+        if fix_block.dtype.byteorder == '>':
+            fix_block = fix_block.astype(fix_block.dtype.newbyteorder('<'))
+    except Exception as e:
+        logger.exception(f'Error reading fixed block {block_index} at {block_coords}: {e}')
+        raise e
 
     # read relevant region of transforms
     applied_transform_list = []
@@ -293,10 +297,20 @@ def _transform_single_block(fix_block_read_method,
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
         mov_origin = mov_spacing * [s.start for s in mov_slices]
 
-        logger.debug(f'Read moving block from {mov_slices}')
-        mov_block = mov_block_read_method(mov_slices)
-        if mov_block.dtype.byteorder == '>':
-            mov_block = mov_block.astype(mov_block.dtype.newbyteorder('<'))
+        try:
+            logger.debug((
+                f'Read moving block from {mov_slices} '
+                f'corresponding to fixed block {block_index} at {block_coords}'
+            ))
+            mov_block = mov_block_read_method(mov_slices)
+            if mov_block.dtype.byteorder == '>':
+                mov_block = mov_block.astype(mov_block.dtype.newbyteorder('<'))
+        except Exception as e:
+            logger.exception((
+                f'Error reading moving block from {mov_slices} '
+                f'corresponding to fixed block {block_index} at {block_coords}: {e} '
+            ))
+            raise e
 
         # resample
         logger.info((
@@ -368,7 +382,7 @@ def _transform_single_block(fix_block_read_method,
         del fix_block, mov_block, aligned_block
         return written_coords
     except Exception as e:
-        logger.error(f'Error trying to transform block {block_coords}:', exc_info=e)
+        logger.error(f'Error trying to transform {block_index} block {block_coords}:', exc_info=e)
         raise e
 
 

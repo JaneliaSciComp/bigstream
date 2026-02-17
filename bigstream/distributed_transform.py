@@ -241,16 +241,25 @@ def _transform_single_block(fix_block_read_method,
     applied_transform_list = []
     transform_origin = [fix_origin_physical_coords,] * len(transform_list)
     for iii, transform in enumerate(transform_list):
-        if transform.shape != (4, 4):
+        if len(transform.shape) != 2:
             # for deformation fields find the corresponding block
             start = np.floor(fix_origin_physical_coords / transform_spacing_list[iii]).astype(int)
             stop = [s.stop for s in block_coords] * fix_spacing / transform_spacing_list[iii]
             stop = np.ceil(stop).astype(int)
             transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
-            transform = transform[transform_slice]
             transform_origin[iii] = start * transform_spacing_list[iii]
-            logger.info(f'Transform slice and origin for block {block_index} at {block_coords}:' +
-                        f'{transform_slice}, {transform_origin[iii]}')
+            try:
+                transform = transform[transform_slice]
+                logger.info(f'Transform slice and origin for block {block_index} at {block_coords}:' +
+                            f'{transform_slice}, {transform_origin[iii]}')
+            except Exception as e:
+                logger.error((
+                    f'Error reading deform field at {transform_slice} '
+                    f'for fixed block {block_index} at {block_coords} '
+                    f'deform field origin: {transform_origin[iii]} '
+                    f'error was {e} '
+                ))
+                raise e
 
         applied_transform_list.append(transform)
 

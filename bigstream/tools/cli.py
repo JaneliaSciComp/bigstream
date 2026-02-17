@@ -103,6 +103,18 @@ class RegistrationInputs:
         else:
             return self.mov_subpath
 
+    def get_align_timeindex(self):
+        if self.align_timeindex:
+            return self.align_timeindex
+        else:
+            return self.mov_timeindex
+
+    def get_align_channel(self):
+        if self.align_channel:
+            return self.align_channel
+        else:
+            return self.mov_channel
+
 
 def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('fix'),

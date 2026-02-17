@@ -304,11 +304,12 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             zarr_format=2,
         )
         write_coords = []
-        if reg_args.align_timeindex is not None and len(dataset_array.shape) > 3:
-            write_coords.append(reg_args.align_timeindex)
-        if reg_args.align_channel is not None and len(dataset_array.shape) > 3:
-            write_coords.append(reg_args.align_channel)
+        if reg_args.get_align_timeindex() is not None and len(dataset_array.shape) > 3:
+            write_coords.append(reg_args.get_align_timeindex())
+        if reg_args.get_align_channel() is not None and len(dataset_array.shape) > 3:
+            write_coords.append(reg_args.get_align_channel())
         if write_coords:
+            logger.info(f'Write {aligned_array.shape} array to {dataset_array.shape} dataset at {write_coords}')
             dataset_array[tuple(write_coords)] = aligned_array
         else:
             dataset_array[...] = aligned_array

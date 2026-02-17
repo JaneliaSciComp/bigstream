@@ -78,7 +78,7 @@ def distributed_apply_transform(
     """
     logger.info((
         f'Distributed transform a {mov_image.shape} image '
-        'using {blocksize} blocks '
+        f'using {blocksize} blocks '
         f'with {len(transform_list)} transforms '
     ))
     # get overlap and number of blocks

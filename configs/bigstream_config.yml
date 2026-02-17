@@ -7,7 +7,7 @@ ransac:
   max_spot_match_distance:
   point_matches_threshold: 50
   align_threshold: 2.0
-  diagonal_constraint: 0.7
+  diagonal_constraint: 0.85
   fix_spots_count_threshold: 50
   fix_spot_detection_kwargs:
     blob_method: log
@@ -26,17 +26,17 @@ ransac:
 global_align:
   ransac:
     # overriden parameters
-    num_sigma_max: 7
+    num_sigma_max: 5
     point_matches_threshold: 25
   affine:
-    alignment_spacing: 2.0
+    alignment_spacing: 1.0
     shrink_factors: [2]
     smooth_sigmas: [2]
-    metric: C
+    metric: MMI
     optimizer: RSGD
     optimizer_args:
       learningRate: 0.25
-      minStep: 0.0001
+      minStep: 0.001
       numberOfIterations: 4000
 
 local_align:
@@ -44,20 +44,23 @@ local_align:
   block_size: [128, 128, 128]
   block_overlap: 0.25
   transform_overlap: 0.1
+  ransac:
+    # overriden parameters
+    alignment_spacing: 4
+    num_sigma_max: 6
+    point_matches_threshold: 15
+    fix_spots_count_threshold: 25
+    mov_spots_count_threshold: 25
   affine:
-    # sampling: NONE, RANDOM, REGULAR
-    sampling: NONE
-    # sampling_percentage matters only for RANDOM and REGULAR
-    sampling_percentage: 1.0
-    alignment_spacing: 2.0
-    shrink_factors: [2]
-    smooth_sigmas: [2.0]
+    alignment_spacing: 4.0
+    shrink_factors: [4]
+    smooth_sigmas: [4.0]
     metric: MMI
     optimizer: RSGD
     optimizer_args:
       learningRate: 0.25
-      minStep: 0.001
-      numberOfIterations: 200
+      minStep: 0.0001
+      numberOfIterations: 100
   deform:
     sampling: NONE
     sampling_percentage: 1.0
@@ -67,8 +70,8 @@ local_align:
     shrink_factors: [1]
     smooth_sigmas: [1.0]
     metric: MMI
-    optimizer: GD
+    optimizer: RSGD
     optimizer_args:
-      learningRate: 0.5
-      convergenceMinimumValue: 0.0001
-      numberOfIterations: 300
+      learningRate: 2
+      minStep: 0.001
+      numberOfIterations: 50

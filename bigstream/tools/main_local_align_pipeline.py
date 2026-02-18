@@ -408,7 +408,7 @@ def _align_local_data(fix_image: ImageData,
             static_transform_list=static_transforms,
             output_transform=transform,
             foreground_percentage=foreground_percentage,
-            max_block_reads=max_concurrent_zarr_reads,
+            max_concurrent_reads=max_concurrent_zarr_reads,
             max_cluster_jobs=max_cluster_jobs,
         )
         logger.info('Finished computing the deformation field ' +

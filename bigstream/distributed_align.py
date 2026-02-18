@@ -11,7 +11,7 @@ from itertools import product
 from toolz import partition_all
 
 from .align import alignment_pipeline
-from .distutils import validate_processing_block_size,ThrottledBlockReader
+from .distutils import validate_processing_block_size,ThrottledArraySliceReader
 from .image_data import (ImageData, as_image_data)
 from .ome_utils import get_spatial_values
 
@@ -150,9 +150,9 @@ def _read_blocks_for_processing(blocks_info,
                                 mov=None,
                                 fix_mask=None,
                                 mov_mask=None,
-                                fix_block_reader=ThrottledBlockReader(),
-                                mov_block_reader=ThrottledBlockReader(),
-                                mask_reader=ThrottledBlockReader()):
+                                fix_block_reader=ThrottledArraySliceReader(),
+                                mov_block_reader=ThrottledArraySliceReader(),
+                                mask_reader=ThrottledArraySliceReader()):
     # blocks_info is a tuple containing the fields below 
     # and the extract method knows to get the coords of the block to be read
     #    block_index,
@@ -472,7 +472,7 @@ def distributed_alignment_pipeline(
     mov_origin_transform:np.ndarray|None=None,
     static_transform_list=[],
     output_transform=None,
-    max_block_reads=0,
+    max_concurrent_reads=0,
     max_cluster_jobs=0,
     **kwargs,
 ):
@@ -690,8 +690,8 @@ def distributed_alignment_pipeline(
             mov=mov_image,
             fix_mask=fix_mask_image,
             mov_mask=mov_mask_image,
-            fix_block_reader=ThrottledBlockReader(max_block_reads),
-            mov_block_reader=ThrottledBlockReader(max_block_reads),
+            fix_block_reader=ThrottledArraySliceReader(max_concurrent_reads),
+            mov_block_reader=ThrottledArraySliceReader(max_concurrent_reads),
         )
 
     def compute_block_transform_method(transform_params):

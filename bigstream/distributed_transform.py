@@ -11,7 +11,7 @@ from itertools import product
 from dask.distributed import as_completed
 
 from .image_data import ImageData
-from .distutils import validate_processing_block_size, ThrottledBlockReader
+from .distutils import validate_processing_block_size, ThrottledArraySliceReader
 from .ome_utils import get_spatial_values
 
 
@@ -28,7 +28,7 @@ def distributed_apply_transform(
     aligned_data_timeindex=None,
     aligned_data_channel=None,
     transform_spacing=None,
-    max_block_reads=0,
+    max_concurrent_reads=0,
     **kwargs,
 ):
     """
@@ -138,7 +138,7 @@ def distributed_apply_transform(
         '}'
     ))
 
-    fix_block_reader = functools.partial(ThrottledBlockReader(max_block_reads).read_slice,
+    fix_block_reader = functools.partial(ThrottledArraySliceReader(max_concurrent_reads).read_slice,
                                          image=fix_image.image_ndarray,
                                          image_path=fix_image.image_path,
                                          image_subpath=fix_image.image_subpath,
@@ -153,7 +153,7 @@ def distributed_apply_transform(
         f'image_channel: {mov_image.image_channel}, '
         '}'
     ))
-    mov_block_reader = functools.partial(ThrottledBlockReader(max_block_reads).read_slice,
+    mov_block_reader = functools.partial(ThrottledArraySliceReader(max_concurrent_reads).read_slice,
                                          image=mov_image.image_ndarray,
                                          image_path=mov_image.image_path,
                                          image_subpath=mov_image.image_subpath,
@@ -170,7 +170,7 @@ def distributed_apply_transform(
         blockoverlaps=overlaps,
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,
-        deform_block_reader=ThrottledBlockReader(max_block_reads),
+        deform_block_reader=ThrottledArraySliceReader(max_concurrent_reads),
         output=aligned_data,
         output_timeindex=aligned_data_timeindex,
         output_channel=aligned_data_channel,
@@ -210,7 +210,7 @@ def _transform_single_block(fix_block_read_method,
                             blockoverlaps=[],
                             transform_list=[],
                             transform_spacing_list=[],
-                            deform_block_reader=ThrottledBlockReader(),
+                            deform_block_reader=ThrottledArraySliceReader(),
                             output=None,
                             output_timeindex=None,
                             output_channel=None,
@@ -642,7 +642,7 @@ def distributed_invert_displacement_vector_field(
     inv_vectorfield_outputarray,
     cluster_client,
     overlap_factor=0.25,
-    max_block_reads=0,
+    max_concurrent_reads=0,
     **kwargs,
 ):
     """
@@ -707,7 +707,7 @@ def distributed_invert_displacement_vector_field(
         spacing=spatial_spacing,
         blocksize=block_partition_size,
         blockoverlaps=overlaps,
-        vectorfield_reader=ThrottledBlockReader(max_block_reads),
+        vectorfield_reader=ThrottledArraySliceReader(max_concurrent_reads),
         **kwargs
     )
     logger.info(f'Submit Invert for {len(blocks)} blocks')
@@ -732,7 +732,7 @@ def _invert_block(block_info,
                   spacing=[],
                   blocksize=[],
                   blockoverlaps=[],
-                  vectorfield_reader=ThrottledBlockReader(),
+                  vectorfield_reader=ThrottledArraySliceReader(),
                   **kwargs):
     """
     Invert block function

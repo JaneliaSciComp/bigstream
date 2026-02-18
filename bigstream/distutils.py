@@ -9,7 +9,7 @@ from .ome_utils import get_spatial_values
 logger = logging.getLogger(__name__)
 
 
-class ThrottledBlockReader:
+class ThrottledArraySliceReader:
 
     def __init__(self, max_leases=0, name=None):
         self.max_leases = max_leases

@@ -291,7 +291,7 @@ def _run_apply_transform(args):
                 aligned_data_timeindex=args.output_timeindex,
                 aligned_data_channel=args.output_channel,
                 transform_spacing=transforms_spacings,
-                max_block_reads=args.max_concurrent_zarr_reads,
+                max_concurrent_reads=args.max_concurrent_zarr_reads,
             )
         finally:
             cluster_client.close()

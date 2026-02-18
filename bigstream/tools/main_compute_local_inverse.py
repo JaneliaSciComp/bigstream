@@ -226,7 +226,7 @@ def _run_compute_inverse(args):
             step_cut_factor=args.inv_step_cut_factor,
             pad=args.inv_pad,
             use_root=args.inv_use_root,
-            max_block_reads=args.max_concurrent_zarr_reads,
+            max_concurrent_reads=args.max_concurrent_zarr_reads,
         )
     finally:
         cluster_client.close()

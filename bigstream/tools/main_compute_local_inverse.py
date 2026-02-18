@@ -104,6 +104,10 @@ def _define_args():
                              type=int, default=0,
                              help='Number of cpus allocated to a dask worker')
 
+    args_parser.add_argument('--max-concurrent-zarr-reads',
+                             dest='max_concurrent_zarr_reads',
+                             type=int, default=0,
+                             help='Maximum number of concurrent reads from a zarr array')
     args_parser.add_argument('--compression', dest='compression',
                              default='gzip',
                              type=str,
@@ -222,6 +226,7 @@ def _run_compute_inverse(args):
             step_cut_factor=args.inv_step_cut_factor,
             pad=args.inv_pad,
             use_root=args.inv_use_root,
+            max_block_reads=args.max_concurrent_zarr_reads,
         )
     finally:
         cluster_client.close()

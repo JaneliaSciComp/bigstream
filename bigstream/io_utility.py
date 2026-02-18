@@ -618,7 +618,6 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
 
     # image already in memory as nd-array
     if image is not None:
-
         if len(block_coords) == len(image.shape):
             # simplest case, just apply the crop
             return image[block_coords]

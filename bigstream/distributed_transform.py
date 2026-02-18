@@ -11,9 +11,8 @@ from itertools import product
 from dask.distributed import as_completed
 
 from .image_data import ImageData
-from .distutils import validate_processing_block_size
+from .distutils import validate_processing_block_size, ThrottledBlockReader
 from .ome_utils import get_spatial_values
-from .io_utility import read_block as io_utility_read_block
 
 
 logger = logging.getLogger(__name__)
@@ -29,6 +28,7 @@ def distributed_apply_transform(
     aligned_data_timeindex=None,
     aligned_data_channel=None,
     transform_spacing=None,
+    max_block_reads=0,
     **kwargs,
 ):
     """
@@ -137,7 +137,8 @@ def distributed_apply_transform(
         f'image_channel: {fix_image.image_channel}, '
         '}'
     ))
-    fix_block_reader = functools.partial(io_utility_read_block,
+
+    fix_block_reader = functools.partial(ThrottledBlockReader(max_block_reads).read_slice,
                                          image=fix_image.image_ndarray,
                                          image_path=fix_image.image_path,
                                          image_subpath=fix_image.image_subpath,
@@ -152,7 +153,7 @@ def distributed_apply_transform(
         f'image_channel: {mov_image.image_channel}, '
         '}'
     ))
-    mov_block_reader = functools.partial(io_utility_read_block,
+    mov_block_reader = functools.partial(ThrottledBlockReader(max_block_reads).read_slice,
                                          image=mov_image.image_ndarray,
                                          image_path=mov_image.image_path,
                                          image_subpath=mov_image.image_subpath,
@@ -169,6 +170,7 @@ def distributed_apply_transform(
         blockoverlaps=overlaps,
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,
+        deform_block_reader=ThrottledBlockReader(max_block_reads),
         output=aligned_data,
         output_timeindex=aligned_data_timeindex,
         output_channel=aligned_data_channel,
@@ -208,6 +210,7 @@ def _transform_single_block(fix_block_read_method,
                             blockoverlaps=[],
                             transform_list=[],
                             transform_spacing_list=[],
+                            deform_block_reader=ThrottledBlockReader(),
                             output=None,
                             output_timeindex=None,
                             output_channel=None,
@@ -249,9 +252,10 @@ def _transform_single_block(fix_block_read_method,
             transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
             transform_origin[iii] = start * transform_spacing_list[iii]
             try:
-                transform = transform[transform_slice]
+                transform_block = deform_block_reader.get_slice(transform, transform_slice)
                 logger.info(f'Transform slice and origin for block {block_index} at {block_coords}:' +
                             f'{transform_slice}, {transform_origin[iii]}')
+                applied_transform_list.append(transform_block)
             except Exception as e:
                 logger.error((
                     f'Error reading deform field at {transform_slice} '
@@ -260,8 +264,9 @@ def _transform_single_block(fix_block_read_method,
                     f'error was {e} '
                 ))
                 raise e
-
-        applied_transform_list.append(transform)
+        else:
+            # append the affine transform
+            applied_transform_list.append(transform)
 
     transform_origin = tuple(transform_origin)
     logger.info(f'Transform origin for block {block_index} at {block_coords}: ' +
@@ -292,7 +297,6 @@ def _transform_single_block(fix_block_read_method,
             f'mov block start: {mov_start}\n'
             f'mov block end: {mov_stop}\n'
         ))
-
 
         # check if moving block is completely outside the moving image
         if (np.any(mov_start >= full_mov_shape) or np.any(mov_stop <= 0) or np.any(mov_stop <= mov_start)):
@@ -635,9 +639,10 @@ def distributed_invert_displacement_vector_field(
     vectorfield_array,
     spacing,
     blocksize,
-    inv_vectorfield_array,
+    inv_vectorfield_outputarray,
     cluster_client,
     overlap_factor=0.25,
+    max_block_reads=0,
     **kwargs,
 ):
     """
@@ -682,7 +687,7 @@ def distributed_invert_displacement_vector_field(
         f'invert displacement args: {kwargs} '
     ))
 
-    validate_processing_block_size(inv_vectorfield_array, block_partition_size, reverse_output_axes=True)
+    validate_processing_block_size(inv_vectorfield_outputarray, block_partition_size, reverse_output_axes=True)
 
     # store block coordinates in a dask array
     blocks = []
@@ -698,10 +703,11 @@ def distributed_invert_displacement_vector_field(
     invert_block = functools.partial(
         _invert_block,
         full_vectorfield=vectorfield_array,
-        inv_vectorfield_result=inv_vectorfield_array,
+        inv_vectorfield_result=inv_vectorfield_outputarray,
         spacing=spatial_spacing,
         blocksize=block_partition_size,
         blockoverlaps=overlaps,
+        vectorfield_reader=ThrottledBlockReader(max_block_reads),
         **kwargs
     )
     logger.info(f'Submit Invert for {len(blocks)} blocks')
@@ -717,7 +723,7 @@ def distributed_invert_displacement_vector_field(
             logger.info(f'Finished inverting block {block_coords}')
 
     logger.info('Finished computing inverse vector field for all blocks')
-    return inv_vectorfield_array
+    return inv_vectorfield_outputarray
 
 
 def _invert_block(block_info,
@@ -726,6 +732,7 @@ def _invert_block(block_info,
                   spacing=[],
                   blocksize=[],
                   blockoverlaps=[],
+                  vectorfield_reader=ThrottledBlockReader(),
                   **kwargs):
     """
     Invert block function
@@ -737,7 +744,7 @@ def _invert_block(block_info,
         f'invert args: {kwargs} '
     ))
 
-    block_vectorfield = full_vectorfield[block_coords]
+    block_vectorfield = vectorfield_reader.get_slice(full_vectorfield, block_coords)
 
     inverse_block = bs_transform.invert_displacement_vector_field(
         block_vectorfield,

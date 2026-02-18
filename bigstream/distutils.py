@@ -1,10 +1,58 @@
 import logging
 import numpy as np
+from distributed import Semaphore
 
+from .io_utility import read_block as io_utility_read_block
 from .ome_utils import get_spatial_values
 
 
 logger = logging.getLogger(__name__)
+
+
+class ThrottledBlockReader:
+
+    def __init__(self, max_leases=0, name=None):
+        self.max_leases = max_leases
+        if max_leases > 0:
+            self.semaphore = Semaphore(max_leases=max_leases, name=name)
+        else:
+            self.semaphore = None
+
+    def read_slice(self, slice, image=None, image_path=None,
+                   image_subpath=None, image_timeindex=None,
+                   image_channel=None):
+        if self.semaphore is None:
+            return io_utility_read_block(
+                slice,
+                image=image,
+                image_path=image_path,
+                image_subpath=image_subpath,
+                image_timeindex=image_timeindex,
+                image_channel=image_channel,
+            )
+        # a semaphore is set
+        self.semaphore.acquire()
+        try:
+            return io_utility_read_block(
+                slice,
+                image=image,
+                image_path=image_path,
+                image_subpath=image_subpath,
+                image_timeindex=image_timeindex,
+                image_channel=image_channel,
+            )
+        finally:
+            self.semaphore.release()
+
+    def get_slice(self, arr, slice):
+        if self.semaphore is None:
+            return arr[slice]
+        # a semaphore is set
+        self.semaphore.acquire()
+        try:
+            return arr[slice]
+        finally:
+            self.semaphore.release()
 
 
 def validate_processing_block_size(output_array, processing_block_size, reverse_output_axes=False):

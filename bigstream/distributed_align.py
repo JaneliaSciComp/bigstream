@@ -11,10 +11,9 @@ from itertools import product
 from toolz import partition_all
 
 from .align import alignment_pipeline
-from .distutils import validate_processing_block_size
+from .distutils import validate_processing_block_size,ThrottledBlockReader
 from .image_data import (ImageData, as_image_data)
 from .ome_utils import get_spatial_values
-from .io_utility import read_block as io_utility_read_block
 
 
 logger = logging.getLogger(__name__)
@@ -150,7 +149,10 @@ def _read_blocks_for_processing(blocks_info,
                                 fix=None,
                                 mov=None,
                                 fix_mask=None,
-                                mov_mask=None):
+                                mov_mask=None,
+                                fix_block_reader=ThrottledBlockReader(),
+                                mov_block_reader=ThrottledBlockReader(),
+                                mask_reader=ThrottledBlockReader()):
     # blocks_info is a tuple containing the fields below 
     # and the extract method knows to get the coords of the block to be read
     #    block_index,
@@ -162,22 +164,22 @@ def _read_blocks_for_processing(blocks_info,
     #    origin,
     #    block_transforms
     logger.debug(f'Read blocks: {blocks_info}')
-    fix_block = _read_imagedata_block(blocks_info[1], fix)
+    fix_block = _read_imagedata_block(blocks_info[1], fix, fix_block_reader)
 
     mov_block_coords = blocks_info[3]
     if mov_block_coords is None or any(s.stop <= 0 for s in mov_block_coords):
         logger.info(f'Moving block corresponding to {blocks_info[0]} is out of range')
         mov_block = None
     else:
-        mov_block = _read_imagedata_block(mov_block_coords, mov)
+        mov_block = _read_imagedata_block(mov_block_coords, mov, mov_block_reader)
 
-    fix_mask_block = _read_imagedata_block(blocks_info[4], fix_mask)
+    fix_mask_block = _read_imagedata_block(blocks_info[4], fix_mask, mask_reader)
 
     mov_mask_block_coords = blocks_info[5]
     if mov_mask_block_coords is None or any(s.stop <= 0 for s in mov_mask_block_coords):
         mov_mask_block = None
     else:
-        mov_mask_block = _read_imagedata_block(mov_mask_block_coords, mov_mask)
+        mov_mask_block = _read_imagedata_block(mov_mask_block_coords, mov_mask, mask_reader)
 
     return (blocks_info,
             fix_block,
@@ -186,12 +188,12 @@ def _read_blocks_for_processing(blocks_info,
             mov_mask_block)
 
 
-def _read_imagedata_block(block_coords, image_data,
+def _read_imagedata_block(block_coords, image_data, image_block_reader,
                           image_timeindex=None, image_channels=None):
     image_repr = as_image_data(image_data, image_timeindex=image_timeindex,
                                image_channels=image_channels)
     if image_repr is not None:
-        b = io_utility_read_block(
+        b = image_block_reader.read_slice(
             block_coords,
             image=image_repr.image_array,
             image_path=image_repr.image_path,
@@ -199,12 +201,12 @@ def _read_imagedata_block(block_coords, image_data,
             image_timeindex=image_repr.image_timeindex,
             image_channel=image_repr.image_channel,
         )
-        if b is not None:
-            if np.issubdtype(b.dtype, np.floating):
-                tmp_b = b.astype(np.float32)
-                del b
-                b = tmp_b
-        return b
+    else:
+        b = None
+    if b is not None:
+        if np.issubdtype(b.dtype, np.floating):
+            return b.astype(np.float32)
+    return b
 
 
 # get image block corners both in voxel and physical units
@@ -470,6 +472,7 @@ def distributed_alignment_pipeline(
     mov_origin_transform:np.ndarray|None=None,
     static_transform_list=[],
     output_transform=None,
+    max_block_reads=0,
     max_cluster_jobs=0,
     **kwargs,
 ):
@@ -687,6 +690,8 @@ def distributed_alignment_pipeline(
             mov=mov_image,
             fix_mask=fix_mask_image,
             mov_mask=mov_mask_image,
+            fix_block_reader=ThrottledBlockReader(max_block_reads),
+            mov_block_reader=ThrottledBlockReader(max_block_reads),
         )
 
     def compute_block_transform_method(transform_params):

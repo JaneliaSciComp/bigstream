@@ -3,7 +3,8 @@ FROM ghcr.io/janeliascicomp/dask:2025.11.0-py12-ol9
 
 RUN dnf install -y \
         git \
-        mesa-libGL
+        mesa-libGL \
+        libzstd-devel
 
 WORKDIR /app/bigstream
 

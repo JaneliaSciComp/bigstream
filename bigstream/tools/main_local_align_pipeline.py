@@ -116,6 +116,10 @@ def _define_args(local_descriptor):
                              help='Maximum number of cluster jobs executed in parallel',
                             )
 
+    args_parser.add_argument('--max-concurrent-zarr-reads',
+                             dest='max_concurrent_zarr_reads',
+                             type=int, default=0,
+                             help='Maximum number of concurrent reads from a zarr array')
     args_parser.add_argument('--compression', dest='compression',
                              default='gzip',
                              type=str,
@@ -156,6 +160,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          compressor=None,
                          verbose=False,
                          foreground_percentage=0,
+                         max_concurrent_zarr_reads=0,
                          max_cluster_jobs=0,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
@@ -291,6 +296,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             cluster_client,
             compressor,
             foreground_percentage,
+            max_concurrent_zarr_reads,
             max_cluster_jobs,
         )
     finally:
@@ -329,6 +335,7 @@ def _align_local_data(fix_image: ImageData,
                       cluster_client,
                       compressor,
                       foreground_percentage,
+                      max_concurrent_zarr_reads,
                       max_cluster_jobs):
     logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
                 f'using {ut.get_number_of_cores()} cpus')
@@ -401,6 +408,7 @@ def _align_local_data(fix_image: ImageData,
             static_transform_list=static_transforms,
             output_transform=transform,
             foreground_percentage=foreground_percentage,
+            max_block_reads=max_concurrent_zarr_reads,
             max_cluster_jobs=max_cluster_jobs,
         )
         logger.info('Finished computing the deformation field ' +
@@ -592,6 +600,7 @@ def main():
         compressor=args.compression,
         verbose=args.verbose,
         foreground_percentage=args.foreground_percentage,
+        max_concurrent_zarr_reads=args.max_concurrent_zarr_reads,
         max_cluster_jobs=args.max_cluster_jobs,
     )
 

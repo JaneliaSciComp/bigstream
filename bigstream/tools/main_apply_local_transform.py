@@ -131,6 +131,10 @@ def _define_args():
                              type=int, default=0,
                              help='Number of cpus allocated to a dask worker')
 
+    args_parser.add_argument('--max-concurrent-zarr-reads',
+                             dest='max_concurrent_zarr_reads',
+                             type=int, default=0,
+                             help='Maximum number of concurrent reads from a zarr array')
     args_parser.add_argument('--compression', dest='compression',
                              default='gzip',
                              type=str,
@@ -287,6 +291,7 @@ def _run_apply_transform(args):
                 aligned_data_timeindex=args.output_timeindex,
                 aligned_data_channel=args.output_channel,
                 transform_spacing=transforms_spacings,
+                max_block_reads=args.max_concurrent_zarr_reads,
             )
         finally:
             cluster_client.close()

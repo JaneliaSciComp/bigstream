@@ -105,7 +105,25 @@ class ImageData:
         if s:
             return np.array(s[-3:])
         else:
-            None
+            return None
+
+    @property
+    def time_dim(self):
+        axes = self.get_attr('axes') or []
+        s = self.shape
+        for i, a in enumerate(axes):
+            if a.get('type') == 'time':
+                return s[i]
+        return None
+
+    @property
+    def channel_dim(self):
+        axes = self.get_attr('axes') or []
+        s = self.shape
+        for i, a in enumerate(axes):
+            if a.get('type') == 'channel':
+                return s[i]
+        return None
 
     @property
     def dtype(self):

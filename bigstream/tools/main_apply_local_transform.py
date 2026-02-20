@@ -205,7 +205,32 @@ def _run_apply_transform(args):
             axes=mov_data.get_attr('axes'),
             dataset_transformations=mov_data.get_attr('coordinateTransformations'),
         )
-        output_shape = fix_data.shape
+        if args.output_timeindex is not None:
+            output_timeindex = args.output_timeindex
+        else:
+            output_timeindex = args.moving_timeindex
+        if args.output_channel is not None:
+            output_channel = args.output_channel
+        else:
+            output_channel = args.moving_channel
+        mov_time_dim = mov_data.time_dim
+        mov_channel_dim = mov_data.channel_dim
+
+        output_non_spatial_dims = []
+        if mov_time_dim is not None and output_timeindex is not None:
+            output_non_spatial_dims.append(max(mov_time_dim, output_timeindex+1))
+        elif output_timeindex is not None:
+            output_non_spatial_dims.append(output_timeindex + 1)
+        if mov_channel_dim is not None and output_channel is not None:
+            output_non_spatial_dims.append(max(mov_channel_dim, output_channel))
+        elif output_channel is not None:
+            output_non_spatial_dims.append(output_channel + 1)
+
+        output_spatial_dims = fix_data.spatial_dims
+        if output_spatial_dims is None:
+            raise ValueError(f'Fix data image {fix_data} has invalid spatial dimensions {fix_data.shape} -> {fix_data.spatial_dims}')
+
+        output_shape = tuple(output_non_spatial_dims) + output_spatial_dims
         if len(output_blocks) < len(output_shape):
             # align_blocksize is not set, so use default block size
             output_chunk_size = (1,) * (len(output_shape)-len(output_blocks)) + tuple(get_spatial_values(output_blocks))
@@ -219,8 +244,8 @@ def _run_apply_transform(args):
             output_chunk_size,
             fix_data.dtype,
             compressor=args.compression,
-            for_timeindex=args.output_timeindex,
-            for_channel=args.output_channel,
+            for_timeindex=output_timeindex,
+            for_channel=output_channel,
             parent_attrs=output_attrs,
             pixelResolution=calc_full_voxel_resolution_attr(mov_data.voxel_spacing,
                                                             mov_data.voxel_downsampling),

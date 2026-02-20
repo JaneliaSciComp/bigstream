@@ -229,8 +229,8 @@ def _run_apply_transform(args):
         output_spatial_dims = fix_data.spatial_dims
         if output_spatial_dims is None:
             raise ValueError(f'Fix data image {fix_data} has invalid spatial dimensions {fix_data.shape} -> {fix_data.spatial_dims}')
-
-        output_shape = tuple(output_non_spatial_dims) + output_spatial_dims
+        logger.info(f'Set output shape from {output_non_spatial_dims} + {output_spatial_dims}')
+        output_shape = tuple(output_non_spatial_dims) + tuple(output_spatial_dims)
         if len(output_blocks) < len(output_shape):
             # align_blocksize is not set, so use default block size
             output_chunk_size = (1,) * (len(output_shape)-len(output_blocks)) + tuple(get_spatial_values(output_blocks))

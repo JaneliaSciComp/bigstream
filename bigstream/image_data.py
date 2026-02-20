@@ -100,7 +100,7 @@ class ImageData:
             return ()
 
     @property
-    def spatial_dims(self):
+    def spatial_dims(self) -> np.ndarray:
         s = self.shape
         if s:
             return np.array(s[-3:])

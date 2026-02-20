@@ -305,7 +305,7 @@ def _transform_single_block(fix_block_read_method,
                 f'(mov_start={mov_start}, mov_stop={mov_stop}, '
                 f'mov_shape={full_mov_shape}), skipping'
             ))
-            return None
+            return block_index, None
 
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
         mov_origin = mov_spacing * [s.start for s in mov_slices]
@@ -393,7 +393,7 @@ def _transform_single_block(fix_block_read_method,
         written_coords = _write_block(block_index, final_block_coords, aligned_block,
                                       output=output)
         del fix_block, mov_block, aligned_block
-        return written_coords
+        return block_index, written_coords
     except Exception as e:
         logger.error(f'Error trying to transform {block_index} block {block_coords}:', exc_info=e)
         raise e

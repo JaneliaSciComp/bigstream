@@ -7,7 +7,7 @@ ransac:
   max_spot_match_distance:
   point_matches_threshold: 50
   align_threshold: 2.0
-  diagonal_constraint: 0.85
+  diagonal_constraint: 0.15
   fix_spots_count_threshold: 50
   fix_spot_detection_kwargs:
     blob_method: log
@@ -48,6 +48,7 @@ local_align:
     # overriden parameters
     alignment_spacing: 4
     num_sigma_max: 6
+    diagonal_constraint: 0.15
     point_matches_threshold: 15
     fix_spots_count_threshold: 25
     mov_spots_count_threshold: 25

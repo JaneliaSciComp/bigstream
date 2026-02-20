@@ -630,7 +630,7 @@ def distributed_alignment_pipeline(
             mask_stop = np.round(ratio * mask_stop).astype(int)
             fix_mask_block_coords = tuple(slice(a, b)
                                                 for a, b in zip(mask_start, mask_stop))
-            fix_mask_crop = _read_imagedata_block(fix_mask_block_coords, fix_mask_image)
+            fix_mask_crop = _read_imagedata_block(fix_mask_block_coords, fix_mask_image, ThrottledArraySliceReader(max_concurrent_reads))
             foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
             logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
             if foreground_ratio < foreground_percentage:

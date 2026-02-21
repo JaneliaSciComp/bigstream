@@ -128,12 +128,17 @@ def _prepare_compute_block_spatial_transform_params(block_info,
         ratio = np.array(mov_fullmask_shape) / mov_shape
         mov_mask_start = np.round(ratio * mov_start).astype(int)
         mov_mask_stop = np.round(ratio * mov_stop).astype(int)
-        mov_blockmask_coords = tuple(slice(a, b)
-                                    for a, b in zip(mov_mask_start,
-                                                    mov_mask_stop))
+        if np.all(mov_mask_stop) > 0:
+            mov_blockmask_coords = tuple(slice(a, b)
+                                        for a, b in zip(mov_mask_start,
+                                                        mov_mask_stop))
 
-    logger.debug('Return blocks data: '+ 
-                 f'{block_index}, {fix_block_coords}, {new_origin}')
+    logger.debug((
+        'Return blocks data: '
+        f'{block_index}, {fix_block_coords},'
+        f'{new_origin},'
+        f'{fix_blockmask_coords}, {mov_blockmask_coords}'
+    ))
 
     return (block_index,
             fix_block_coords,
@@ -265,7 +270,6 @@ def _compute_block_transform(compute_transform_params,
                              block_overlaps=None,
                              nblocks=None,
                              output_transform=None,
-                             foreground_percentage=0.,
                              align_steps=[]):
     start_time = time.time()
     ((block_index,
@@ -275,7 +279,7 @@ def _compute_block_transform(compute_transform_params,
       _, # fix_mask_block_coords,
       _, # mov_mask_block_coords,
       new_origin_phys,
-      static_block_transform_list,
+      block_static_transform_list,
      ),
      fix_block,
      mov_block,
@@ -287,7 +291,7 @@ def _compute_block_transform(compute_transform_params,
         f'{block_index}: {block_coords}, {new_origin_phys} '
         f'fix shape: {fix_block.shape if fix_block is not None else 0}, '
         f'mov_shape: {mov_block.shape if mov_block is not None else 0} '
-        f'using {len(static_block_transform_list)} transforms '
+        f'using {len(block_static_transform_list)} transforms '
     ))
 
     # check if blocks have sufficient foreground content
@@ -295,15 +299,6 @@ def _compute_block_transform(compute_transform_params,
     if fix_block is None or mov_block is None:
         logger.warning(f'Block {block_index} has no data, skipping alignment')
         skip_alignment = True
-    elif foreground_percentage > 0:
-        fix_fg = np.count_nonzero(fix_block) / fix_block.size
-        mov_fg = np.count_nonzero(mov_block) / mov_block.size
-        if fix_fg < foreground_percentage or mov_fg < foreground_percentage:
-            logger.warning((
-                f'Block {block_index} has insufficient foreground '
-                f'(fix: {fix_fg:.4f}, mov: {mov_fg:.4f}), skipping alignment'
-            ))
-            skip_alignment = True
 
     if skip_alignment:
         # identity deform: zero displacement field
@@ -321,7 +316,7 @@ def _compute_block_transform(compute_transform_params,
             fix_mask=fix_mask_block,
             mov_mask=mov_mask_block,
             mov_origin=new_origin_phys,
-            static_transform_list=static_block_transform_list,
+            static_transform_list=block_static_transform_list,
             context=f'{block_index}',
         )
         # ensure transform is a vector field
@@ -634,7 +629,7 @@ def distributed_alignment_pipeline(
             foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
             logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
             if foreground_ratio < foreground_percentage:
-                logger.debug(f'Ignore masked block {bi}')
+                logger.debug(f'Ignore masked block {bi} - foreground ratio: {foreground_ratio} < {foreground_percentage}')
                 foreground = False
         elif fix_mask is not None:
             # mask is provided as 6 voxel coordinates: (z_min, y_min, x_min, z_max, y_max, x_max)
@@ -703,7 +698,6 @@ def distributed_alignment_pipeline(
             block_overlaps=overlaps,
             nblocks=nblocks,
             align_steps=block_align_steps,
-            foreground_percentage=foreground_percentage,
             output_transform=output_transform
         )
 

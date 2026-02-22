@@ -44,6 +44,12 @@ def _define_args():
                              type=float,
                              help='Image expansion factor')
 
+    args_parser.add_argument('--mask-subsampling',
+                             dest='mask_subsampling',
+                             type=int,
+                             default=2,
+                             help='Mask subsampling')
+
     args_parser.add_argument('--output',
                              dest='output',
                              help='Output directory')
@@ -95,21 +101,33 @@ def _generate_foreground_mask(args):
         # default to output_chunk_size
         output_chunk_size = (args.output_chunk_size,) * image_data.spatial_ndim
 
+    image_array = read_image(
+        tuple([slice(None), slice(None), slice(None)]),
+        image=image_data.image_array,
+        image_timeindex=image_data.image_timeindex,
+        image_channel=image_data.image_channel,
+    )
+
+    logger.debug(f'Read image of shape: {image_array.shape}')
+
+    mask, mask_spacing = generate_foreground_mask(
+        image_array,
+        get_spatial_values(image_data.voxel_spacing),
+        image_subsampling=args.mask_subsampling,
+        mask_smoothing=2,
+    )
+
+    logger.info(f'Write mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')
+
     image_axes = image_data.get_attr('axes') or []
     image_coordinate_transformations = image_data.get_attr('coordinateTransformations') or []
     axes = [a for a in image_axes if a.get('type') == 'space']
     coordinate_transformations = []
     for ct in image_coordinate_transformations:
-        print('!!!! ', ct)
         if ct.get('type') == 'scale':
             coordinate_transformations.append({
                 'type': 'scale',
-                'scale': get_spatial_values(ct.get('scale')),
-            })
-        elif ct.get('type') == 'translation':
-            coordinate_transformations.append({
-                'type': 'translation',
-                'translation': get_spatial_values(ct.get('translation')),
+                'scale': mask_spacing,
             })
 
     output_attrs = io_utility.prepare_parent_group_attrs(
@@ -119,19 +137,6 @@ def _generate_foreground_mask(args):
         dataset_transformations=coordinate_transformations,
     )
 
-    image_array = read_image(
-        tuple([slice(None), slice(None), slice(None)]),
-        image=image_data.image_array,
-        image_timeindex=image_data.image_timeindex,
-        image_channel=image_data.image_channel,
-    )
-    mask = generate_foreground_mask(
-        image_array,
-        get_spatial_values(image_data.voxel_spacing),
-        image_subsampling=2,
-    )
-
-    logger.info(f'Write mask to {args.output}:{args.output_subpath}')
     output_array = io_utility.create_dataset_array(
         args.output,
         args.output_subpath,

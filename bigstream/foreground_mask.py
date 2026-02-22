@@ -1,7 +1,11 @@
+import logging
 import numpy as np
 
 from scipy.ndimage import zoom, binary_closing, binary_dilation
 from . import level_set
+
+
+logger = logging.getLogger(__name__)
 
 
 def generate_foreground_mask(image,
@@ -12,10 +16,8 @@ def generate_foreground_mask(image,
                              smooth_sigmas=[32,24,16],
                              lambda2=1.5,
                              return_largest_cc_only=False):
-
-    print('!!!!! IMAGE SHAPE ', image.shape)
-    print('!!!!!! IMAGE SPACING ', image_spacing)
     subsampled_image = image[::image_subsampling, ::image_subsampling, ::image_subsampling]
+    logger.debug(f'sample {image.shape} image at {image_subsampling} -> {subsampled_image.shape}')
     subsampled_image_spacing = image_spacing * image_subsampling
     mask = level_set.foreground_segmentation(
         subsampled_image, subsampled_image_spacing,
@@ -28,6 +30,5 @@ def generate_foreground_mask(image,
     # enlarge and smooth mask
     mask = binary_closing(mask, np.ones((5,5,5))).astype(np.uint8)
     mask = binary_dilation(mask, np.ones((10,10,10))).astype(np.uint8)
-    mask = zoom(mask, np.array(mask.shape) / subsampled_image.shape, order=0)
-
-    return mask
+    mask = zoom(mask, image_subsampling, order=0)
+    return mask, subsampled_image_spacing

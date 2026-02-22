@@ -293,6 +293,52 @@ def _get_array_shape(dataset_shape, for_timeindex, for_channel):
     return final_shape
 
 
+def _merge_ome_parent_attrs(existing_attrs, new_attrs):
+    """Merge new parent attrs with existing, preserving OME datasets list."""
+    if not new_attrs:
+        return new_attrs
+
+    existing_multiscales = existing_attrs.get('multiscales')
+    new_multiscales = new_attrs.get('multiscales')
+
+    if not existing_multiscales or not new_multiscales:
+        return new_attrs
+
+    existing_ms = existing_multiscales[0]
+    new_ms = new_multiscales[0]
+
+    existing_datasets = list(existing_ms.get('datasets', []))
+    new_datasets = new_ms.get('datasets', [])
+
+    # merge: replace by path or append
+    for new_ds in new_datasets:
+        new_path = new_ds.get('path')
+        replaced = False
+        for i, existing_ds in enumerate(existing_datasets):
+            if existing_ds.get('path') == new_path:
+                existing_datasets[i] = new_ds
+                replaced = True
+                break
+        if not replaced:
+            existing_datasets.append(new_ds)
+
+    # merge paths list
+    existing_paths = list(existing_ms.get('paths', []))
+    new_paths = new_ms.get('paths', [])
+    for p in new_paths:
+        if p not in existing_paths:
+            existing_paths.append(p)
+
+    # build merged multiscales entry - start from new, override datasets/paths
+    merged_ms = dict(new_ms)
+    merged_ms['datasets'] = existing_datasets
+    merged_ms['paths'] = existing_paths
+
+    merged_attrs = dict(new_attrs)
+    merged_attrs['multiscales'] = [merged_ms]
+    return merged_attrs
+
+
 def _update_dataset_attrs(root_container, dataset,
                           parent_attrs={}, **dataset_attrs):
     """
@@ -307,8 +353,13 @@ def _update_dataset_attrs(root_container, dataset,
     else:
         parent_container = root_container
 
+    # merge OME multiscales datasets if parent already has metadata
+    merged_attrs = _merge_ome_parent_attrs(
+        dict(parent_container.attrs), parent_attrs
+    )
+
     # write the parent (group) metadata and the dataset metadata
-    parent_container.attrs.update(_to_native_type(parent_attrs))
+    parent_container.attrs.update(_to_native_type(merged_attrs))
     dataset.attrs.update(_to_native_type(dataset_attrs))
 
 
@@ -516,6 +567,7 @@ def prepare_parent_group_attrs(container_path,
         dataset = Dataset.build(path=dataset_scale_subpath, scale=scales, translation=translations)
         multiscale_attrs.update({
             'datasets': (dataset.dict(exclude_none=True),),
+            'paths': [dataset_scale_subpath],
         })
 
     if global_transformations is not None and len(global_transformations) > 0:

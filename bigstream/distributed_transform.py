@@ -712,17 +712,20 @@ def distributed_invert_displacement_vector_field(
     )
     logger.info(f'Submit Invert for {len(blocks)} blocks')
     invert_res = cluster_client.map(invert_block, blocks)
+    success_flag = True
     for f, r in as_completed(invert_res, with_results=True):
         if f.cancelled():
             exc = f.exception()
             logger.error(f'Invert block exception: {exc}')
             tb = f.traceback()
             traceback.print_tb(tb)
+            success_flag = False
         else:
             block_coords = r
             logger.info(f'Finished inverting block {block_coords}')
 
-    logger.info('Finished computing inverse vector field for all blocks')
+    status_message = 'successfully' if success_flag else 'with errors'
+    logger.info(f'Finished computing inverse vector field {status_message} for all blocks.')
     return inv_vectorfield_outputarray
 
 

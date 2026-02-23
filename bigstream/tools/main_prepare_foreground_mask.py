@@ -49,6 +49,16 @@ def _define_args():
                              type=int,
                              default=2,
                              help='Mask subsampling')
+    args_parser.add_argument('--mask-smoothing',
+                             dest='mask_smoothing',
+                             type=float,
+                             default=2,
+                             help='Mask smoothing')
+    args_parser.add_argument('--mask-lambda',
+                             dest='mask_lambda',
+                             type=float,
+                             default=1.5,
+                             help='Mask lambda')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -114,10 +124,11 @@ def _generate_foreground_mask(args):
         image_array,
         get_spatial_values(image_data.voxel_spacing),
         image_subsampling=args.mask_subsampling,
-        mask_smoothing=2,
+        mask_smoothing=args.mask_smoothing,
+        lambda2=args.mask_lambda,
     )
 
-    logger.info(f'Write mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')
+    logger.info(f'Write {mask.shape} mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')
 
     image_axes = image_data.get_attr('axes') or []
     image_coordinate_transformations = image_data.get_attr('coordinateTransformations') or []
@@ -129,6 +140,12 @@ def _generate_foreground_mask(args):
                 'type': 'scale',
                 'scale': mask_spacing,
             })
+        elif ct.get('type') == 'translation':
+            coordinate_transformations.append({
+                'type': 'translation',
+                'translation': get_spatial_values(ct.get('translation')),
+            })
+
 
     output_attrs = io_utility.prepare_parent_group_attrs(
         args.output,

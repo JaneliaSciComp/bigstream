@@ -17,8 +17,11 @@ def generate_foreground_mask(image,
                              lambda2=1.5,
                              return_largest_cc_only=False):
     subsampled_image = image[::image_subsampling, ::image_subsampling, ::image_subsampling]
-    logger.debug(f'sample {image.shape} image at {image_subsampling} -> {subsampled_image.shape}')
     subsampled_image_spacing = image_spacing * image_subsampling
+    logger.debug((
+        f'sample {image.shape} image with resolution {image_spacing} '
+        f'at {image_subsampling} -> {subsampled_image.shape}, new resolution {subsampled_image_spacing} '
+    ))
     mask = level_set.foreground_segmentation(
         subsampled_image, subsampled_image_spacing,
         mask_smoothing=mask_smoothing,
@@ -30,5 +33,5 @@ def generate_foreground_mask(image,
     # enlarge and smooth mask
     mask = binary_closing(mask, np.ones((5,5,5))).astype(np.uint8)
     mask = binary_dilation(mask, np.ones((10,10,10))).astype(np.uint8)
-    mask = zoom(mask, image_subsampling, order=0)
-    return mask, subsampled_image_spacing
+    mask = zoom(mask, np.array(image.shape) / subsampled_image.shape, order=0)
+    return mask, subsampled_image_spacing / image_subsampling

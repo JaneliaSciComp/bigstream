@@ -13,7 +13,7 @@ from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
                                   calc_downsampling_attr)
 
-from .cli import (inttuple, floattuple)
+from .cli import (dictfromjson, inttuple, floattuple)
 
 
 logger:logging.Logger
@@ -108,11 +108,17 @@ def _define_args():
                              dest='max_concurrent_zarr_reads',
                              type=int, default=0,
                              help='Maximum number of concurrent reads from a zarr array')
-    args_parser.add_argument('--compression', dest='compression',
+    args_parser.add_argument('--compression', '--compressor',
+                             dest='compressor',
                              default='gzip',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+    args_parser.add_argument('--compression-opts', '--compressor-opts',
+                             dest='compressor_opts',
+                             default={},
+                             type=dictfromjson,
+                             help='Zarr array compression options')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -170,7 +176,8 @@ def _run_compute_inverse(args):
         tuple(inv_transform_blocksize) + (len(inv_transform_blocksize),),
         local_deform_field.dtype,
         overwrite=True,
-        compressor=args.compression,
+        compressor=args.compressor,
+        compression_opts=args.compressor_opts,
         parent_attrs=inv_transform_attrs,
         pixelResolution=calc_full_voxel_resolution_attr(local_deform_field.voxel_spacing,
                                                         local_deform_field.voxel_downsampling),

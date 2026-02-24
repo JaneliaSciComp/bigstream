@@ -9,7 +9,7 @@ from bigstream.ome_utils import get_spatial_values
 from bigstream.foreground_mask import generate_foreground_mask
 from bigstream.io_utility import read_block as read_image
 
-from .cli import (floattuple, inttuple)
+from .cli import (dictfromjson, floattuple, inttuple)
 
 
 logger:logging.Logger
@@ -51,14 +51,15 @@ def _define_args():
                              help='Mask subsampling')
     args_parser.add_argument('--mask-smoothing',
                              dest='mask_smoothing',
+                             type=int,
+                             default=1,
+                             help='Number of iterations to apply mask smoothing - smaller value results in a rougher mask')
+    args_parser.add_argument('--mask-lambda',
+                             dest='mask_lambda2',
                              type=float,
                              default=2,
-                             help='Mask smoothing')
-    args_parser.add_argument('--mask-lambda',
-                             dest='mask_lambda',
-                             type=float,
-                             default=1.5,
-                             help='Mask lambda')
+                             metavar='lambda2',
+                             help='Controls the variance of the foreground region. A larger number means larger segment(s).')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -76,11 +77,17 @@ def _define_args():
                              dest='output_blocksize',
                              type=inttuple,
                              help='Output chunk size as a tuple.')
-    args_parser.add_argument('--compression', dest='compression',
+    args_parser.add_argument('--compression', '--compressor',
+                             dest='compressor',
                              default='gzip',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+    args_parser.add_argument('--compression-opts', '--compressor-opts',
+                             dest='compressor_opts',
+                             default={},
+                             type=dictfromjson,
+                             help='Zarr array compression options')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -125,7 +132,8 @@ def _generate_foreground_mask(args):
         get_spatial_values(image_data.voxel_spacing),
         image_subsampling=args.mask_subsampling,
         mask_smoothing=args.mask_smoothing,
-        lambda2=args.mask_lambda,
+        lambda2=args.mask_lambda2,
+        return_largest_cc_only=False,
     )
 
     logger.info(f'Write {mask.shape} mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')
@@ -160,7 +168,8 @@ def _generate_foreground_mask(args):
         mask.shape,
         output_chunk_size,
         mask.dtype,
-        compressor=args.compression,
+        compressor=args.compressor,
+        compression_opts=args.compressor_opts,
         parent_attrs=output_attrs,
         zarr_format=2,
     )

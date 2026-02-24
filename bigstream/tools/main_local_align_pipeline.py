@@ -21,7 +21,7 @@ from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, extract_align_pipeline,
                   extract_registration_input_args, get_input_images,
-                  inttuple, floattuple)
+                  dictfromjson, inttuple, floattuple)
 
 
 logger:logging.Logger
@@ -120,11 +120,17 @@ def _define_args(local_descriptor):
                              dest='max_concurrent_zarr_reads',
                              type=int, default=0,
                              help='Maximum number of concurrent reads from a zarr array')
-    args_parser.add_argument('--compression', dest='compression',
+    args_parser.add_argument('--compression', '--compressor',
+                             dest='compressor',
                              default='gzip',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+    args_parser.add_argument('--compression-opts', '--compressor-opts',
+                             dest='compressor_opts',
+                             default={},
+                             type=dictfromjson,
+                             help='Zarr array compression options')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -597,7 +603,7 @@ def main():
         dask_workers=args.local_dask_workers,
         worker_cpus=args.worker_cpus,
         logging_config=args.logging_config,
-        compressor=args.compression,
+        compressor=args.compressor,
         verbose=args.verbose,
         foreground_percentage=args.foreground_percentage,
         max_concurrent_zarr_reads=args.max_concurrent_zarr_reads,

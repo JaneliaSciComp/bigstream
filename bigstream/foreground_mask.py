@@ -13,7 +13,7 @@ def generate_foreground_mask(image,
                              image_subsampling=4,
                              mask_smoothing=2,
                              iterations=[80,40,10],
-                             smooth_sigmas=[32,24,16],
+                             smooth_sigmas=[32,16,4],
                              lambda2=1.5,
                              return_largest_cc_only=False):
     subsampled_image = image[::image_subsampling, ::image_subsampling, ::image_subsampling]

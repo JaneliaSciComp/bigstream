@@ -14,7 +14,7 @@ from bigstream.image_data import (ImageData,
                                   calc_downsampling_attr)
 from bigstream.ome_utils import get_spatial_values
 
-from .cli import (inttuple, floattuple, stringlist)
+from .cli import (dictfromjson, inttuple, floattuple, stringlist)
 
 
 logger:logging.Logger
@@ -135,11 +135,17 @@ def _define_args():
                              dest='max_concurrent_zarr_reads',
                              type=int, default=0,
                              help='Maximum number of concurrent reads from a zarr array')
-    args_parser.add_argument('--compression', dest='compression',
+    args_parser.add_argument('--compression', '--compressor',
+                             dest='compressor',
                              default='gzip',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+    args_parser.add_argument('--compression-opts', '--compressor-opts',
+                             dest='compressor_opts',
+                             default={},
+                             type=dictfromjson,
+                             help='Zarr array compression options')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -243,7 +249,8 @@ def _run_apply_transform(args):
             output_shape,
             output_chunk_size,
             fix_data.dtype,
-            compressor=args.compression,
+            compressor=args.compressor,
+            compression_opts=args.compressor_opts,
             for_timeindex=output_timeindex,
             for_channel=output_channel,
             parent_attrs=output_attrs,

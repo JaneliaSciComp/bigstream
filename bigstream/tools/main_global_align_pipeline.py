@@ -15,7 +15,8 @@ from bigstream.transform import apply_transform
 
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, extract_align_pipeline,
-                  extract_registration_input_args, get_input_images)
+                  extract_registration_input_args, get_input_images,
+                  dictfromjson)
 
 
 logger:logging.Logger
@@ -38,11 +39,17 @@ def _define_args(args_descriptor):
                              action='store_true',
                              help='Do not recompute global transform if found')
 
-    args_parser.add_argument('--compression', dest='compression',
+    args_parser.add_argument('--compression', '--compressor',
+                             dest='compressor',
                              default='gzip',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+    args_parser.add_argument('--compression-opts', '--compressor-opts',
+                             dest='compressor_opts',
+                             default={},
+                             type=dictfromjson,
+                             help='Zarr array compression options')
 
     args_parser.add_argument('--cpus', dest='cpus',
                              type=int, default=0,
@@ -61,7 +68,8 @@ def _define_args(args_descriptor):
 
 def _run_global_align(reg_args:RegistrationInputs,
                       align_config,
-                      compressor):
+                      compressor,
+                      compressor_opts):
     global_steps, _ = extract_align_pipeline(align_config,
                                              'global_align',
                                              reg_args.registration_steps)
@@ -94,6 +102,7 @@ def _run_global_align(reg_args:RegistrationInputs,
             mov.voxel_spacing,
             mov.voxel_downsampling,
             compressor,
+            compressor_opts,
         )
     else:
         logger.info('Skip global alignment - both fix and moving image are needed')
@@ -164,7 +173,8 @@ def _align_global_data(fix_image, fix_mask,
 
 def _apply_global_transform(reg_args:RegistrationInputs,
                             affine,
-                            compressor):
+                            compressor,
+                            compressor_opts):
     (fix_image, _, mov_image, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
         full_image_coords = tuple(slice(None) for _ in range(fix_image.spatial_ndim))
@@ -200,6 +210,7 @@ def _apply_global_transform(reg_args:RegistrationInputs,
             mov_image.voxel_spacing,
             mov_image.voxel_downsampling,
             compressor,
+            compressor_opts,
         )
     else:
         # both fix and mov volume must be valid
@@ -236,7 +247,8 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          dataset_transformations,
                          voxel_resolution,
                          downsampling,
-                         compressor):
+                         compressor,
+                         compressor_opts):
     align_path = reg_args.align_path()
     # prepare global coordinate transform from reg_args.mov_origin_transform
     global_transformations = []
@@ -295,6 +307,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             aligned_array.dtype,
             overwrite=False,
             compressor=compressor,
+            compression_opts=compressor_opts,
             for_timeindex=reg_args.get_align_timeindex(),
             for_channel=reg_args.get_align_channel(),
             parent_attrs=align_attrs,
@@ -346,10 +359,11 @@ def main():
         # no global transform found -> calculate it and then apply it
         _run_global_align(reg_inputs,
                           args.align_config,
-                          args.compression)
+                          args.compressor,
+                          args.compressor_opts)
     else:
         # global transform found -> just apply it
-        _apply_global_transform(reg_inputs, global_transform, args.compression)
+        _apply_global_transform(reg_inputs, global_transform, args.compressor, args.compressor_opts)
 
 
 if __name__ == '__main__':

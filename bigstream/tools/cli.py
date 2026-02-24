@@ -1,3 +1,4 @@
+import json
 import logging
 import numpy as np
 import os
@@ -9,6 +10,12 @@ from bigstream.image_data import ImageData
 
 
 logger = logging.getLogger(__name__)
+
+def dictfromjson(arg:str):
+    if arg:
+        return json.loads(arg)
+    else:
+        return {}
 
 
 def inttuple(arg):

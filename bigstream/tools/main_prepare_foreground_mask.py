@@ -66,7 +66,6 @@ def _define_args():
                              help='Output directory')
     args_parser.add_argument('--output-subpath',
                              dest='output_subpath',
-                             required=True,
                              help='Subpath for the warped output')
     args_parser.add_argument('--output-chunk-size',
                              dest='output_chunk_size',
@@ -138,22 +137,15 @@ def _generate_foreground_mask(args):
 
     logger.info(f'Write {mask.shape} mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')
 
-    image_axes = image_data.get_attr('axes') or []
-    image_coordinate_transformations = image_data.get_attr('coordinateTransformations') or []
-    axes = [a for a in image_axes if a.get('type') == 'space']
-    coordinate_transformations = []
-    for ct in image_coordinate_transformations:
-        if ct.get('type') == 'scale':
-            coordinate_transformations.append({
-                'type': 'scale',
-                'scale': mask_spacing,
-            })
-        elif ct.get('type') == 'translation':
-            coordinate_transformations.append({
-                'type': 'translation',
-                'translation': get_spatial_values(ct.get('translation')),
-            })
-
+    axes = [a for a in (image_data.get_attr('axes') or []) if a.get('type') == 'space']
+    coordinate_transformations = [
+        {'type': ct['type'], ct['type']: (
+            mask_spacing if ct['type'] == 'scale'
+            else get_spatial_values(ct.get('translation'))
+        )}
+        for ct in (image_data.get_attr('coordinateTransformations') or [])
+        if ct.get('type') in ('scale', 'translation')
+    ]
 
     output_attrs = io_utility.prepare_parent_group_attrs(
         args.output,

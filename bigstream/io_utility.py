@@ -228,24 +228,26 @@ def create_dataset_array(
                     zarr_format=zarr_format,
                     **compressor_args,
                 )
-            elif zarr.storage.contains_array(store):
-                # the array already exists
-                dataset_array = zarr.open(store=store, mode='a')
-                final_dataset_shape = _get_array_shape(shape, for_timeindex, for_channel)
-                if final_dataset_shape != shape:
-                    logger.info(f'Resize {dataset_array.store}:{dataset_array.path} to {final_dataset_shape}')
-                    dataset_array.resize(final_dataset_shape)
             else:
-                # this is a new array
-                dataset_array = zarr.create_array(
-                    store=store,
-                    shape=shape,
-                    chunks=chunks,
-                    dtype=dtype,
-                    chunk_key_encoding=chunk_key_separator,
-                    zarr_format=zarr_format,
-                    **compressor_args,
-                )
+                try:
+                    # open existing array for read/write (raises ArrayNotFoundError if absent)
+                    dataset_array = zarr.open_array(store=store, mode='r+')
+                    final_dataset_shape = _get_array_shape(shape, for_timeindex, for_channel)
+                    if final_dataset_shape != shape:
+                        logger.info(f'Resize {dataset_array.store}:{dataset_array.path} to {final_dataset_shape}')
+                        dataset_array.resize(final_dataset_shape)
+                except zarr.errors.ArrayNotFoundError:
+                    # this is a new array
+                    logger.info(f'Create new array at {store}')
+                    dataset_array = zarr.create_array(
+                        store=store,
+                        shape=shape,
+                        chunks=chunks,
+                        dtype=dtype,
+                        chunk_key_encoding=chunk_key_separator,
+                        zarr_format=zarr_format,
+                        **compressor_args,
+                    )
             # set additional attributes
             dataset_array.attrs.update(_to_native_type(dataset_attrs))
 

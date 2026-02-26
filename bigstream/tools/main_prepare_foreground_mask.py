@@ -64,10 +64,10 @@ def _define_args():
                              default=2,
                              metavar='lambda2',
                              help='Controls the variance of the foreground region. A larger number means larger segment(s).')
-    args_parser.add_argument('--mask-percentile',
-                             dest='mask_percentile',
+    args_parser.add_argument('--mask-threshold-percentile',
+                             dest='mask_thresh_percentile',
                              type=int,
-                             help='Mask percentile to determine the mask. If this is set it only uses the vale of the percentile for the foreground mask')
+                             help='Intensity percentile used for finding the foreground threshold; when set, uses a simple threshold cutoff instead of the MorphACWE method')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -144,7 +144,7 @@ def _generate_foreground_mask(args):
         mask_smoothing=args.mask_smoothing,
         lambda2=args.mask_lambda2,
         smooth_sigmas=smooth_sigmas,
-        percentile_thresh=args.mask_percentile,
+        percentile_thresh=args.mask_thresh_percentile,
     )
 
     logger.info(f'Write {mask.shape} mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')

@@ -54,7 +54,7 @@ def _define_args():
                              type=int,
                              default=1,
                              help='Number of iterations to apply mask smoothing - smaller value results in a rougher mask')  
-    args_parser.add_argument('--mask-sigmas',
+    args_parser.add_argument('--mask-sigma',
                              dest='mask_sigma',
                              type=float,
                              help='Gaussian smoothing sigma at the finest shrink factor; coarser shrink factors use proportionally larger sigmas')

@@ -44,10 +44,6 @@ def _define_args():
                              type=float,
                              help='Image expansion factor')
 
-    args_parser.add_argument('--mask-smooth-sigma',
-                             dest='mask_smooth_sigma',
-                             type=float,
-                             help='Mask smooth sigma')
     args_parser.add_argument('--mask-subsampling',
                             dest='mask_subsampling',
                             type=int,
@@ -61,7 +57,7 @@ def _define_args():
     args_parser.add_argument('--mask-sigmas',
                              dest='mask_sigma',
                              type=float,
-                             help='Mask smooth sigma')
+                             help='Gaussian smoothing sigma at the finest shrink factor; coarser shrink factors use proportionally larger sigmas')
     args_parser.add_argument('--mask-lambda',
                              dest='mask_lambda2',
                              type=float,

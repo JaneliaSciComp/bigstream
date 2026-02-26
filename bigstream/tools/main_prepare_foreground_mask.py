@@ -44,22 +44,34 @@ def _define_args():
                              type=float,
                              help='Image expansion factor')
 
+    args_parser.add_argument('--mask-smooth-sigma',
+                             dest='mask_smooth_sigma',
+                             type=float,
+                             help='Mask smooth sigma')
     args_parser.add_argument('--mask-subsampling',
-                             dest='mask_subsampling',
-                             type=int,
-                             default=2,
-                             help='Mask subsampling')
+                            dest='mask_subsampling',
+                            type=int,
+                            default=2,
+                            help='Mask subsampling')
     args_parser.add_argument('--mask-smoothing',
                              dest='mask_smoothing',
                              type=int,
                              default=1,
-                             help='Number of iterations to apply mask smoothing - smaller value results in a rougher mask')
+                             help='Number of iterations to apply mask smoothing - smaller value results in a rougher mask')  
+    args_parser.add_argument('--mask-sigmas',
+                             dest='mask_sigma',
+                             type=float,
+                             help='Mask smooth sigma')
     args_parser.add_argument('--mask-lambda',
                              dest='mask_lambda2',
                              type=float,
                              default=2,
                              metavar='lambda2',
                              help='Controls the variance of the foreground region. A larger number means larger segment(s).')
+    args_parser.add_argument('--mask-percentile',
+                             dest='mask_percentile',
+                             type=int,
+                             help='Mask percentile to determine the mask. If this is set it only uses the vale of the percentile for the foreground mask')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -123,16 +135,20 @@ def _generate_foreground_mask(args):
         image_timeindex=image_data.image_timeindex,
         image_channel=image_data.image_channel,
     )
-
     logger.debug(f'Read image of shape: {image_array.shape}')
 
+    if args.mask_sigma:
+        smooth_sigmas = (args.mask_sigma+16,args.mask_sigma+8,args.mask_sigma)
+    else:
+        smooth_sigmas = (24, 16, 8)
     mask, mask_spacing = generate_foreground_mask(
         image_array,
         get_spatial_values(image_data.voxel_spacing),
         image_subsampling=args.mask_subsampling,
         mask_smoothing=args.mask_smoothing,
         lambda2=args.mask_lambda2,
-        return_largest_cc_only=False,
+        smooth_sigmas=smooth_sigmas,
+        percentile_thresh=args.mask_percentile,
     )
 
     logger.info(f'Write {mask.shape} mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')

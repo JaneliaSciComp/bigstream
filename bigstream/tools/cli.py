@@ -154,7 +154,7 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('fix-mask-descriptor'),
                       dest=args_descriptor.argdest('fix_mask_descriptor'),
                       type=inttuple,
-                      metavar="zmin,ymin,xmin,zmax,ymax,xmax",
+                      metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
                       help='Fixed volume mask descriptor a tuple of 6 values representing min and max voxel coordinates')
 
     args.add_argument(args_descriptor.argflag('mov'),
@@ -186,7 +186,7 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('mov-mask-descriptor'),
                       dest=args_descriptor.argdest('mov_mask_descriptor'),
                       type=inttuple,
-                      metavar="zmin,ymin,xmin,zmax,ymax,xmax",
+                      metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
                       help='Moving volume mask descriptor a tuple of 6 values representing min and max voxel coordinates')
 
     args.add_argument(args_descriptor.argflag('mov-origin-transform'),

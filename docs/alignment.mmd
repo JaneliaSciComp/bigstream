@@ -1,0 +1,62 @@
+%%{init: {'theme': 'base', 'themeVariables': {'background': '#ffffff', 'primaryColor': '#ffffff', 'primaryTextColor': '#000000', 'primaryBorderColor': '#000000', 'lineColor': '#000000', 'secondaryColor': '#ffffff', 'tertiaryColor': '#ffffff'}}}%%
+
+flowchart TD
+    classDef default fill:#ffffff,stroke:#000000,color:#000000
+
+    FIX([Fixed image])
+    MOV([Moving image])
+
+    FIX & MOV --> S1
+
+    subgraph S1 [Global Alignment]
+        direction TB
+        S11["Ransac"]
+        S12["Affine"]
+        
+        S11 --> S12
+
+        NOTE1_1["parameters ← yml config"]
+        S11 -.-> NOTE1_1
+        S12 -.-> NOTE1_1
+        style NOTE1_1 fill:#ffffcc,stroke:#999,stroke-dasharray:5
+    end
+    S1 -.-> NOTE1["main_global_align_pipeline &equiv; alignment_pipeline"]
+    style NOTE1 fill:#ffffcc,stroke:#999,stroke-dasharray:5
+
+    S1 --> S2
+
+    subgraph S2 [Local Alignment]
+        direction TB
+        S21["Partition image into blocks"]
+        S22["Per block Ransac"]
+        S23["Per block Affine"]
+        S24["Per block Deform"]
+
+        S21 --> S22 --> S23 --> S24
+
+        NOTE2_1["parameters <- yml config"]
+        S22 -.-> NOTE2_1
+        S23 -.-> NOTE2_1
+        S24 -.-> NOTE2_1
+
+        style NOTE2_1 fill:#ffffcc,stroke:#999,stroke-dasharray:5
+
+    end
+
+    NOTE2["main_local_align_pipeline &equiv; piecewise_align"]
+    style NOTE2 fill:#ffffcc,stroke:#999,stroke-dasharray:5
+
+    S2 -.-> NOTE2
+
+    S2 --> S3
+
+    subgraph S3 [Apply transform]
+        direction TB
+        S31["Apply global affine"]
+        S32["Apply deformation field"]
+        S31 --> S32
+    end
+    S3 -.-> NOTE3["main_apply_local_transform &equiv; piecewise_transform"]
+    style NOTE3 fill:#ffffcc,stroke:#999,stroke-dasharray:5
+
+    S3 --> OUT([Aligned image])

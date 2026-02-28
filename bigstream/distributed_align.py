@@ -571,7 +571,12 @@ def distributed_alignment_pipeline(
     if fix_mask is not None:
         if isinstance(fix_mask, (tuple, list)):
             fix_mask_image = None
-            fix_mask_spatial_dims = np.array(fix_mask[3:]) - np.array(fix_mask[:3])
+            fix_mask_min_zyx = tuple(reversed(fix_mask[:3]))
+            if len(fix_mask) >= 6:
+                fix_mask_max_zyx = tuple(reversed(fix_mask[3:6]))
+            else:
+                fix_mask_max_zyx = fix_spatial_dims
+            fix_mask_spatial_dims = np.array(fix_mask_max_zyx) - np.array(fix_mask_min_zyx)
         else:
             fix_mask_image = as_image_data(fix_mask)
             fix_mask_spatial_dims = fix_mask_image.spatial_dims
@@ -582,7 +587,12 @@ def distributed_alignment_pipeline(
     if mov_mask is not None:
         if isinstance(mov_mask, (tuple, list)):
             mov_mask_image = None
-            mov_mask_spatial_dims = np.array(mov_mask[3:]) - np.array(mov_mask[:3])
+            mov_mask_min_zyx = tuple(reversed(mov_mask[:3]))
+            if len(mov_mask) >= 6:
+                mov_mask_max_zyx = tuple(reversed(mov_mask[3:6]))
+            else:
+                mov_mask_max_zyx = mov_spatial_dims
+            mov_mask_spatial_dims = np.array(mov_mask_max_zyx) - np.array(mov_mask_min_zyx)
         else:
             mov_mask_image = as_image_data(mov_mask)
             mov_mask_spatial_dims = mov_mask_image.spatial_dims
@@ -633,12 +643,15 @@ def distributed_alignment_pipeline(
                 foreground = False
         elif fix_mask is not None:
             # mask is provided as 6 voxel coordinates: (z_min, y_min, x_min, z_max, y_max, x_max)
-            mask_min = np.array(fix_mask[:3])
-            mask_max = np.array(fix_mask[3:])
+            fix_mask_min_zyx = tuple(reversed(fix_mask[:3]))
+            if len(fix_mask) >= 6:
+                fix_mask_max_zyx = tuple(reversed(fix_mask[3:6]))
+            else:
+                fix_mask_max_zyx = fix_spatial_dims
             block_min = np.array([s.start for s in block_slice])
             block_max = np.array([s.stop for s in block_slice])
             # check if block intersects the mask bounding box
-            if np.any(block_max <= mask_min) or np.any(block_min >= mask_max):
+            if np.any(block_max <= fix_mask_min_zyx) or np.any(block_min >= fix_mask_max_zyx):
                 logger.debug(f'Block {bi} outside mask bbox {fix_mask}, skipping')
                 foreground = False
 

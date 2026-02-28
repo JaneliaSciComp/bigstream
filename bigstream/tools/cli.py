@@ -151,11 +151,11 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('fix-mask-subpath'),
                       dest=args_descriptor.argdest('fix_mask_subpath'),
                       help='Fixed volume mask subpath')
-    args.add_argument(args_descriptor.argflag('fix-mask-descriptor'),
-                      dest=args_descriptor.argdest('fix_mask_descriptor'),
+    args.add_argument(args_descriptor.argflag('fix-roi'),
+                      dest=args_descriptor.argdest('fix_roi'),
                       type=inttuple,
                       metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
-                      help='Fixed volume mask descriptor a tuple of 6 values representing min and max voxel coordinates')
+                      help='Fixed volume ROI a tuple of 6 values representing min and max voxel coordinates')
 
     args.add_argument(args_descriptor.argflag('mov'),
                       dest=args_descriptor.argdest('mov'),
@@ -183,11 +183,11 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('mov-mask-subpath'),
                       dest=args_descriptor.argdest('mov_mask_subpath'),
                       help='Moving volume mask subpath')
-    args.add_argument(args_descriptor.argflag('mov-mask-descriptor'),
-                      dest=args_descriptor.argdest('mov_mask_descriptor'),
+    args.add_argument(args_descriptor.argflag('mov-roi'),
+                      dest=args_descriptor.argdest('mov_roi'),
                       type=inttuple,
                       metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
-                      help='Moving volume mask descriptor a tuple of 6 values representing min and max voxel coordinates')
+                      help='Moving volume ROI a tuple of 6 values representing min and max voxel coordinates')
 
     args.add_argument(args_descriptor.argflag('mov-origin-transform'),
                       dest=args_descriptor.argdest('mov_origin_transform'),
@@ -303,7 +303,7 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'fix_spacing', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask_subpath', registration_args)
-    _extract_arg(args, args_descriptor, 'fix_mask_descriptor', registration_args)
+    _extract_arg(args, args_descriptor, 'fix_roi', registration_args)
     _extract_arg(args, args_descriptor, 'mov', registration_args)
     _extract_arg(args, args_descriptor, 'mov_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'mov_timeindex', registration_args)
@@ -311,7 +311,7 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'mov_spacing', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask_subpath', registration_args)
-    _extract_arg(args, args_descriptor, 'mov_mask_descriptor', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_roi', registration_args)
     _extract_arg(args, args_descriptor, 'default_output_dir', registration_args)
     _extract_arg(args, args_descriptor, 'transform_dir', registration_args)
     _extract_arg(args, args_descriptor, 'transform_name', registration_args)
@@ -369,14 +369,14 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
 
     if args.fix_mask:
         fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath, open_image=True)
-    elif args.fix_mask_descriptor:
-        fix_mask = args.fix_mask_descriptor
+    elif args.fix_roi:
+        fix_mask = args.fix_roi
     else:
         fix_mask = None
     if args.mov_mask:
         mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath, open_image=True)
-    elif args.mov_mask_descriptor:
-        mov_mask = args.mov_mask_descriptor
+    elif args.mov_roi:
+        mov_mask = args.mov_roi
     else:
         mov_mask = None
 

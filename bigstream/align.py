@@ -1122,11 +1122,13 @@ def affine_align(
         logger.info(f'{context} Affine align returning default')
         return default
     else:
+        affine_ndarray = bst.affine_transform_to_matrix(transform)
         logger.info((
             f'{context} Affine align succeeded: '
-            f'(initial_metric={initial_metric_value}, final_metric={final_metric_value}) '
+            f'(initial_metric={initial_metric_value}, final_metric={final_metric_value}), '
+            f'affine matrix: {affine_ndarray} '
         ))
-        return bst.affine_transform_to_matrix(transform)
+        return affine_ndarray
 
 
 def deformable_align(

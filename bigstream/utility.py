@@ -145,18 +145,21 @@ def create_zarr(
     zarr_array : zarr array
         Reference to the newly created zarr array on disk
     """
-
-    synchronizer = None
-    if multithreaded:
-        synchronizer = zarr.ThreadSynchronizer()
-    zarr_disk = zarr.open(
-        path, 'a',
-        shape=shape,
-        chunks=chunks,
-        dtype=dtype,
-        path=array_path,
-        synchronizer=synchronizer
-    )
+    if array_path:
+        root = zarr.open_group(path, mode='a')
+        zarr_disk = root.create_array(
+            name=array_path,
+            shape=shape,
+            chunks=chunks,
+            dtype=dtype,
+        )
+    else:
+        zarr_disk = zarr.create_array(
+            store=path,
+            shape=shape,
+            chunks=chunks,
+            dtype=dtype,
+        )
     return zarr_disk
 
 

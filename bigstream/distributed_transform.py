@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def distributed_apply_transform(
     fix_image:ImageData, mov_image:ImageData,
-    blocksize,
+    process_blocksize,
     transform_list,
     cluster_client,
     overlap_factor=0.5,
@@ -78,7 +78,7 @@ def distributed_apply_transform(
     """
     logger.info((
         f'Distributed transform a {mov_image.shape} image '
-        f'using {blocksize} blocks '
+        f'using {process_blocksize} blocks '
         f'with {len(transform_list)} transforms '
     ))
     # get overlap and number of blocks
@@ -86,12 +86,12 @@ def distributed_apply_transform(
     mov_spatial_dims = mov_image.spatial_dims
     fix_spacing = get_spatial_values(fix_image.voxel_spacing)
     mov_spacing = get_spatial_values(mov_image.voxel_spacing)
-    block_partition_size = np.array(get_spatial_values(blocksize))
-    nblocks = np.ceil(np.array(fix_spatial_dims) / block_partition_size).astype(int)
-    overlaps = np.round(block_partition_size * overlap_factor).astype(int)
+    process_block_partition_size = np.array(get_spatial_values(process_blocksize))
+    nblocks = np.ceil(np.array(fix_spatial_dims) / process_block_partition_size).astype(int)
+    overlaps = np.round(process_block_partition_size * overlap_factor).astype(int)
 
     # verify output zarr chunk size <= block size to prevent race conditions
-    validate_processing_block_size(aligned_data, block_partition_size)
+    validate_processing_block_size(aligned_data, process_block_partition_size)
 
     # ensure there's a 1:1 correspondence between transform spacing 
     # and transform list
@@ -111,13 +111,13 @@ def distributed_apply_transform(
     # prepare block coordinates
     logger.info((
         f'Apply distributed transform to {fix_image.shape} '
-        f'partitioned in {nblocks} blocks using {block_partition_size} '
+        f'partitioned in {nblocks} blocks using {process_block_partition_size} '
         f'using transform spacings {transform_spacing_list} '
     ))
     blocks = []
     for bi in np.ndindex(*nblocks):
-        start = block_partition_size * bi - overlaps
-        stop = start + block_partition_size + 2 * overlaps
+        start = process_block_partition_size * bi - overlaps
+        stop = start + process_block_partition_size + 2 * overlaps
         start = np.maximum(0, start)
         stop = np.minimum(fix_spatial_dims, stop)
         block_coords = tuple(slice(x, y) for x, y in zip(start, stop))
@@ -125,7 +125,7 @@ def distributed_apply_transform(
 
     logger.info((
         f'Transform {len(blocks)} blocks '
-        f'with partition size {block_partition_size} '
+        f'with partition size {process_block_partition_size} '
     ))
 
     logger.info((
@@ -166,7 +166,7 @@ def distributed_apply_transform(
         full_mov_shape=mov_spatial_dims,
         fix_spacing=fix_spacing,
         mov_spacing=mov_spacing,
-        blocksize=block_partition_size,
+        blocksize=process_block_partition_size,
         blockoverlaps=overlaps,
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,
@@ -282,8 +282,8 @@ def _transform_single_block(fix_block_read_method,
         mov_block_phys_coords = bs_transform.apply_transform_to_coordinates(
             fix_block_phys_coords,
             applied_transform_list,
-            transform_spacing_list,
-            transform_origin,
+            transform_spacing=transform_spacing_list,
+            transform_origin=transform_origin,
         )
 
         mov_block_voxel_coords = np.round(mov_block_phys_coords / mov_spacing).astype(int)
@@ -332,7 +332,10 @@ def _transform_single_block(fix_block_read_method,
             f'fix block coords: {block_coords} '
             f'fix origin: {fix_origin_physical_coords}, '
             f'mov origin: {mov_origin}, '
-            f'transform origin: {transform_origin} '
+            f'transform origin: {transform_origin}, '
+            f'fix spacing: {fix_spacing}, '
+            f'mov spacing: {mov_spacing}, '
+            f'transform spacing: {transform_spacing_list}, '
         ))
         aligned_block = bs_transform.apply_transform(
             fix_block, mov_block,

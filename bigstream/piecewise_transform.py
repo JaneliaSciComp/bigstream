@@ -350,8 +350,11 @@ def distributed_apply_transform(
         mov_origin = mov_spacing * [s.start for s in mov_slices]
 
         # resample
-        logger.info(f'Apply {len(transform_list)} transforms to {overlap_coords}' +
-                    f'fix origin: {fix_origin}, mov origin: {mov_origin}')
+        logger.info((
+            f'Apply {len(transform_list)} transforms to {overlap_coords} '
+            f'fix origin: {fix_origin}, mov origin: {mov_origin} '
+            f'additional arguments: {kwargs} '
+        ))
         aligned = bs_transform.apply_transform(
             fix, mov, fix_spacing, mov_spacing,
             transform_list=transform_list,

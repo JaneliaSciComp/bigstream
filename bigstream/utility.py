@@ -147,15 +147,17 @@ def create_zarr(
     """
     if array_path:
         root = zarr.open_group(path, mode='a')
-        zarr_disk = root.create_array(
+        zarr_disk = root.require_array(
             name=array_path,
             shape=shape,
             chunks=chunks,
             dtype=dtype,
+            overwrite=True,
         )
     else:
-        zarr_disk = zarr.create_array(
+        zarr_disk = zarr.open_array(
             store=path,
+            mode='w',
             shape=shape,
             chunks=chunks,
             dtype=dtype,

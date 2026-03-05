@@ -12,7 +12,7 @@ authors = [
     { name = "Greg M. Fleishman", email = "greg.nli10me@gmail.com" }
 ]
 dependencies = [
-    "ClusterWrap>=0.3.0",
+    "ClusterWrap>=1.0.3",
     "dask>=2025.11.0",
     "distributed>=2025.11.0",
     "flatten_json==0.1.14",

@@ -79,9 +79,6 @@ def _prepare_compute_block_spatial_transform_params(block_info,
         f'moving block stop physical coords: {mov_stop_phys_coords}\n'
     ))
 
-    # get moving image origin
-    new_origin = mov_start_phys_coords - fix_block_phys_coords[0]
-
     # get moving image crop, read moving data
     mov_block_coords = np.round(
         mov_block_phys_coords / mov_spacing).astype(int)
@@ -103,6 +100,9 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     mov_start = np.maximum(0, mov_start)
     mov_stop = np.minimum(np.array(mov_shape)-1, mov_stop)
     mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
+
+    # get moving crop origin relative to fixed crop
+    new_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
 
     logger.debug((
         f'Block {block_index} : '

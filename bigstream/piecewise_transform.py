@@ -320,6 +320,7 @@ def distributed_apply_transform(
         transform_origin = [fix_origin,] * len(transform_list)
         for iii, transform in enumerate(transform_list):
             if transform.shape != (4, 4):
+                logger.info(f'Transform {iii} use spacing {kwargs['transform_spacing'][iii]}')
                 start = np.floor(fix_origin / kwargs['transform_spacing'][iii]).astype(int)
                 stop = [s.stop for s in overlap_coords] * fix_spacing / kwargs['transform_spacing'][iii]
                 stop = np.ceil(stop).astype(int)

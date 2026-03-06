@@ -14,7 +14,7 @@ from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 from bigstream.transform import apply_transform
 
 from .cli import (CliArgsHelper, RegistrationInputs,
-                  define_registration_input_args, extract_align_pipeline,
+                  define_registration_input_args, get_algorithm_parameters,
                   extract_registration_input_args, get_input_images,
                   dictfromjson)
 
@@ -70,9 +70,9 @@ def _run_global_align(reg_args:RegistrationInputs,
                       align_config,
                       compressor,
                       compressor_opts):
-    global_steps, _ = extract_align_pipeline(align_config,
-                                             'global_align',
-                                             reg_args.registration_steps)
+    global_steps, _ = get_algorithm_parameters(align_config,
+                                               'global_align',
+                                               reg_args.registration_steps)
     if len(global_steps) == 0:
         logger.info('Skip global alignment because no global steps were specified.')
         return None

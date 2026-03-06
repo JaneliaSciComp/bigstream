@@ -19,7 +19,7 @@ from bigstream.image_data import (ImageData,
 from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 
 from .cli import (CliArgsHelper, RegistrationInputs,
-                  define_registration_input_args, extract_align_pipeline,
+                  define_registration_input_args, get_algorithm_parameters,
                   extract_registration_input_args, get_input_images,
                   dictfromjson, inttuple, floattuple)
 
@@ -170,9 +170,9 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          max_concurrent_zarr_reads=0,
                          max_cluster_jobs=0,
                          ):
-    local_steps, local_config = extract_align_pipeline(align_config,
-                                                       'local_align',
-                                                       reg_args.registration_steps)
+    local_steps, local_config = get_algorithm_parameters(align_config,
+                                                         'local_align',
+                                                         reg_args.registration_steps)
     if len(local_steps) == 0:
         logger.info('Skip local alignment because no local steps were specified.')
         return None
@@ -211,6 +211,14 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         local_transform_overlap_factor = transform_overlap
     else:
         local_transform_overlap_factor = local_config.get('transform_overlap', 0.125)
+
+    apply_deform_steps, _ = get_algorithm_parameters(align_config,
+                                                     'apply_deform',
+                                                     ['map_coordinates'])
+    transform_coords_args = {}
+    for step, step_args in apply_deform_steps:
+        if step == 'map_coordinates':
+            transform_coords_args.update(step_args)
 
     if reg_args.transform_subpath:
         deformfield_subpath = reg_args.transform_subpath
@@ -293,6 +301,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             reg_args.align_channel,
             align_chunksize,
             local_transform_overlap_factor,
+            transform_coords_args,
             inv_step,
             inv_iterations,
             inv_shrink_spacings,
@@ -333,6 +342,7 @@ def _align_local_data(fix_image: ImageData,
                       align_channel,
                       align_chunksize,
                       transform_overlap_factor,
+                      transform_coords_args,
                       inv_step,
                       inv_iterations,
                       inv_shrink_spacings,
@@ -549,7 +559,7 @@ def _align_local_data(fix_image: ImageData,
             deform_transforms = []
         affine_spacings = [None for i in range(len(static_transforms))]
         transform_spacing = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing)])
-        logger.info(f'Transforms spacings: {transform_spacing}')
+        logger.info(f'Transforms spacings: {transform_spacing}, transform map coordinates args: {transform_coords_args}')
 
         distributed_apply_transform(
             fix_image, mov_image,
@@ -561,6 +571,7 @@ def _align_local_data(fix_image: ImageData,
             aligned_data_timeindex=align_timeindex,
             aligned_data_channel=align_channel,
             transform_spacing=transform_spacing,
+            **transform_coords_args,
         )
     else:
         align = None

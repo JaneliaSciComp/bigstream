@@ -259,7 +259,7 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       help='Registration steps')
 
 
-def extract_align_pipeline(config_filename, context, steps):
+def get_algorithm_parameters(config_filename, context, steps):
     """
     config_filename:
     context: 'global_align' or 'local_align'

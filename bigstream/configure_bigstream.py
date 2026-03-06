@@ -97,4 +97,9 @@ local_align:
   ransac:
     safeguard_exceptions: false
 
+apply_deform:
+  steps: [map_coordinates]
+  map_coordinates:
+    order: 3
+    mode: nearest
 """

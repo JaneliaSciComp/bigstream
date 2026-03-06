@@ -80,6 +80,7 @@ def distributed_apply_transform(
         f'Distributed transform a {mov_image.shape} image '
         f'using {process_blocksize} blocks '
         f'with {len(transform_list)} transforms '
+        f'and extra args: {kwargs} '
     ))
     # get overlap and number of blocks
     fix_spatial_dims = fix_image.spatial_dims

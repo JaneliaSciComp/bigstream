@@ -14,7 +14,8 @@ from bigstream.image_data import (ImageData,
                                   calc_downsampling_attr)
 from bigstream.ome_utils import get_spatial_values
 
-from .cli import (dictfromjson, inttuple, floattuple, stringlist)
+from .cli import (dictfromjson, inttuple, floattuple, stringlist,
+                  get_algorithm_parameters)
 
 
 logger:logging.Logger
@@ -83,6 +84,10 @@ def _define_args():
                              dest='local_transform_spacing',
                              type=floattuple,
                              help='Local transform spacing')
+
+    args_parser.add_argument('--transform-config',
+                             dest='transform_config',
+                             help='Transform config file that contains parameters for fine tuning coordinates mapping')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -299,6 +304,14 @@ def _run_apply_transform(args):
             f'transform spacing: {transforms_spacings} '
         ))
 
+        apply_deform_steps, _ = get_algorithm_parameters(args.transform_config,
+                                                         'apply_deform',
+                                                         ['map_coordinates'])
+        deform_extra_args = {}
+        for step, step_args in apply_deform_steps:
+            if step == 'map_coordinates':
+                deform_extra_args.update(step_args)
+
         # open a dask client
         load_dask_config(args.dask_config)
         if args.dask_scheduler:
@@ -324,6 +337,7 @@ def _run_apply_transform(args):
                 aligned_data_channel=args.output_channel,
                 transform_spacing=transforms_spacings,
                 max_concurrent_reads=args.max_concurrent_zarr_reads,
+                **deform_extra_args,
             )
         finally:
             cluster_client.close()

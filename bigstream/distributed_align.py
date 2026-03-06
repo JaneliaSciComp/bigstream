@@ -79,20 +79,17 @@ def _prepare_compute_block_spatial_transform_params(block_info,
         f'moving block stop physical coords: {mov_stop_phys_coords}\n'
     ))
 
-    # get moving crop origin relative to fixed crop
-    new_origin = mov_start_phys_coords - fix_block_phys_coords[0]
-
     # get moving image crop, read moving data
-    mov_block_coords = np.round(
-        mov_block_phys_coords / mov_spacing).astype(int)
+    mov_block_coords = mov_block_phys_coords / mov_spacing
 
     logger.debug((
         f'Block {block_index} :'
         f'moving block voxel coords {mov_block_coords},'
     ))
 
-    mov_start = np.min(mov_block_coords, axis=0)
-    mov_stop = np.max(mov_block_coords, axis=0)
+    mov_start = np.min(np.floor(mov_block_coords).astype(int), axis=0)
+    # Slice stops are exclusive. +1 includes the voxel containing max corner index.
+    mov_stop = np.max(np.ceil(mov_block_coords).astype(int), axis=0) + 1
 
     logger.debug((
         f'Block {block_index} : '
@@ -101,14 +98,17 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     ))
 
     mov_start = np.maximum(0, mov_start)
-    mov_stop = np.minimum(np.array(mov_shape)-1, mov_stop)
+    mov_stop = np.minimum(np.array(mov_shape), mov_stop)
     mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
+
+    # get moving crop origin relative to fixed crop
+    mov_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
 
     logger.debug((
         f'Block {block_index} : '
         f'fix voxel coords:\n {fix_block_voxel_coords}\n'
         f'fix phys coords:\n {fix_block_phys_coords}\n'
-        f'mov origin relative to fix origin phys coords: {new_origin}, '
+        f'mov origin relative to fix origin phys coords: {mov_origin}, '
         f'mov block slices {mov_slices}, '
         f'mov phys coords: \n{mov_block_phys_coords}\n'
     ))
@@ -128,7 +128,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
         ratio = np.array(mov_fullmask_shape) / mov_shape
         mov_mask_start = np.round(ratio * mov_start).astype(int)
         mov_mask_stop = np.round(ratio * mov_stop).astype(int)
-        if np.all(mov_mask_stop) > 0:
+        if np.all(mov_mask_stop > 0) and np.all(mov_mask_stop > mov_mask_start):
             mov_blockmask_coords = tuple(slice(a, b)
                                         for a, b in zip(mov_mask_start,
                                                         mov_mask_stop))
@@ -136,7 +136,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     logger.debug((
         'Return blocks data: '
         f'{block_index}, {fix_block_coords},'
-        f'{new_origin},'
+        f'{mov_origin},'
         f'{fix_blockmask_coords}, {mov_blockmask_coords}'
     ))
 
@@ -146,7 +146,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
             mov_slices,
             fix_blockmask_coords,
             mov_blockmask_coords,
-            new_origin,
+            mov_origin,
             block_transform_list)
 
 
@@ -172,7 +172,9 @@ def _read_blocks_for_processing(blocks_info,
     fix_block = _read_imagedata_block(blocks_info[1], fix, fix_block_reader)
 
     mov_block_coords = blocks_info[3]
-    if mov_block_coords is None or any(s.stop <= 0 for s in mov_block_coords):
+    if (mov_block_coords is None
+            or any(s.stop <= 0 for s in mov_block_coords)
+            or any(s.stop <= s.start for s in mov_block_coords)):
         logger.info(f'Moving block corresponding to {blocks_info[0]} is out of range')
         mov_block = None
     else:
@@ -181,7 +183,9 @@ def _read_blocks_for_processing(blocks_info,
     fix_mask_block = _read_imagedata_block(blocks_info[4], fix_mask, mask_reader)
 
     mov_mask_block_coords = blocks_info[5]
-    if mov_mask_block_coords is None or any(s.stop <= 0 for s in mov_mask_block_coords):
+    if (mov_mask_block_coords is None
+            or any(s.stop <= 0 for s in mov_mask_block_coords)
+            or any(s.stop <= s.start for s in mov_mask_block_coords)):
         mov_mask_block = None
     else:
         mov_mask_block = _read_imagedata_block(mov_mask_block_coords, mov_mask, mask_reader)

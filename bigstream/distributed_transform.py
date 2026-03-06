@@ -84,8 +84,8 @@ def distributed_apply_transform(
     # get overlap and number of blocks
     fix_spatial_dims = fix_image.spatial_dims
     mov_spatial_dims = mov_image.spatial_dims
-    fix_spacing = get_spatial_values(fix_image.voxel_spacing)
-    mov_spacing = get_spatial_values(mov_image.voxel_spacing)
+    fix_spacing = np.array(get_spatial_values(fix_image.voxel_spacing))
+    mov_spacing = np.array(get_spatial_values(mov_image.voxel_spacing))
     process_block_partition_size = np.array(get_spatial_values(process_blocksize))
     nblocks = np.ceil(np.array(fix_spatial_dims) / process_block_partition_size).astype(int)
     overlaps = np.round(process_block_partition_size * overlap_factor).astype(int)
@@ -96,17 +96,28 @@ def distributed_apply_transform(
     # ensure there's a 1:1 correspondence between transform spacing 
     # and transform list
     if transform_spacing is None:
-        # create transform spacing using same value as fixed image
-        transform_spacing_list = ((np.array(fix_spacing),) * 
-            len(transform_list))
+        transform_spacings = []
+        for t in transform_list:
+            if t is None or len(t.shape) == 2:
+                transform_spacings.append(None)
+            else:
+                tshape_arr = np.array(get_spatial_values(t, True))
+                tspacing = fix_spacing * fix_spatial_dims / tshape_arr
+                transform_spacings.append(tspacing)
+        transform_spacing_list= tuple(transform_spacings)
     elif not isinstance(transform_spacing, tuple):
         # create a corresponding transform spacing for each transform
-        transform_spacing_list = ((transform_spacing,) *
-            len(transform_list))
+        transform_spacing_list = tuple(np.array(transform_spacing) for _ in transform_list)
     else:
-        # transform spacing is a tuple
-        # assume it's length matches transform list length
-        transform_spacing_list = transform_spacing
+        if len(transform_spacing) != len(transform_list):
+            raise ValueError(
+                f'transform_spacing must match transform_list length '
+                f'({len(transform_spacing)} != {len(transform_list)})'
+            )
+        transform_spacing_list = tuple(
+            None if spacing is None else np.array(spacing)
+            for spacing in transform_spacing
+        )
 
     # prepare block coordinates
     logger.info((
@@ -198,6 +209,7 @@ def distributed_apply_transform(
         logger.info('Distributed deform transform applied successfully')
     else:
         logger.warning('Distributed deform transform applied with errors')
+    return aligned_data
 
 
 def _transform_single_block(fix_block_read_method,
@@ -218,9 +230,13 @@ def _transform_single_block(fix_block_read_method,
     """
     Block transform function
     """
+    fix_spacing = np.array(fix_spacing)
+    mov_spacing = np.array(mov_spacing)
+    full_mov_shape = np.array(full_mov_shape)
+
     # get the fix block origin in physical coordinates
     block_index, block_coords = block_info
-    fix_origin_physical_coords = fix_spacing * [s.start for s in block_coords]
+    fix_origin_physical_coords = fix_spacing * np.array([s.start for s in block_coords])
     logger.debug((
         f'Transform block {block_index}: {block_coords} from a full {full_mov_shape} image '
         f'using {len(transform_list)} transforms; '
@@ -242,15 +258,23 @@ def _transform_single_block(fix_block_read_method,
 
     # read relevant region of transforms
     applied_transform_list = []
-    transform_origin = [fix_origin_physical_coords,] * len(transform_list)
+    transform_origin = [np.array(fix_origin_physical_coords) for _ in transform_list]
     for iii, transform in enumerate(transform_list):
         if len(transform.shape) != 2:
             # for deformation fields find the corresponding block
-            start = np.floor(fix_origin_physical_coords / transform_spacing_list[iii]).astype(int)
-            stop = [s.stop for s in block_coords] * fix_spacing / transform_spacing_list[iii]
-            stop = np.ceil(stop).astype(int)
+            t_spacing = transform_spacing_list[iii]
+            if t_spacing is None:
+                # assume same spacing as the fix image
+                t_spacing = fix_spacing
+            t_spacing = np.array(t_spacing)
+
+            start = np.floor(fix_origin_physical_coords / t_spacing).astype(int)
+            # Stops are exclusive; +1 ensures transformed max corner is included.
+            max_fix_corner_phys = (np.array([s.stop for s in block_coords]) - 1) * fix_spacing
+            stop = np.ceil(max_fix_corner_phys / t_spacing).astype(int) + 1
+            stop = np.minimum(np.array(transform.shape[:-1]), stop)
             transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
-            transform_origin[iii] = start * transform_spacing_list[iii]
+            transform_origin[iii] = start * t_spacing
             try:
                 transform_block = deform_block_reader.get_slice(transform, transform_slice)
                 logger.info(f'Transform slice and origin for block {block_index} at {block_coords}:' +
@@ -285,32 +309,32 @@ def _transform_single_block(fix_block_read_method,
             transform_spacing=transform_spacing_list,
             transform_origin=transform_origin,
         )
-        # get the mov block origin exactly as is without clipping it to 0
-        mov_origin = np.min(mov_block_phys_coords)
-        mov_block_voxel_coords = np.round(mov_block_phys_coords / mov_spacing).astype(int)
-        mov_start = np.min(mov_block_voxel_coords, axis=0)
-        mov_stop = np.max(mov_block_voxel_coords, axis=0)
+        mov_block_voxel_coords = mov_block_phys_coords / mov_spacing
+        mov_start = np.min(np.floor(mov_block_voxel_coords), axis=0).astype(int)
+        mov_stop = np.max(np.ceil(mov_block_voxel_coords), axis=0).astype(int) + 1
 
         logger.info((
             f'Transformed moving block {block_index} at {block_coords}:\n'
-            f'mov block origin (phys coords) {mov_origin}\n'
+            f'mov block origin (phys coords) unclipped min: {np.min(mov_block_phys_coords, axis=0)}\n'
             f'change in physical coords {fix_block_phys_coords} -> {mov_block_phys_coords}\n'
-            f'change in voxel coords {fix_block_voxel_coords} -> {mov_block_voxel_coords}\n'
+            f'change in voxel coords {fix_block_voxel_coords} -> (unrounded) {mov_block_voxel_coords}\n'
             f'mov block start (voxels - unclipped): {mov_start}\n'
             f'mov block end (voxels - unclipped): {mov_stop}\n'
         ))
 
-        # check if moving block is completely outside the moving image
-        if np.any(mov_start >= full_mov_shape) or np.any(mov_stop <= 0):
+        # clip moving block to valid image bounds
+        mov_start = np.maximum(0, mov_start)
+        mov_stop = np.minimum(full_mov_shape, mov_stop)
+        if np.any(mov_stop <= mov_start):
             logger.warning((
-                f'Block {block_index} moving region is outside the moving image '
+                f'Block {block_index} moving region is outside/empty after clipping '
                 f'(mov_start={mov_start}, mov_stop={mov_stop}, '
-                f'mov_shape={full_mov_shape}), clipping block'
+                f'mov_shape={full_mov_shape}); skipping block'
             ))
-            mov_start = np.minimum(full_mov_shape, np.maximum(0, mov_start))
-            mov_stop = np.minimum(full_mov_shape, np.maximum(0, mov_stop))
+            return block_index, None
 
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
+        mov_origin = mov_start * mov_spacing
         try:
             logger.debug((
                 f'Read moving block from {mov_slices} '

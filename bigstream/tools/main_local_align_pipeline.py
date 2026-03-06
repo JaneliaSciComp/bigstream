@@ -38,7 +38,7 @@ def _define_args(local_descriptor):
 
     args_parser.add_argument('--align-config',
                              dest='align_config',
-                             help='Align config file')
+                             help='Align config file that contains registration algorithm parameters for fine tune up')
     args_parser.add_argument('--global-affine-transform',
                              dest='global_affine',
                              help='Global affine transform path')

@@ -525,7 +525,7 @@ def feature_point_ransac_affine_align(
         if safeguard_exceptions:
             raise ValueError('fix spot detection safeguard failed')
         else:
-            logger.info(f'{context} returning default')
+            logger.info(f'{context} - RANSAC returning default affine')
             return default
 
     # get mov spots
@@ -548,7 +548,7 @@ def feature_point_ransac_affine_align(
         if safeguard_exceptions:
             raise ValueError('mov spot detection safeguard failed')
         else:
-            logger.info(f'{context} returning default')
+            logger.info(f'{context} - RANSAC returning default affine')
             return default
 
     # sort

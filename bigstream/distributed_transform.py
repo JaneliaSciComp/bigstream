@@ -286,31 +286,31 @@ def _transform_single_block(fix_block_read_method,
             transform_origin=transform_origin,
         )
 
+        mov_origin = np.min(mov_block_phys_coords)
         mov_block_voxel_coords = np.round(mov_block_phys_coords / mov_spacing).astype(int)
         mov_start = np.min(mov_block_voxel_coords, axis=0)
         mov_stop = np.max(mov_block_voxel_coords, axis=0)
 
         logger.info((
             f'Transformed moving block {block_index} at {block_coords}:\n'
+            f'mov block origin (phys coords) {mov_origin}\n'
             f'change in physical coords {fix_block_phys_coords} -> {mov_block_phys_coords}\n'
             f'change in voxel coords {fix_block_voxel_coords} -> {mov_block_voxel_coords}\n'
-            f'mov block start (unclipped): {mov_start}\n'
-            f'mov block end (unclipped): {mov_stop}\n'
+            f'mov block start (voxels - unclipped): {mov_start}\n'
+            f'mov block end (voxels - unclipped): {mov_stop}\n'
         ))
-        mov_start = np.minimum(full_mov_shape, np.maximum(0, mov_start))
-        mov_stop = np.minimum(full_mov_shape, np.maximum(0, mov_stop))
 
         # check if moving block is completely outside the moving image
-        if (np.any(mov_start >= full_mov_shape) or np.any(mov_stop <= 0) or np.any(mov_stop <= mov_start)):
+        if np.any(mov_start >= full_mov_shape) or np.any(mov_stop <= 0):
             logger.warning((
                 f'Block {block_index} moving region is outside the moving image '
                 f'(mov_start={mov_start}, mov_stop={mov_stop}, '
-                f'mov_shape={full_mov_shape}), skipping'
+                f'mov_shape={full_mov_shape}), clipping block'
             ))
+            mov_start = np.minimum(full_mov_shape, np.maximum(0, mov_start))
+            mov_stop = np.minimum(full_mov_shape, np.maximum(0, mov_stop))
 
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
-        mov_origin = mov_spacing * [s.start for s in mov_slices]
-
         try:
             logger.debug((
                 f'Read moving block from {mov_slices} '

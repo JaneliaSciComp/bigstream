@@ -287,16 +287,18 @@ def _transform_single_block(fix_block_read_method,
         )
 
         mov_block_voxel_coords = np.round(mov_block_phys_coords / mov_spacing).astype(int)
-        mov_start = np.maximum(0, np.min(mov_block_voxel_coords, axis=0))
-        mov_stop = np.minimum(full_mov_shape, np.max(mov_block_voxel_coords, axis=0))
+        mov_start = np.min(mov_block_voxel_coords, axis=0)
+        mov_stop = np.max(mov_block_voxel_coords, axis=0)
 
         logger.info((
             f'Transformed moving block {block_index} at {block_coords}:\n'
             f'change in physical coords {fix_block_phys_coords} -> {mov_block_phys_coords}\n'
             f'change in voxel coords {fix_block_voxel_coords} -> {mov_block_voxel_coords}\n'
-            f'mov block start: {mov_start}\n'
-            f'mov block end: {mov_stop}\n'
+            f'mov block start (unclipped): {mov_start}\n'
+            f'mov block end (unclipped): {mov_stop}\n'
         ))
+        mov_start = np.minimum(full_mov_shape, np.maximum(0, mov_start))
+        mov_stop = np.minimum(full_mov_shape, np.maximum(0, mov_stop))
 
         # check if moving block is completely outside the moving image
         if (np.any(mov_start >= full_mov_shape) or np.any(mov_stop <= 0) or np.any(mov_stop <= mov_start)):
@@ -305,7 +307,6 @@ def _transform_single_block(fix_block_read_method,
                 f'(mov_start={mov_start}, mov_stop={mov_stop}, '
                 f'mov_shape={full_mov_shape}), skipping'
             ))
-            return block_index, None
 
         mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
         mov_origin = mov_spacing * [s.start for s in mov_slices]
@@ -347,6 +348,9 @@ def _transform_single_block(fix_block_read_method,
             mov_origin=mov_origin,
             **additional_transform_args,
         )
+        logger.info((
+            f'Applied transform to block {block_index} -> aligned block has shape {aligned_block.shape}'
+        ))
         final_block_coords_list = []
         # append proper timeindex and channel
         if output_timeindex is not None and len(output.shape) > 3:
@@ -390,7 +394,7 @@ def _transform_single_block(fix_block_read_method,
                 (1,)*missing_dims + aligned_block.shape)
 
         logger.info((
-            f'Finished deforming block {block_index} at {block_coords}, '
+            f'Finished deforming block {block_index} at {block_coords} to a {aligned_block.shape} shaped block, '
             f'moving coords: {mov_block_voxel_coords}, '
             f'final coords: {final_block_coords} '))
         written_coords = _write_block(block_index, final_block_coords, aligned_block,

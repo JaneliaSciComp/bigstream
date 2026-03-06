@@ -369,8 +369,10 @@ def distributed_apply_transform(
         for x, y in zip(overlap_coords, coords):
             start = y.start - x.start
             stop = y.stop - x.stop
-            if start < 0: start = 0
-            if stop >= 0: stop = None
+            if start < 0:
+                start = 0
+            if stop >= 0:
+                stop = None
             crop.append(slice(start, stop))
         aligned = aligned[tuple(crop)]
 

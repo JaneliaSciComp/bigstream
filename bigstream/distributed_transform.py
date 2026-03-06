@@ -285,7 +285,7 @@ def _transform_single_block(fix_block_read_method,
             transform_spacing=transform_spacing_list,
             transform_origin=transform_origin,
         )
-
+        # get the mov block origin exactly as is without clipping it to 0
         mov_origin = np.min(mov_block_phys_coords)
         mov_block_voxel_coords = np.round(mov_block_phys_coords / mov_spacing).astype(int)
         mov_start = np.min(mov_block_voxel_coords, axis=0)

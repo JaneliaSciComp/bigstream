@@ -373,7 +373,6 @@ def _transform_single_block(fix_block_read_method,
             transform_origin=transform_origin,
             fix_origin=fix_origin_physical_coords,
             mov_origin=mov_origin,
-            **additional_transform_args,
         )
         logger.info((
             f'Applied transform to block {block_index} -> aligned block has shape {aligned_block.shape}'

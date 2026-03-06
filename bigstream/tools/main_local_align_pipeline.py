@@ -213,37 +213,37 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         local_transform_overlap_factor = local_config.get('transform_overlap', 0.125)
 
     if reg_args.transform_subpath:
-        transform_subpath = reg_args.transform_subpath
+        deformfield_subpath = reg_args.transform_subpath
     else:
-        transform_subpath = reg_args.mov_subpath
+        deformfield_subpath = reg_args.mov_subpath
 
     if reg_args.transform_blocksize:
         # block chunks are define as x,y,z so I am reversing it to z,y,x
-        transform_blocksize = reg_args.transform_blocksize[::-1]
+        deformfield_chunksize = reg_args.transform_blocksize[::-1]
     else:
         # default to processing
-        transform_blocksize = local_processing_size
+        deformfield_chunksize = local_processing_size
 
     if reg_args.inv_transform_subpath:
-        inv_transform_subpath = reg_args.inv_transform_subpath
+        inv_deformfield_subpath = reg_args.inv_transform_subpath
     else:
-        inv_transform_subpath = transform_subpath
+        inv_deformfield_subpath = deformfield_subpath
 
     if reg_args.inv_transform_blocksize:
         # block chunks are define as x,y,z so I am reversing it to z,y,x
-        inv_transform_blocksize = reg_args.inv_transform_blocksize[::-1]
+        inv_deformfield_chunksize = reg_args.inv_transform_blocksize[::-1]
     else:
         # default to output_chunk_size
-        inv_transform_blocksize = transform_blocksize
+        inv_deformfield_chunksize = deformfield_chunksize
 
     align_subpath = reg_args.align_dataset()
 
     if reg_args.align_blocksize:
         # block chunks are define as x,y,z so I am reversing it to z,y,x
-        align_blocksize = reg_args.align_blocksize[::-1]
+        align_chunksize = reg_args.align_blocksize[::-1]
     else:
         # default to output_chunk_size
-        align_blocksize = transform_blocksize
+        align_chunksize = deformfield_chunksize
 
     # start a dask client
     load_dask_config(dask_config_file)
@@ -282,16 +282,16 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             static_transforms,
             reg_args.persist_mov_origin_transform,
             reg_args.transform_path(),
-            transform_subpath,
-            transform_blocksize,
+            deformfield_subpath,
+            deformfield_chunksize,
             reg_args.inv_transform_path(),
-            inv_transform_subpath,
-            inv_transform_blocksize,
+            inv_deformfield_subpath,
+            inv_deformfield_chunksize,
             reg_args.align_path(),
             align_subpath,
             reg_args.align_timeindex,
             reg_args.align_channel,
-            align_blocksize,
+            align_chunksize,
             local_transform_overlap_factor,
             inv_step,
             inv_iterations,
@@ -321,17 +321,17 @@ def _align_local_data(fix_image: ImageData,
                       mov_origin_transform,
                       static_transforms,
                       persist_mov_origin_transform,
-                      transform_path,
-                      transform_subpath,
-                      transform_blocksize,
-                      inv_transform_path,
-                      inv_transform_subpath,
-                      inv_transform_blocksize,
+                      deformfield_path,
+                      deformfield_subpath,
+                      deformfield_chunksize,
+                      inv_deformfield_path,
+                      inv_deformfield_subpath,
+                      inv_deformfield_chunksize,
                       align_path,
                       align_subpath,
                       align_timeindex,
                       align_channel,
-                      align_blocksize,
+                      align_chunksize,
                       transform_overlap_factor,
                       inv_step,
                       inv_iterations,
@@ -353,14 +353,14 @@ def _align_local_data(fix_image: ImageData,
     logger.info(f'Transform downsampling: {transform_downsampling}')
     transform_voxel_spacing = tuple(get_spatial_values(fix_image.voxel_spacing)) + (1,)
     logger.info(f'Transform voxel spacing: {transform_voxel_spacing}')
-    transform_shape = tuple(fix_image.spatial_dims) + (3,)
-    logger.info(f'Transform shape: {fix_image.spatial_dims} => {transform_shape}')
+    deformfield_shape = tuple(fix_image.spatial_dims) + (3,)
+    logger.info(f'Transform shape: {fix_image.spatial_dims} => {deformfield_shape}')
 
-    if transform_path:
+    if deformfield_path:
         # transform shape
-        transform_axes = get_spatial_values(fix_image.get_attr('axes'))
-        if transform_axes is not None:
-            transform_axes.append({
+        deformfield_axes = get_spatial_values(fix_image.get_attr('axes'))
+        if deformfield_axes is not None:
+            deformfield_axes.append({
                 'name': 'd',
                 'type': 'displacement',
                 'discrete': True,
@@ -377,32 +377,33 @@ def _align_local_data(fix_image: ImageData,
                     ct['type']: get_spatial_values(tx) + [chtx],
                 })
             coordinate_transformations = new_transforms
-        transform_attrs = io_utility.prepare_parent_group_attrs(
-            transform_path,
-            transform_subpath,
-            axes=transform_axes,
+        deformfield_attrs = io_utility.prepare_parent_group_attrs(
+            deformfield_path,
+            deformfield_subpath,
+            axes=deformfield_axes,
             dataset_transformations=coordinate_transformations,
         )
-        transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
-        transform = io_utility.create_dataset_array(
-            transform_path,
-            transform_subpath,
-            transform_shape,
-            transform_output_chunksize,
+        deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
+        deformfield = io_utility.create_dataset_array(
+            deformfield_path,
+            deformfield_subpath,
+            deformfield_shape,
+            deformfield_output_chunksize,
             np.float32,
             overwrite=True,
             compressor=compressor,
             compression_opts=compressor_opts,
-            parent_attrs=transform_attrs,
+            parent_attrs=deformfield_attrs,
             pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
                                                             transform_downsampling),
             downsamplingFactors=calc_downsampling_attr(transform_downsampling),
             zarr_format=2,
         )
     else:
-        transform = None
+        deformfield = None
+        deformfield_axes = None
 
-    logger.info(f'Calculate transformation {transform_path}' +
+    logger.info(f'Calculate transformation {deformfield_path}' +
                 f'for the local alignment of {mov_image}' +
                 f'to {fix_image}')
     if fix_image.has_data() and mov_image.has_data():
@@ -416,20 +417,20 @@ def _align_local_data(fix_image: ImageData,
             mov_mask=mov_mask,
             mov_origin_transform=mov_origin_transform,
             static_transform_list=static_transforms,
-            output_transform=transform,
+            output_transform=deformfield,
             foreground_percentage=foreground_percentage,
             max_concurrent_reads=max_concurrent_zarr_reads,
             max_cluster_jobs=max_cluster_jobs,
         )
         logger.info('Finished computing the deformation field ' +
-                    f'{transform_path} for the local alignment of ' +
+                    f'{deformfield_path} for the local alignment of ' +
                     f'{mov_image} to {fix_image}')
     else:
         deform_ok = False
         logger.warning('Fix image or moving image has no data or ' +
                        'the distributed alignment failed')
 
-    if deform_ok and transform and inv_transform_path:
+    if deform_ok and deformfield and inv_deformfield_path:
         if len(inv_iterations) == 0:
             raise ValueError(f'Invalid inverse iterations: {inv_iterations}')
         
@@ -441,23 +442,23 @@ def _align_local_data(fix_image: ImageData,
                 f'{inv_iterations} vs {inv_shrink_spacings} vs {inv_smooth_sigmas} '
             ))
 
-        inv_transform_attrs = io_utility.prepare_parent_group_attrs(
-            inv_transform_path,
-            inv_transform_subpath,
-            axes=transform_axes,
+        inv_deformfield_attrs = io_utility.prepare_parent_group_attrs(
+            inv_deformfield_path,
+            inv_deformfield_subpath,
+            axes=deformfield_axes,
             dataset_transformations=coordinate_transformations,
         )
-        inv_transform_output_chunksize = tuple(get_spatial_values(transform_blocksize)) + (1,)
-        inv_transform = io_utility.create_dataset_array(
-            inv_transform_path,
-            inv_transform_subpath,
-            transform_shape,
-            inv_transform_output_chunksize,
+        inv_deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
+        inv_deformfield = io_utility.create_dataset_array(
+            inv_deformfield_path,
+            inv_deformfield_subpath,
+            deformfield_shape,
+            inv_deformfield_output_chunksize,
             np.float32,
             overwrite=True,
             compressor=compressor,
             compression_opts=compressor_opts,
-            parent_attrs=inv_transform_attrs,
+            parent_attrs=inv_deformfield_attrs,
             pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
                                                             transform_downsampling),
             downsamplingFactors=calc_downsampling_attr(transform_downsampling),
@@ -465,16 +466,16 @@ def _align_local_data(fix_image: ImageData,
         )
         logger.info((
             'Calculate inverse transformation '
-            f'{inv_transform_path}:{inv_transform_subpath} '
-            f'from {transform_path}:{transform_subpath} '
+            f'{inv_deformfield_path}:{inv_deformfield_subpath} '
+            f'from {deformfield_path}:{deformfield_subpath} '
             f'for local alignment of {mov_image} '
             f'to reference {fix_image} '
         ))
         distributed_invert_displacement_vector_field(
-            transform,
+            deformfield,
             fix_image.voxel_spacing,
-            inv_transform_blocksize, # use blocksize for partitioning the work
-            inv_transform,
+            inv_deformfield_chunksize, # use blocksize for partitioning the work
+            inv_deformfield,
             cluster_client,
             overlap_factor=transform_overlap_factor,
             step=inv_step,
@@ -485,9 +486,9 @@ def _align_local_data(fix_image: ImageData,
             pad=inv_pad,
             use_root=inv_use_root,
         )
-        del inv_transform
+        del inv_deformfield
     else:
-        if not inv_transform_path:
+        if not inv_deformfield_path:
             logger.info('Skip the inverse because it is not set')
 
     if (deform_ok or len(static_transforms) > 0) and align_path:
@@ -517,11 +518,11 @@ def _align_local_data(fix_image: ImageData,
             global_transformations=global_transformations,
         )
         align_shape = fix_image.shape
-        if len(align_blocksize) < len(align_shape):
+        if len(align_chunksize) < len(align_shape):
             # align_blocksize is not set, so use default block size
-            align_chunk_size = (1,) * (len(align_shape)-len(align_blocksize)) + tuple(get_spatial_values(align_blocksize))
+            align_chunk_size = (1,) * (len(align_shape)-len(align_chunksize)) + tuple(get_spatial_values(align_chunksize))
         else:
-            align_chunk_size = tuple(get_spatial_values(align_blocksize))
+            align_chunk_size = tuple(get_spatial_values(align_chunksize))
         align = io_utility.create_dataset_array(
             align_path,
             align_subpath,
@@ -540,10 +541,10 @@ def _align_local_data(fix_image: ImageData,
             zarr_format=2,
         )
         logger.info(f'Apply static transforms {static_transforms}' +
-                    f'and local transform {transform_path}:{transform_subpath}' +
+                    f'and local transform {deformfield_path}:{deformfield_subpath}' +
                     f'to warp {mov_image} -> {align_path}:{align_subpath}')
         if deform_ok:
-            deform_transforms = [transform]
+            deform_transforms = [deformfield]
         else:
             deform_transforms = []
         affine_spacings = [None for i in range(len(static_transforms))]
@@ -552,7 +553,7 @@ def _align_local_data(fix_image: ImageData,
 
         distributed_apply_transform(
             fix_image, mov_image,
-            align_blocksize, # use block chunk size for distributing work
+            align_chunksize, # use block chunk size for distributing work
             static_transforms + deform_transforms, # transform_list
             cluster_client,
             overlap_factor=transform_overlap_factor,
@@ -566,7 +567,7 @@ def _align_local_data(fix_image: ImageData,
         if not align_path:
             logger.info('Align arg is not set, so no deformation is applied')
 
-    return transform, align
+    return deformfield, align
 
 
 def main():

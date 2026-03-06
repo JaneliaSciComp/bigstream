@@ -337,8 +337,10 @@ def _transform_single_block(fix_block_read_method,
         mov_origin = mov_start * mov_spacing
         try:
             logger.debug((
-                f'Read moving block from {mov_slices} '
-                f'corresponding to fixed block {block_index} at {block_coords}'
+                f'Read {tuple(s.stop-s.start for s in mov_slices)} moving block '
+                f'from {mov_slices} '
+                f'corresponding to fixed block {block_index} at {block_coords} '
+                f'of size {tuple(s.stop-s.start for s in block_coords)}'
             ))
             mov_block = mov_block_read_method(mov_slices)
             if mov_block.dtype.byteorder == '>':
@@ -375,6 +377,7 @@ def _transform_single_block(fix_block_read_method,
         logger.info((
             f'Applied transform to block {block_index} -> aligned block has shape {aligned_block.shape}'
         ))
+        del applied_transform_list
         final_block_coords_list = []
         # append proper timeindex and channel
         if output_timeindex is not None and len(output.shape) > 3:

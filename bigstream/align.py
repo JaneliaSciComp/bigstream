@@ -1307,8 +1307,10 @@ def deformable_align(
         )
         irm.SetMovingInitialTransform(T)
     # set masks
-    if fix_mask is not None: irm.SetMetricFixedMask(fix_mask)
-    if mov_mask is not None: irm.SetMetricMovingMask(mov_mask)
+    if fix_mask is not None:
+        irm.SetMetricFixedMask(fix_mask)
+    if mov_mask is not None:
+        irm.SetMetricMovingMask(mov_mask)
 
     # now we can set the default
     if not default:

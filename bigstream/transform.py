@@ -1196,10 +1196,12 @@ def bspline_to_displacement_field(
     displacement_field : nd-array
         The displacement vector field given by the b-spline transform
     """
-
-    if spacing is None: spacing = np.ones(len(shape))
-    if origin is None: origin = np.zeros(len(shape))
-    if direction is None: direction = np.eye(len(shape))
+    if spacing is None:
+        spacing = np.ones(len(shape))
+    if origin is None:
+        origin = np.zeros(len(shape))
+    if direction is None:
+        direction = np.eye(len(shape))
     df = sitk.TransformToDisplacementField(
         bspline, sitk.sitkVectorFloat64,
         shape[::-1], origin[::-1], spacing[::-1],

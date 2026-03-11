@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import nrrd
@@ -424,9 +425,9 @@ def get_voxel_spacing(attrs: dict):
     return pr
 
 
-def open(container_path, subpath,
-         data_timeindex=None, data_channels=None,
-         block_coords=None, container_type=None):
+def open_image_container(container_path, subpath,
+                         data_timeindex=None, data_channels=None,
+                         block_coords=None, container_type=None):
     """
     A generalized open function that supports nrrd, tiff, npy, n5, and zarr
     containers. Maps to the appropriate format specific open function.
@@ -583,7 +584,7 @@ def prepare_parent_group_attrs(container_path,
     }
     
 
-def read_attributes(container_path, subpath, container_type=None):
+def read_image_container_attributes(container_path, subpath, container_type=None):
     """
     A generalized attribute reader that supports nrrd, tiff, n5, and zarr
     containers. Maps to the appropriate format specific attributes reader.
@@ -696,10 +697,10 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
 
     # image must be opened first, use generalized open function
     if image_path is not None:
-        block, _ = open(image_path, image_subpath,
-                        data_timeindex=image_timeindex,
-                        data_channels=image_channel,
-                        block_coords=block_coords)
+        block, _ = open_image_container(image_path, image_subpath,
+                                        data_timeindex=image_timeindex,
+                                        data_channels=image_channel,
+                                        block_coords=block_coords)
         logger.debug(f'Read {block.shape} block at {block_coords}')
         return block
 
@@ -966,7 +967,9 @@ def _open_n5_attrs(data_path, data_subpath):
 
     # Read and parse the JSON file
     try:
-        with open(attrs_path, 'r') as f:
+        # use io.open to make sure it's not shadowed 
+        # by some local method with same name
+        with io.open(attrs_path, 'r') as f:
             attrs = json.load(f)
         logger.debug(f'Read N5 attributes from {attrs_path}: {attrs}')
         return attrs

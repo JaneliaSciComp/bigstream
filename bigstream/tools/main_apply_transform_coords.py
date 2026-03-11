@@ -118,7 +118,7 @@ def _get_coords_spacing(input_volume_path, input_dataset,
                         pixel_resolution, downsampling_factors,
                         ):
     if input_volume_path is not None:
-        volume_attrs = io_utility.read_attributes(
+        volume_attrs = io_utility.read_image_container_attributes(
             input_volume_path, input_dataset)
         voxel_spacing = io_utility.get_voxel_spacing(volume_attrs)
         voxel_resolution = get_spatial_values(voxel_spacing)

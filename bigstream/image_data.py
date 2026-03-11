@@ -1,7 +1,7 @@
 import numpy as np
 import zarr
 
-from .io_utility import open as img_open, read_attributes, get_voxel_spacing
+from .io_utility import open_image_container as img_open, read_image_container_attributes, get_voxel_spacing
 
 
 class ImageData:
@@ -44,7 +44,7 @@ class ImageData:
 
     def read_attrs(self):
         if self.image_path:
-            self.image_attrs = read_attributes(self.image_path, self.image_subpath)
+            self.image_attrs = read_image_container_attributes(self.image_path, self.image_subpath)
 
     def _open_image(self):
         if self.image_path:

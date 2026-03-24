@@ -198,8 +198,8 @@ def _apply_global_transform(reg_args:RegistrationInputs,
         transform_list = reg_args.get_static_transforms() + [affine,]
         aligned = apply_transform(fix_image_array,
                                   mov_image_array,
-                                  fix_image.voxel_spacing,
-                                  mov_image.voxel_spacing,
+                                  fix_image.voxel_spacing / fix_image.expansion_factor,
+                                  mov_image.voxel_spacing / mov_image.expansion_factor,
                                   transform_list=transform_list)
         _save_aligned_volume(
             reg_args,

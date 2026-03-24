@@ -570,8 +570,8 @@ def distributed_alignment_pipeline(
     # to partition the work
     fix_spatial_dims = fix_image.spatial_dims
     mov_spatial_dims = mov_image.spatial_dims
-    fix_spacing = get_spatial_values(fix_image.voxel_spacing)
-    mov_spacing = get_spatial_values(mov_image.voxel_spacing)
+    fix_spacing = get_spatial_values(fix_image.voxel_spacing) / fix_image.expansion_factor
+    mov_spacing = get_spatial_values(mov_image.voxel_spacing) / mov_image.expansion_factor
     if fix_mask is not None:
         if isinstance(fix_mask, (tuple, list)):
             fix_mask_image = None

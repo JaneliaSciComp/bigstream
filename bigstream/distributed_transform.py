@@ -85,8 +85,8 @@ def distributed_apply_transform(
     # get overlap and number of blocks
     fix_spatial_dims = fix_image.spatial_dims
     mov_spatial_dims = mov_image.spatial_dims
-    fix_spacing = np.array(get_spatial_values(fix_image.voxel_spacing))
-    mov_spacing = np.array(get_spatial_values(mov_image.voxel_spacing))
+    fix_spacing = np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor
+    mov_spacing = np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor
     process_block_partition_size = np.array(get_spatial_values(process_blocksize))
     nblocks = np.ceil(np.array(fix_spatial_dims) / process_block_partition_size).astype(int)
     overlaps = np.round(process_block_partition_size * overlap_factor).astype(int)
@@ -106,9 +106,11 @@ def distributed_apply_transform(
                 tspacing = fix_spacing * fix_spatial_dims / tshape_arr
                 transform_spacings.append(tspacing)
         transform_spacing_list= tuple(transform_spacings)
+        logger.info(f'Derive all transforms spacings from fixed spacing: {fix_spacing} -> {transform_spacing_list}')
     elif not isinstance(transform_spacing, tuple):
         # create a corresponding transform spacing for each transform
-        transform_spacing_list = tuple(np.array(transform_spacing) for _ in transform_list)
+        transform_spacing_list = tuple(np.array(transform_spacing) / fix_image.expansion_factor for _ in transform_list)
+        logger.info(f'Derive all transforms spacings from single transform spacing {transform_spacing} -> {transform_spacing_list}')
     else:
         if len(transform_spacing) != len(transform_list):
             raise ValueError(
@@ -116,9 +118,10 @@ def distributed_apply_transform(
                 f'({len(transform_spacing)} != {len(transform_list)})'
             )
         transform_spacing_list = tuple(
-            None if spacing is None else np.array(spacing)
+            None if spacing is None else np.array(spacing) / fix_image.expansion_factor
             for spacing in transform_spacing
         )
+        logger.info(f'Derive all transform spacings from tuple {transform_spacing} -> {transform_spacing_list}')
 
     # prepare block coordinates
     logger.info((
@@ -198,8 +201,7 @@ def distributed_apply_transform(
     res = True
     for f, r in as_completed(transform_block_res, with_results=True):
         if f.cancelled():
-            exc = f.exception()
-            logger.error('Block exception: ', exc_info=exc)
+            logger.exception('Block exception: ')
             tb = f.traceback()
             traceback.print_tb(tb)
             res = False
@@ -484,9 +486,8 @@ def distributed_apply_transform_to_coordinates(
     transformed_coordinates : Nxd array
         The given coordinates transformed by the given transform_list
     """
-
     # determine partitions of coordinates
-    phys_blocksize = np.array(voxel_blocksize)*coords_spacing[::-1]
+    phys_blocksize = np.array(voxel_blocksize)*coords_spacing
     min_coord = np.min(coordinates[:, 0:3], axis=0)
     max_coord = np.max(coordinates[:, 0:3], axis=0)
     vol_size = max_coord - min_coord # volume size in physical space coordinates
@@ -718,6 +719,7 @@ def distributed_invert_displacement_vector_field(
     logger.info((
         'Prepare inverting blocks with '
         f'partition size {block_partition_size} '
+        f'displacement field spacing: {spatial_spacing} '
         f'invert displacement args: {kwargs} '
     ))
 

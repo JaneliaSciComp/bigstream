@@ -144,6 +144,11 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       dest=args_descriptor.argdest('fix_spacing'),
                       type=floattuple,
                       help='Fixed volume voxel spacing')
+    args.add_argument(args_descriptor.argflag('fix-expansion'),
+                      dest=args_descriptor.argdest('fix_expansion_factor'),
+                      type=float,
+                      default=1.0,
+                      help='Fixed volume expansion factor')
 
     args.add_argument(args_descriptor.argflag('fix-mask'),
                       dest=args_descriptor.argdest('fix_mask'),
@@ -177,6 +182,12 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       dest=args_descriptor.argdest('mov_spacing'),
                       type=floattuple,
                       help='Moving volume voxel spacing')
+    args.add_argument(args_descriptor.argflag('mov-expansion'),
+                      dest=args_descriptor.argdest('mov_expansion_factor'),
+                      type=float,
+                      default=1.0,
+                      help='Moving volume expansion factor')
+
     args.add_argument(args_descriptor.argflag('mov-mask'),
                       dest=args_descriptor.argdest('mov_mask'),
                       help='Moving volume mask')
@@ -301,6 +312,7 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'fix_timeindex', registration_args)
     _extract_arg(args, args_descriptor, 'fix_channel', registration_args)
     _extract_arg(args, args_descriptor, 'fix_spacing', registration_args)
+    _extract_arg(args, args_descriptor, 'fix_expansion_factor', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'fix_roi', registration_args)
@@ -309,6 +321,7 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'mov_timeindex', registration_args)
     _extract_arg(args, args_descriptor, 'mov_channel', registration_args)
     _extract_arg(args, args_descriptor, 'mov_spacing', registration_args)
+    _extract_arg(args, args_descriptor, 'mov_expansion_factor', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'mov_roi', registration_args)
@@ -346,6 +359,7 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
         args.fix, args.fix_subpath,
         image_timeindex=args.fix_timeindex,
         image_channel=args.fix_channel,
+        expansion_factor=args.fix_expansion_factor,
         open_image=True,
     )
     logger.info(f'Open fix vol {fix} for registration')
@@ -353,6 +367,7 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
         args.mov, args.mov_subpath,
         image_timeindex=args.mov_timeindex,
         image_channel=args.mov_channel,
+        expansion_factor=args.mov_expansion_factor,
         open_image=True,
     )
     logger.info(f'Open moving vol {mov} for registration')

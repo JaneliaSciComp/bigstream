@@ -45,6 +45,11 @@ def _define_args():
                              type=int,
                              default=None,
                              help='Input volume channel')
+    args_parser.add_argument('--expansion-factor', '--expansion_factor',
+                             dest='expansion_factor',
+                             type=float,
+                             default=1.0,
+                             help='Input volume expansion factor')
 
     args_parser.add_argument('--output-coords', dest='output_coords',
                              help='Path to warped coordinates file')
@@ -80,6 +85,7 @@ def _define_args():
     args_parser.add_argument('--processing-blocksize',
                              dest='processing_blocksize',
                              type=inttuple,
+                             metavar='sx,sy,sz',
                              help='Processing block size')
     args_parser.add_argument('--partition-size',
                              dest='partition_size',
@@ -177,13 +183,10 @@ def _run_apply_transform(args):
                                         args.pixel_resolution,
                                         args.downsampling)
     spatial_ndim = len(voxel_spacing)
+    logger.info(f'Volume voxel spacing: {voxel_spacing}')
 
-    local_deform_field = ImageData(args.local_transform, args.local_transform_subpath)
-    if args.local_transform_spacing:
-        # in case the transform spacing arg has the channel dimension - truncate it
-        local_deform_spacing = args.local_transform_spacing[::-1][:spatial_ndim]  # xyz -> zyx
-    else:
-        local_deform_spacing = local_deform_field.voxel_spacing[:spatial_ndim]
+    local_deform_field = ImageData(args.local_transform, args.local_transform_subpath,
+                                   expansion_factor=args.expansion_factor)
 
     applied_affines = []
     affine_transforms_list = []
@@ -212,9 +215,21 @@ def _run_apply_transform(args):
         if local_deform_field.has_data():
             logger.info(f'Read image for {local_deform_field}')
             local_deform_field.read_image(convert_to_little_endian=False)
+
+            if args.local_transform_spacing:
+                # in case the transform spacing arg has the channel dimension - truncate it
+                local_deform_spacing = np.array(args.local_transform_spacing[::-1][:spatial_ndim])  # xyz -> zyx
+            else:
+                local_deform_spacing = local_deform_field.voxel_spacing[:spatial_ndim]
+
             all_transforms = affine_transforms_list + [local_deform_field.image_array]
             applied_transforms = applied_affines + [f'{local_deform_field}']
-            transforms_spacings = transforms_spacings + (local_deform_spacing,)
+            transforms_spacings = transforms_spacings + (local_deform_spacing / args.expansion_factor,)
+
+            logger.info((
+                'Transform spacings based on local deform spacing '
+                f'{local_deform_spacing} and expansion factor {args.expansion_factor} -> {transforms_spacings} '
+            ))
         else:
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines
@@ -232,7 +247,7 @@ def _run_apply_transform(args):
 
         if (args.processing_blocksize is not None and
             len(args.processing_blocksize) > 0):
-            processing_blocksize = args.processing_blocksize
+            processing_blocksize = args.processing_blocksize[::-1]
         else:
             # default to output blocksize
             processing_blocksize = (args.partition_size,) * 3
@@ -243,7 +258,7 @@ def _run_apply_transform(args):
             processing_blocksize,
             cluster_client,
             transform_spacing=transforms_spacings,
-            coords_spacing=voxel_spacing,
+            coords_spacing=voxel_spacing / args.expansion_factor,
         )
         output_coords = np.empty_like(warped_zyx_coords)
         # flip z,y,x back to x,y,z before writing them to file

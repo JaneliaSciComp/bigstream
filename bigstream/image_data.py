@@ -9,12 +9,14 @@ class ImageData:
     def __init__(self, image_path=None, image_subpath=None,
                  image_arraydata=None, image_attrs=None,
                  image_timeindex:int|None=None, image_channel:int|None=None,
+                 expansion_factor:float=1.0,
                  read_attrs=True,
                  open_image=False):
         self.image_path = image_path
         self.image_subpath = image_subpath
         self.image_timeindex = image_timeindex
         self.image_channel = image_channel
+        self.expansion_factor = expansion_factor
         self.image_ndarray = image_arraydata
         self.image_voxel_spacing = None
         self.image_downsampling = None

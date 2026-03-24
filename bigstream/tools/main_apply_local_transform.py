@@ -43,6 +43,11 @@ def _define_args():
                              dest='fixed_spacing',
                              type=floattuple,
                              help='Fixed image voxel spacing')
+    args_parser.add_argument('--fix-expansion',
+                             dest='fixed_expansion_factor',
+                             type=float,
+                             default=1.0,
+                             help='Fixed image expansion factor')
 
     args_parser.add_argument('--mov', '--moving',
                              dest='moving',
@@ -64,6 +69,11 @@ def _define_args():
                              dest='moving_spacing',
                              type=floattuple,
                              help='Moving image voxel spacing')
+    args_parser.add_argument('--mov-expansion',
+                             dest='moving_expansion_factor',
+                             type=float,
+                             default=1.0,
+                             help='Moving image expansion factor')
 
     args_parser.add_argument('--static-transforms',
                              dest='static_transforms',
@@ -175,6 +185,7 @@ def _run_apply_transform(args):
         fix_subpath,
         image_timeindex=args.fixed_timeindex,
         image_channel=args.fixed_channel,
+        expansion_factor=args.fixed_expansion_factor,
         open_image=True,
     )
     mov_data = ImageData(
@@ -182,6 +193,7 @@ def _run_apply_transform(args):
         mov_subpath,
         image_timeindex=args.moving_timeindex,
         image_channel=args.moving_channel,
+        expansion_factor=args.moving_expansion_factor,
         open_image=True
     )
     if args.fixed_spacing:
@@ -196,11 +208,6 @@ def _run_apply_transform(args):
     logger.info(f'Moving volume: {mov_data}')
 
     local_deform_field = ImageData(args.local_transform, args.local_transform_subpath)
-    if args.local_transform_spacing:
-        # in case the transform spacing arg has the channel dimension - truncate it
-        local_deform_spacing = args.local_transform_spacing[::-1][:fix_data.spatial_ndim]  # xyz -> zyx
-    else:
-        local_deform_spacing = local_deform_field.voxel_spacing[:fix_data.spatial_ndim]
 
     if (args.output_blocksize is not None and
         len(args.output_blocksize) > 0):
@@ -291,6 +298,13 @@ def _run_apply_transform(args):
         if local_deform_field.has_data():
             logger.info(f'Read image for {local_deform_field}')
             local_deform_field.read_image(convert_to_little_endian=False)
+
+            if args.local_transform_spacing:
+                # in case the transform spacing arg has the channel dimension - truncate it
+                local_deform_spacing = np.array(args.local_transform_spacing[::-1][:fix_data.spatial_ndim])  # xyz -> zyx
+            else:
+                local_deform_spacing = local_deform_field.voxel_spacing[:fix_data.spatial_ndim]
+
             all_transforms = affine_transforms_list + [local_deform_field.image_array]
             applied_transforms = applied_affines + [f'{local_deform_field}']
             transforms_spacings = transforms_spacings + (local_deform_spacing,)

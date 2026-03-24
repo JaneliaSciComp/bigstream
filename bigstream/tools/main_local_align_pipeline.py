@@ -413,9 +413,11 @@ def _align_local_data(fix_image: ImageData,
         deformfield = None
         deformfield_axes = None
 
-    logger.info(f'Calculate transformation {deformfield_path}' +
-                f'for the local alignment of {mov_image}' +
-                f'to {fix_image}')
+    logger.info((
+        f'Calculate transformation {deformfield_path} '
+        f'for the local alignment of {mov_image} '
+        f'to {fix_image} '
+    ))
     if fix_image.has_data() and mov_image.has_data():
         deform_ok = distributed_alignment_pipeline(
             fix_image, mov_image,
@@ -432,15 +434,18 @@ def _align_local_data(fix_image: ImageData,
             max_concurrent_reads=max_concurrent_zarr_reads,
             max_cluster_jobs=max_cluster_jobs,
         )
-        logger.info('Finished computing the deformation field ' +
-                    f'{deformfield_path} for the local alignment of ' +
-                    f'{mov_image} to {fix_image}')
+        logger.info((
+            'Finished computing the deformation field '
+            f'{deformfield_path} for the local alignment of '
+            f'{mov_image} to {fix_image} '
+        ))
     else:
         deform_ok = False
         logger.warning('Fix image or moving image has no data or ' +
                        'the distributed alignment failed')
 
     if deform_ok and deformfield and inv_deformfield_path:
+        logger.info(f'Create inverse deform field container {inv_deformfield_path}')
         if len(inv_iterations) == 0:
             raise ValueError(f'Invalid inverse iterations: {inv_iterations}')
         
@@ -474,16 +479,20 @@ def _align_local_data(fix_image: ImageData,
             downsamplingFactors=calc_downsampling_attr(transform_downsampling),
             zarr_format=2,
         )
+
+        deform_field_spacing = get_spatial_values(fix_image.voxel_spacing)
+
         logger.info((
             'Calculate inverse transformation '
             f'{inv_deformfield_path}:{inv_deformfield_subpath} '
             f'from {deformfield_path}:{deformfield_subpath} '
             f'for local alignment of {mov_image} '
             f'to reference {fix_image} '
+            f'deform field spacing is {deform_field_spacing}, expansion factor {fix_image.expansion_factor} '
         ))
         distributed_invert_displacement_vector_field(
             deformfield,
-            fix_image.voxel_spacing,
+            deform_field_spacing / fix_image.expansion_factor,
             inv_deformfield_chunksize, # use blocksize for partitioning the work
             inv_deformfield,
             cluster_client,

@@ -58,6 +58,65 @@ def create_dataset_array(
     shape,
     chunks,
     dtype,
+    **dataset_attrs,
+):
+    """
+    Create a Zarr dataset
+
+    Parameters
+    ----------
+    container_path : string
+        The path to the root Zarr container on disk
+        If this path does not exist it will be created
+
+    container_subpath : string
+        The subpath within the root Zarr container to create the array
+        If this subpath does not exist it will be created
+
+    shape : tuple of ints
+        The shape of the dataset
+
+    chunks : tuple of ints
+        The shape of individual chunks in the dataset
+
+    dtype : python or numpy primitive numerical data type
+        The primitive data type of the dataset
+
+    **dataset_attrs : any additional keyword arguments
+        Metadata attributes for the dataset itself
+
+    Returns
+    -------
+    dataset : zarr.array
+        The zarr.array reference to the newly created dataset
+    """
+
+    # parse container_path
+    real_container_path = os.path.realpath(container_path)
+    path_comps = os.path.splitext(container_path)
+    container_ext = path_comps[1]
+
+    if container_ext == '.n5':
+        # create N5 array
+        ...
+    else:
+        # default to zarr container
+        return _create_dataset_zarray(
+            real_container_path,
+            container_subpath,
+            shape,
+            chunks,
+            dtype,
+            **dataset_attrs,
+        )
+
+
+def _create_dataset_zarray(
+    container_path,
+    container_subpath,
+    shape,
+    chunks,
+    dtype,
     overwrite=False,
     for_timeindex=None,
     for_channel=None,
@@ -89,11 +148,6 @@ def create_dataset_array(
     dtype : python or numpy primitive numerical data type
         The primitive data type of the dataset
 
-    data : array (default: None)
-        Data to populate the dataset with
-        If this parameter is not None then the shape and dtype parameters must
-        be None, as in this case those values are inferred from this array.
-
     overwrite : bool (default: False)
         If False, an exception will be raised when trying to write to a dataset
         that already exists. If True then existing datasets can be overwritten.
@@ -121,17 +175,8 @@ def create_dataset_array(
     """
 
     try:
-
-        # parse container_path
-        real_container_path = os.path.realpath(container_path)
-        path_comps = os.path.splitext(container_path)
-        container_ext = path_comps[1]
-
         # create the correct store
-        if container_ext == '.zarr':
-            store = zarr.storage.LocalStore(real_container_path)
-        else:
-            store = real_container_path
+        store = zarr.storage.LocalStore(container_path)
 
         codec = _get_compressor(compressor, compression_opts, zarr_format)
         compressor_args = _compressor_kwargs(codec, zarr_format)
@@ -753,15 +798,10 @@ def _open_n5(data_path, data_subpath, block_coords=None):
         else:
             data = dataset.read().result()
 
+        data = data.transpose(2, 1, 0) # tensorstore reads it as X,Y,Z so I need to transpose it
+
         # Get attributes from the N5 container
         attrs = _open_n5_attrs(data_path, data_subpath)
-
-        # Add array metadata to attributes
-        attrs.update({
-            'dataType': data.dtype,
-            'dimensions': dataset.shape,
-            'blockSize': dataset.chunk_layout.read_chunk.shape,
-        })
 
         logger.debug(f'Opened N5 {data_path}:{data_subpath}, shape={dataset.shape}, attrs={attrs}')
         return data, attrs
@@ -972,6 +1012,18 @@ def _open_n5_attrs(data_path, data_subpath):
         with io.open(attrs_path, 'r') as f:
             attrs = json.load(f)
         logger.debug(f'Read N5 attributes from {attrs_path}: {attrs}')
+
+        def get_spatial_attr_values(attrName):
+            v = attrs.get(attrName)
+            return v[::-1] if v is not None else None
+
+        return {
+            'dataType': attrs.get('dataType'),
+            'dimensions': get_spatial_attr_values('dimensions'),
+            'blockSize': get_spatial_attr_values('blockSize'),
+            'pixelResolution': get_spatial_attr_values('pixelResolution'),
+            'downsamplingFactors': get_spatial_attr_values('downsamplingFactors'),
+        }
         return attrs
     except json.JSONDecodeError as e:
         logger.error(f'Error parsing attributes.json at {attrs_path}: {e}')

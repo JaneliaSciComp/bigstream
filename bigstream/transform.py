@@ -245,11 +245,15 @@ def apply_transform_to_coordinates(
             def interp(x):
                 return map_coordinates(x, coordinates, **kwargs)
 
-            logger.debug(f'Interpolate {coordinates.shape} coords using a {transform.shape} transform with args: {kwargs}')
-            dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()
-            coordinates = coordinates.transpose() * spacing + dX
-            if origin is not None:
-                coordinates += origin
+            try:
+                logger.debug(f'Interpolate {coordinates.shape} coords using a {transform.shape} transform with args: {kwargs}')
+                dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()
+                coordinates = coordinates.transpose() * spacing + dX
+                if origin is not None:
+                    coordinates += origin
+            except Exception as e:
+                logger.error(f'Error while trying to map {coordinates} using a {transform.shape} deformation field', exc_info=e)
+                raise e
 
     return coordinates
 

@@ -420,7 +420,10 @@ def _align_local_data(fix_image: ImageData,
     ))
     if fix_image.has_data() and mov_image.has_data():
         deform_ok = distributed_alignment_pipeline(
-            fix_image, mov_image,
+            fix_image,
+            np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor,
+            mov_image,
+            np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor,
             steps,
             processing_size, # parallelize on processing size
             cluster_client,
@@ -567,11 +570,14 @@ def _align_local_data(fix_image: ImageData,
         else:
             deform_transforms = []
         affine_spacings = [None for i in range(len(static_transforms))]
-        transform_spacing = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing)])
-        logger.info(f'Transforms spacings: {transform_spacing}, transform map coordinates args: {transform_coords_args}')
+        transforms_spacings = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing) / fix_image.expansion_factor])
+        logger.info(f'Transforms spacings: {transforms_spacings}, transform map coordinates args: {transform_coords_args}')
 
         distributed_apply_transform(
-            fix_image, mov_image,
+            fix_image,
+            np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor,
+            mov_image,
+            np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor,
             align_chunksize, # use block chunk size for distributing work
             static_transforms + deform_transforms, # transform_list
             cluster_client,
@@ -579,7 +585,7 @@ def _align_local_data(fix_image: ImageData,
             aligned_data=align,
             aligned_data_timeindex=align_timeindex,
             aligned_data_channel=align_channel,
-            transform_spacing=transform_spacing,
+            transform_spacing=transforms_spacings,
             **transform_coords_args,
         )
     else:

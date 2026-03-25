@@ -19,7 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 def distributed_apply_transform(
-    fix_image:ImageData, mov_image:ImageData,
+    fix_image:ImageData,
+    fix_spatial_spacing:np.ndarray,
+    mov_image:ImageData,
+    mov_spatial_spacing:np.ndarray,
     process_blocksize,
     transform_list,
     cluster_client,
@@ -85,8 +88,6 @@ def distributed_apply_transform(
     # get overlap and number of blocks
     fix_spatial_dims = fix_image.spatial_dims
     mov_spatial_dims = mov_image.spatial_dims
-    fix_spacing = np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor
-    mov_spacing = np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor
     process_block_partition_size = np.array(get_spatial_values(process_blocksize))
     nblocks = np.ceil(np.array(fix_spatial_dims) / process_block_partition_size).astype(int)
     overlaps = np.round(process_block_partition_size * overlap_factor).astype(int)
@@ -103,14 +104,12 @@ def distributed_apply_transform(
                 transform_spacings.append(None)
             else:
                 tshape_arr = np.array(get_spatial_values(t, True))
-                tspacing = fix_spacing * fix_spatial_dims / tshape_arr
+                tspacing = fix_spatial_spacing * fix_spatial_dims / tshape_arr
                 transform_spacings.append(tspacing)
         transform_spacing_list= tuple(transform_spacings)
-        logger.info(f'Derive all transforms spacings from fixed spacing: {fix_spacing} -> {transform_spacing_list}')
     elif not isinstance(transform_spacing, tuple):
         # create a corresponding transform spacing for each transform
-        transform_spacing_list = tuple(np.array(transform_spacing) / fix_image.expansion_factor for _ in transform_list)
-        logger.info(f'Derive all transforms spacings from single transform spacing {transform_spacing} -> {transform_spacing_list}')
+        transform_spacing_list = tuple(np.array(transform_spacing) for _ in transform_list)
     else:
         if len(transform_spacing) != len(transform_list):
             raise ValueError(
@@ -118,7 +117,7 @@ def distributed_apply_transform(
                 f'({len(transform_spacing)} != {len(transform_list)})'
             )
         transform_spacing_list = tuple(
-            None if spacing is None else np.array(spacing) / fix_image.expansion_factor
+            None if spacing is None else np.array(spacing)
             for spacing in transform_spacing
         )
         logger.info(f'Derive all transform spacings from tuple {transform_spacing} -> {transform_spacing_list}')
@@ -179,8 +178,8 @@ def distributed_apply_transform(
         fix_block_reader,
         mov_block_reader,
         full_mov_shape=mov_spatial_dims,
-        fix_spacing=fix_spacing,
-        mov_spacing=mov_spacing,
+        fix_spacing=fix_spatial_spacing,
+        mov_spacing=mov_spatial_spacing,
         blocksize=process_block_partition_size,
         blockoverlaps=overlaps,
         transform_list=transform_list,

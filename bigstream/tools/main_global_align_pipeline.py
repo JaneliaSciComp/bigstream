@@ -77,7 +77,7 @@ def _run_global_align(reg_args:RegistrationInputs,
         logger.info('Skip global alignment because no global steps were specified.')
         return None
 
-    (fix, fix_mask, mov, mov_mask) = get_input_images(reg_args)
+    fix, fix_mask, mov, mov_mask = get_input_images(reg_args)
     if fix.has_data() and mov.has_data():
         # compose mov origin transform from user affine + OME translations
         mov_origin_transform = compose_origin_transform(

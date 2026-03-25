@@ -94,6 +94,11 @@ def _define_args():
                              dest='local_transform_spacing',
                              type=floattuple,
                              help='Local transform spacing')
+    args_parser.add_argument('--local-transform-expansion', '--transform-expansion',
+                             dest='local_transform_expansion',
+                             type=float,
+                             default=1.0,
+                             help='Local transform expansion factor')
 
     args_parser.add_argument('--transform-config',
                              dest='transform_config',
@@ -307,7 +312,7 @@ def _run_apply_transform(args):
 
             all_transforms = affine_transforms_list + [local_deform_field.image_array]
             applied_transforms = applied_affines + [f'{local_deform_field}']
-            transforms_spacings = transforms_spacings + (local_deform_spacing,)
+            transforms_spacings = transforms_spacings + (local_deform_spacing / args.local_transform_expansion,)
         else:
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines
@@ -315,6 +320,7 @@ def _run_apply_transform(args):
         logger.info((
             f'Apply {applied_transforms} to '
             f'{mov_data} -> {args.output}:{output_subpath}, '
+            f'deform spacing {local_deform_spacing} deform expansion factor {args.local_transform_expansion}'
             f'transform spacing: {transforms_spacings} '
         ))
 
@@ -341,7 +347,10 @@ def _run_apply_transform(args):
 
         try:
             distributed_apply_transform(
-                fix_data, mov_data,
+                fix_data,
+                np.array(get_spatial_values(fix_data.voxel_spacing)) / fix_data.expansion_factor,
+                mov_data,
+                np.array(get_spatial_values(mov_data.voxel_spacing)) / mov_data.expansion_factor,
                 output_blocks, # use block chunk size for distributing the work
                 all_transforms, # transform_list
                 cluster_client,

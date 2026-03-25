@@ -33,11 +33,11 @@ def _define_args():
                              dest='local_transform_spacing',
                              type=floattuple,
                              help='Local deform field spacing')
-    args_parser.add_argument('--expansion', '--expansion-factor',
-                             dest='expansion_factor',
+    args_parser.add_argument('--local-transform-expansion', '--transform-expansion',
+                             dest='deform_expansion_factor',
                              type=float,
                              default=1.0,
-                             help='Image volume expansion expansion')
+                             help='Local deform field expansion expansion')
 
     args_parser.add_argument('--inv-transform-dir', dest='inv_transform_dir',
                              help='Inverse transform directory')
@@ -148,7 +148,7 @@ def _run_compute_inverse(args):
     else:
         local_deform_spacing = local_deform_field.voxel_spacing[:3]
     
-    logger.info(f'Deform field spacing: {local_deform_spacing}')
+    logger.info(f'Deform field spacing: {local_deform_spacing} expansion factor {args.deform_expansion_factor}')
 
     inv_transform_dir = (args.inv_transform_dir
                          if args.inv_transform_dir
@@ -228,7 +228,7 @@ def _run_compute_inverse(args):
             ))
         distributed_invert_displacement_vector_field(
             local_deform_field.image_array,
-            local_deform_spacing / args.expansion_factor,
+            local_deform_spacing / args.deform_expansion_factor,
             inv_transform_blocksize, # use blocksize for partitioning the work
             inv_deform_field,
             cluster_client,

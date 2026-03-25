@@ -353,7 +353,7 @@ def _extract_arg(args: RegistrationInputs, args_descriptor: CliArgsHelper,
     args_dict[argname] = getattr(args, args_descriptor.argdest(argname))
 
 
-def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
+def get_input_images(args: RegistrationInputs) -> tuple[ImageData, ImageData|None, ImageData, ImageData|None]:
     # Read the global inputs
     fix = ImageData(
         args.fix, args.fix_subpath,
@@ -395,4 +395,4 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData]:
     else:
         mov_mask = None
 
-    return (fix, fix_mask, mov, mov_mask)
+    return fix, fix_mask, mov, mov_mask

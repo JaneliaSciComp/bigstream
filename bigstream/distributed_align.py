@@ -30,9 +30,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
                                                     static_transform_list=[]):
     logger.debug(f'Prepare block coords {block_info}')
     block_index, fix_block_coords, fix_block_neighbors = block_info
-    (fix_block_voxel_coords,
-     fix_block_phys_coords) = _get_spatial_block_corner_coords(fix_block_coords,
-                                                               fix_spacing)
+    fix_block_voxel_coords, fix_block_phys_coords = _get_spatial_block_corner_coords(fix_block_coords, fix_spacing)
     logger.debug((
         f'Block index: {block_index} - '
         f'fix block corner physical coords: {fix_block_phys_coords} '
@@ -460,7 +458,9 @@ def _validate_transform(transform, correct=False, throw_exc=True):
 
 def distributed_alignment_pipeline(
     fix_image:ImageData,
+    fix_spatial_spacing,
     mov_image:ImageData,
+    mov_spatial_spacing,
     steps,
     blocksize,
     cluster_client,
@@ -570,8 +570,6 @@ def distributed_alignment_pipeline(
     # to partition the work
     fix_spatial_dims = fix_image.spatial_dims
     mov_spatial_dims = mov_image.spatial_dims
-    fix_spacing = get_spatial_values(fix_image.voxel_spacing) / fix_image.expansion_factor
-    mov_spacing = get_spatial_values(mov_image.voxel_spacing) / mov_image.expansion_factor
     if fix_mask is not None:
         if isinstance(fix_mask, (tuple, list)):
             fix_mask_image = None
@@ -687,8 +685,8 @@ def distributed_alignment_pipeline(
             block_info,
             fix_shape=fix_spatial_dims,
             mov_shape=mov_spatial_dims,
-            fix_spacing=fix_spacing,
-            mov_spacing=mov_spacing,
+            fix_spacing=fix_spatial_spacing,
+            mov_spacing=mov_spatial_spacing,
             fix_fullmask_shape=fix_mask_spatial_dims,
             mov_fullmask_shape=mov_mask_spatial_dims,
             mov_origin_transform=mov_origin_transform,
@@ -709,8 +707,8 @@ def distributed_alignment_pipeline(
     def compute_block_transform_method(transform_params):
         return _compute_block_transform(
             transform_params,
-            fix_spacing=fix_spacing,
-            mov_spacing=mov_spacing,
+            fix_spacing=fix_spatial_spacing,
+            mov_spacing=mov_spatial_spacing,
             block_size=block_partition_size,
             block_overlaps=overlaps,
             nblocks=nblocks,

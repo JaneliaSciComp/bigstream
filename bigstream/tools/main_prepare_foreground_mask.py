@@ -54,9 +54,10 @@ def _define_args():
                              type=int,
                              default=1,
                              help='Number of iterations to apply mask smoothing - smaller value results in a rougher mask')  
-    args_parser.add_argument('--mask-sigma',
-                             dest='mask_sigma',
-                             type=float,
+    args_parser.add_argument('--mask-sigma', '--mask-smooth-sigmas',
+                             dest='mask_smooth_sigmas',
+                             type=floattuple,
+                             default=(),
                              help='Gaussian smoothing sigma at the finest shrink factor; coarser shrink factors use proportionally larger sigmas')
     args_parser.add_argument('--mask-lambda',
                              dest='mask_lambda2',
@@ -133,17 +134,26 @@ def _generate_foreground_mask(args):
     )
     logger.debug(f'Read image of shape: {image_array.shape}')
 
-    if args.mask_sigma:
-        smooth_sigmas = (args.mask_sigma+16,args.mask_sigma+8,args.mask_sigma)
+    mask_iterations = [10, 20, 40]
+    if not args.mask_smooth_sigmas:
+        smooth_sigmas = [8, 16, 24]
+    elif len(args.mask_smooth_sigmas) < len(mask_iterations):
+        smooth_sigmas = list(args.mask_smooth_sigmas)
+        n_missing = len(mask_iterations) - len(smooth_sigmas)
+        if n_missing > 0:
+            last_sigma = smooth_sigmas[-1]
+            smooth_sigmas.extend(last_sigma + 8 * i for i in range(1, n_missing + 1))
     else:
-        smooth_sigmas = (24, 16, 8)
+        smooth_sigmas = args.mask_smooth_sigmas[0:len(mask_iterations)]
+
     mask, mask_spacing = generate_foreground_mask(
         image_array,
         get_spatial_values(image_data.voxel_spacing),
         image_subsampling=args.mask_subsampling,
         mask_smoothing=args.mask_smoothing,
         lambda2=args.mask_lambda2,
-        smooth_sigmas=smooth_sigmas,
+        iterations=mask_iterations[::-1],
+        smooth_sigmas=smooth_sigmas[::-1],
         percentile_thresh=args.mask_thresh_percentile,
     )
 

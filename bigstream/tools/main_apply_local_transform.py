@@ -313,16 +313,22 @@ def _run_apply_transform(args):
             all_transforms = affine_transforms_list + [local_deform_field.image_array]
             applied_transforms = applied_affines + [f'{local_deform_field}']
             transforms_spacings = transforms_spacings + (local_deform_spacing / args.local_transform_expansion,)
+
+            logger.info((
+                f'Apply {applied_transforms} to '
+                f'{mov_data} -> {args.output}:{output_subpath}, '
+                f'deform spacing {local_deform_spacing} deform expansion factor {args.local_transform_expansion} '
+                f'transform spacing: {transforms_spacings} '
+            ))
         else:
             all_transforms = affine_transforms_list
             applied_transforms = applied_affines
 
-        logger.info((
-            f'Apply {applied_transforms} to '
-            f'{mov_data} -> {args.output}:{output_subpath}, '
-            f'deform spacing {local_deform_spacing} deform expansion factor {args.local_transform_expansion}'
-            f'transform spacing: {transforms_spacings} '
-        ))
+            logger.info((
+                f'Apply {applied_transforms} to '
+                f'{mov_data} -> {args.output}:{output_subpath}, '
+                f'transform spacing: {transforms_spacings} '
+            ))
 
         apply_deform_steps, _ = get_algorithm_parameters(args.transform_config,
                                                          'apply_deform',

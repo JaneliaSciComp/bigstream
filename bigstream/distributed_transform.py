@@ -80,7 +80,8 @@ def distributed_apply_transform(
         Otherwise it returns a numpy array.
     """
     logger.info((
-        f'Distributed transform a {mov_image.shape} image '
+        f'Distributed transform a {mov_image.shape} image with spacing {mov_spatial_spacing} '
+        f'to a {fix_image.shape} image with spacing {fix_spatial_spacing} '
         f'using {process_blocksize} blocks '
         f'with {len(transform_list)} transforms '
         f'and extra args: {kwargs} '

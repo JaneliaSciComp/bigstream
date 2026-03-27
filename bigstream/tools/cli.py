@@ -387,15 +387,22 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData, ImageData|Non
     # but if the container exists then the subpath must be valid
     if args.fix_mask and Path(args.fix_mask).exists():
         fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath, open_image=True)
+        logger.info(f'Using fix mask {fix_mask}')
     elif args.fix_roi:
         fix_mask = args.fix_roi
+        logger.info(f'Using fix mask ROI {fix_mask}')
     else:
         fix_mask = None
+        logger.info('No fix mask was provided')
+
     if args.mov_mask and Path(args.mov_mask).exists():
         mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath, open_image=True)
+        logger.info(f'Using mov mask {fix_mask}')
     elif args.mov_roi:
         mov_mask = args.mov_roi
+        logger.info(f'Using mov mask ROI {fix_mask}')
     else:
         mov_mask = None
+        logger.info('No mov mask was provided')
 
     return fix, fix_mask, mov, mov_mask

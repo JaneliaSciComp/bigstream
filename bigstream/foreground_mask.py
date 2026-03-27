@@ -26,6 +26,7 @@ def generate_foreground_mask(image,
         f'using smooth_sigmas: {smooth_sigmas} and iterations: {iterations}'
     ))
     if percentile_thresh is None:
+        logger.info('Generate foreground mask using level_set.foreground_segmentation')
         mask = level_set.foreground_segmentation(
             subsampled_image, subsampled_image_spacing,
             mask_smoothing=mask_smoothing,

@@ -5,6 +5,7 @@ import os
 import pydantic.v1.utils as pu
 import yaml
 
+from pathlib import Path
 from bigstream.configure_bigstream import default_bigstream_config_str
 from bigstream.image_data import ImageData
 
@@ -382,13 +383,15 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData, ImageData|Non
         mov.voxel_spacing = fix.voxel_spacing
     logger.info(f'Mov volume attributes: {mov.shape} {mov.attrs} {mov.voxel_spacing}')
 
-    if args.fix_mask:
+    # masks are not mandatory so check if the file exists first
+    # but if the container exists then the subpath must be valid
+    if args.fix_mask and Path(args.fix_mask).exists():
         fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath, open_image=True)
     elif args.fix_roi:
         fix_mask = args.fix_roi
     else:
         fix_mask = None
-    if args.mov_mask:
+    if args.mov_mask and Path(args.mov_mask).exists():
         mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath, open_image=True)
     elif args.mov_roi:
         mov_mask = args.mov_roi

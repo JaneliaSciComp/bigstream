@@ -153,8 +153,8 @@ def _align_global_data(fix_image, fix_mask,
     )
     affine = alignment_pipeline(fix_image_array,
                                 mov_image_array,
-                                fix_spacing,
-                                mov_spacing,
+                                fix_spacing / fix_image.expansion_factor,
+                                mov_spacing / fix_image.expansion_factor,
                                 steps,
                                 fix_mask=fix_mask,
                                 mov_mask=mov_mask,
@@ -165,8 +165,8 @@ def _align_global_data(fix_image, fix_mask,
     # apply transform
     aligned = apply_transform(fix_image_array,
                               mov_image_array,
-                              fix_spacing,
-                              mov_spacing,
+                              fix_spacing / fix_image.expansion_factor,
+                              mov_spacing / mov_image.expansion_factor,
                               transform_list=static_transforms + [affine,])
     return affine, aligned
 

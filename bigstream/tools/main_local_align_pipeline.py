@@ -321,9 +321,9 @@ def _run_local_alignment(reg_args: RegistrationInputs,
 
 
 def _align_local_data(fix_image: ImageData,
-                      fix_mask: ImageData,
+                      fix_mask: ImageData|None,
                       mov_image: ImageData,
-                      mov_mask: ImageData,
+                      mov_mask: ImageData|None,
                       steps,
                       processing_size,
                       processing_overlap_factor,

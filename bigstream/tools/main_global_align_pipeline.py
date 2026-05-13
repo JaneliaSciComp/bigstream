@@ -50,6 +50,11 @@ def _define_args(args_descriptor):
                              default={},
                              type=dictfromjson,
                              help='Zarr array compression options')
+    args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
+                             dest='output_zarr_format',
+                             default=2,
+                             type=int,
+                             help='Zarr output format')
 
     args_parser.add_argument('--cpus', dest='cpus',
                              type=int, default=0,
@@ -69,7 +74,8 @@ def _define_args(args_descriptor):
 def _run_global_align(reg_args:RegistrationInputs,
                       align_config,
                       compressor,
-                      compressor_opts):
+                      compressor_opts,
+                      zarr_format):
     global_steps, _ = get_algorithm_parameters(align_config,
                                                'global_align',
                                                reg_args.registration_steps)
@@ -103,6 +109,7 @@ def _run_global_align(reg_args:RegistrationInputs,
             mov.voxel_downsampling,
             compressor,
             compressor_opts,
+            zarr_format
         )
     else:
         logger.info('Skip global alignment - both fix and moving image are needed')
@@ -174,7 +181,8 @@ def _align_global_data(fix_image, fix_mask,
 def _apply_global_transform(reg_args:RegistrationInputs,
                             affine,
                             compressor,
-                            compressor_opts):
+                            compressor_opts,
+                            zarr_format):
     (fix_image, _, mov_image, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
         full_image_coords = tuple(slice(None) for _ in range(fix_image.spatial_ndim))
@@ -211,6 +219,7 @@ def _apply_global_transform(reg_args:RegistrationInputs,
             mov_image.voxel_downsampling,
             compressor,
             compressor_opts,
+            zarr_format
         )
     else:
         # both fix and mov volume must be valid
@@ -248,7 +257,8 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          voxel_resolution,
                          downsampling,
                          compressor,
-                         compressor_opts):
+                         compressor_opts,
+                         zarr_format):
     align_path = reg_args.align_path()
     # prepare global coordinate transform from reg_args.mov_origin_transform
     global_transformations = []
@@ -314,7 +324,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             pixelResolution=calc_full_voxel_resolution_attr(voxel_resolution,
                                                             downsampling),
             downsamplingFactors=calc_downsampling_attr(downsampling),
-            zarr_format=2,
+            zarr_format=zarr_format,
         )
         write_coords = []
         if reg_args.get_align_timeindex() is not None and len(dataset_array.shape) > 3:
@@ -360,10 +370,14 @@ def main():
         _run_global_align(reg_inputs,
                           args.align_config,
                           args.compressor,
-                          args.compressor_opts)
+                          args.compressor_opts,
+                          args.output_zarr_format)
     else:
         # global transform found -> just apply it
-        _apply_global_transform(reg_inputs, global_transform, args.compressor, args.compressor_opts)
+        _apply_global_transform(reg_inputs,
+                                global_transform,
+                                args.compressor, args.compressor_opts,
+                                args.output_zarr_format)
 
 
 if __name__ == '__main__':

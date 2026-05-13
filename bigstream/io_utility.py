@@ -852,7 +852,8 @@ def _find_ome_multiscales(data_container, data_subpath):
         group_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         dataset_item = data_container[group_subpath]
         dataset_item_attrs = dataset_item.attrs.asdict()
-        if dataset_item_attrs.get('multiscales', []) == []:
+        is_ome_candidate = dataset_item_attrs.get('multiscales') or dataset_item_attrs.get('ome')
+        if not is_ome_candidate:
             dataset_comps_index = dataset_comps_index + 1
         else:
             logger.debug(f'Found multiscales at {group_subpath}: {dataset_item_attrs}')
@@ -860,18 +861,19 @@ def _find_ome_multiscales(data_container, data_subpath):
             return dataset_item, '/'.join(dataset_comps[dataset_comps_index:]), dataset_item_attrs
 
     data_container_attrs = data_container.attrs.asdict()
-    if data_container_attrs.get('multiscales', []) == []:
-        return None, None, {}
-    else:
+    is_ome_candidate = data_container_attrs.get('multiscales') or data_container_attrs.get('ome')
+    if is_ome_candidate:
         # the container itself has multiscales attributes
         return data_container, '', data_container_attrs
+    else:
+        return None, None, {}
 
 
 def _open_ome_zarr(multiscales_group, multiscales_attrs, dataset_subpath,
                    data_timeindex=None, data_channels=None, block_coords=None):
     dataset_comps = [c for c in dataset_subpath.split('/') if c]
-    # ome_metadata = ImageAttrs.construct(**multiscales_attrs)
-    multiscale_metadata = multiscales_attrs.get('multiscales', [])[0]
+    multiscales = multiscales_attrs.get('multiscales') or multiscales_attrs.get('ome', {}).get('multiscales')
+    multiscale_metadata = multiscales[0]
     # pprint.pprint(ome_metadata)
     dataset_metadata = None
     # lookup the dataset by path
@@ -1039,6 +1041,7 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         data_store = _get_data_store(zarr_container_path)
         data_container = zarr.open(store=data_store, mode='r')
         multiscales_group, dataset_subpath, multiscale_attrs = _find_ome_multiscales(data_container, zarr_subpath)
+        print(f'!!!!!! dataset: {dataset_subpath} attrs: {multiscale_attrs}')
         if multiscales_group is not None:
             a, dataset_attrs = _open_ome_zarr(multiscales_group, multiscale_attrs, dataset_subpath)
             dataset_attrs.update(a.attrs.asdict())
@@ -1087,7 +1090,7 @@ def _adjust_data_paths(data_path, data_subpath):
 
 def _get_data_store(data_path):
     """Get a local zarr store"""
-    return zarr.storage.LocalStore(data_path)
+    return data_path
 
 
 def _read_tiff(input_path, block_coords=None):

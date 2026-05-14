@@ -157,7 +157,7 @@ def _define_args():
                              help='Maximum number of concurrent reads from a zarr array')
     args_parser.add_argument('--compression', '--compressor',
                              dest='compressor',
-                             default='gzip',
+                             default='zstd',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
@@ -166,6 +166,20 @@ def _define_args():
                              default={},
                              type=dictfromjson,
                              help='Zarr array compression options')
+    args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
+                             dest='output_zarr_format',
+                             default=2,
+                             type=int,
+                             help='Zarr output format')
+    args_parser.add_argument('--output-shard-shape', '--output_shard_shape',
+                             dest='output_shard_shape',
+                             default=None,
+                             type=inttuple,
+                             help='Zarr v3 shard shape in xyz order, '
+                                  'e.g. 512,512,512. Each component must be '
+                                  'a positive multiple of the corresponding '
+                                  'chunk dimension. Ignored when '
+                                  '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -260,6 +274,16 @@ def _run_apply_transform(args):
         else:
             output_chunk_size = tuple(get_spatial_values(output_blocks))
 
+        if args.output_shard_shape:
+            output_shard_size = tuple(args.output_shard_shape[::-1])  # xyz -> zyx
+            if len(output_shard_size) < len(output_chunk_size):
+                output_shard_size = (
+                    (1,) * (len(output_chunk_size) - len(output_shard_size))
+                    + output_shard_size
+                )
+        else:
+            output_shard_size = None
+
         output_dataarray = io_utility.create_dataset_array(
             args.output,
             output_subpath,
@@ -274,7 +298,8 @@ def _run_apply_transform(args):
             pixelResolution=calc_full_voxel_resolution_attr(mov_data.voxel_spacing,
                                                             mov_data.voxel_downsampling),
             downsamplingFactors=calc_downsampling_attr(mov_data.voxel_downsampling),
-            zarr_format=2,
+            zarr_format=args.output_zarr_format,
+            shard_shape=output_shard_size,
         )
 
         applied_affines = []

@@ -58,6 +58,7 @@ def create_dataset_array(
     shape,
     chunks,
     dtype,
+    shard_shape=None,
     **dataset_attrs,
 ):
     """
@@ -81,6 +82,12 @@ def create_dataset_array(
 
     dtype : python or numpy primitive numerical data type
         The primitive data type of the dataset
+
+    shard_shape : tuple of ints (default: None)
+        Zarr v3 shard shape. When provided, multiple inner chunks are packed
+        into a single shard file. Each component must be a positive multiple
+        of the corresponding chunk dimension. Ignored (with a warning) when
+        the target format is not zarr v3.
 
     **dataset_attrs : any additional keyword arguments
         Metadata attributes for the dataset itself
@@ -107,6 +114,7 @@ def create_dataset_array(
             shape,
             chunks,
             dtype,
+            shard_shape=shard_shape,
             **dataset_attrs,
         )
 
@@ -124,6 +132,7 @@ def _create_dataset_zarray(
     compression_opts:dict={},
     parent_attrs:dict={},
     zarr_format:int=2, # default zarr v2 format
+    shard_shape=None,
     **dataset_attrs,
 ):
     """
@@ -183,6 +192,27 @@ def _create_dataset_zarray(
 
         chunk_key_separator = {'name': 'v2', 'separator': '/'} if zarr_format == 2 else None
 
+        extra_create_kwargs = {}
+        if shard_shape is not None and len(shard_shape) > 0:
+            if zarr_format < 3:
+                logger.info(
+                    f'Ignoring shard_shape={shard_shape}; sharding requires '
+                    f'zarr_format=3 (got {zarr_format})'
+                )
+            else:
+                shards = tuple(shard_shape)
+                if len(shards) != len(chunks):
+                    raise ValueError(
+                        f'shard_shape {shards} has different rank than chunks {chunks}'
+                    )
+                for s, c in zip(shards, chunks):
+                    if s <= 0 or s % c != 0:
+                        raise ValueError(
+                            f'shard_shape {shards} must be a positive multiple '
+                            f'of chunks {chunks} elementwise'
+                        )
+                extra_create_kwargs['shards'] = shards
+
         # create dataset in root group at container_subpath
         if container_subpath:
             logger.info((
@@ -212,6 +242,7 @@ def _create_dataset_zarray(
                     overwrite=overwrite,
                     chunk_key_encoding=chunk_key_separator,
                     **compressor_args,
+                    **extra_create_kwargs,
                 )
             else:
                 # get dataset shape, either from given data or existing dataset
@@ -241,6 +272,7 @@ def _create_dataset_zarray(
                             overwrite=overwrite,
                             chunk_key_encoding=chunk_key_separator,
                             **compressor_args,
+                            **extra_create_kwargs,
                         )
                     except zarr.errors.ContainsArrayError:
                         # array exists but was not found by __contains__
@@ -273,6 +305,7 @@ def _create_dataset_zarray(
                     chunk_key_encoding=chunk_key_separator,
                     zarr_format=zarr_format,
                     **compressor_args,
+                    **extra_create_kwargs,
                 )
             else:
                 try:
@@ -293,6 +326,7 @@ def _create_dataset_zarray(
                         chunk_key_encoding=chunk_key_separator,
                         zarr_format=zarr_format,
                         **compressor_args,
+                        **extra_create_kwargs,
                     )
             # set additional attributes
             dataset_array.attrs.update(_to_native_type(dataset_attrs))

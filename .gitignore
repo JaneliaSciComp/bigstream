@@ -15,3 +15,5 @@ dist/
 
 # ignore whatever this is
 .DS_Store
+
+.claude

@@ -87,7 +87,7 @@ def _define_args():
                              help='Output chunk size as a tuple.')
     args_parser.add_argument('--compression', '--compressor',
                              dest='compressor',
-                             default='gzip',
+                             default='zstd',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
@@ -96,6 +96,20 @@ def _define_args():
                              default={},
                              type=dictfromjson,
                              help='Zarr array compression options')
+    args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
+                             dest='output_zarr_format',
+                             default=2,
+                             type=int,
+                             help='Zarr output format')
+    args_parser.add_argument('--output-shard-shape', '--output_shard_shape',
+                             dest='output_shard_shape',
+                             default=None,
+                             type=inttuple,
+                             help='Zarr v3 shard shape in xyz order, '
+                                  'e.g. 512,512,512. Each component must be '
+                                  'a positive multiple of the corresponding '
+                                  'chunk dimension. Ignored when '
+                                  '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -176,6 +190,15 @@ def _generate_foreground_mask(args):
         dataset_transformations=coordinate_transformations,
     )
 
+    if args.output_shard_shape:
+        output_shard_size = tuple(args.output_shard_shape[::-1])  # xyz -> zyx
+        if len(output_shard_size) < len(output_chunk_size):
+            output_shard_size = (
+                (1,) * (len(output_chunk_size) - len(output_shard_size))
+                + output_shard_size
+            )
+    else:
+        output_shard_size = None
     output_array = io_utility.create_dataset_array(
         args.output,
         args.output_subpath,
@@ -185,7 +208,8 @@ def _generate_foreground_mask(args):
         compressor=args.compressor,
         compression_opts=args.compressor_opts,
         parent_attrs=output_attrs,
-        zarr_format=2,
+        zarr_format=args.output_zarr_format,
+        shard_shape=output_shard_size,
     )
     output_array[...] = mask
 

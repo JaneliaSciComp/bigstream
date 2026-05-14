@@ -115,7 +115,7 @@ def _define_args():
                              help='Maximum number of concurrent reads from a zarr array')
     args_parser.add_argument('--compression', '--compressor',
                              dest='compressor',
-                             default='gzip',
+                             default='zstd',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
@@ -124,6 +124,20 @@ def _define_args():
                              default={},
                              type=dictfromjson,
                              help='Zarr array compression options')
+    args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
+                             dest='output_zarr_format',
+                             default=2,
+                             type=int,
+                             help='Zarr output format')
+    args_parser.add_argument('--output-shard-shape', '--output_shard_shape',
+                             dest='output_shard_shape',
+                             default=None,
+                             type=inttuple,
+                             help='Zarr v3 shard shape in xyz order, '
+                                  'e.g. 512,512,512. Each component must be '
+                                  'a positive multiple of the corresponding '
+                                  'chunk dimension. Ignored when '
+                                  '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -176,11 +190,17 @@ def _run_compute_inverse(args):
         axes=local_deform_field.get_attr('axes'),
         dataset_transformations=local_deform_field.get_attr('coordinateTransformations'),
     )
+    inv_deform_chunks = tuple(inv_transform_blocksize) + (len(inv_transform_blocksize),)
+    if args.output_shard_shape:
+        # xyz -> zyx, then match the chunk vector dim so shard is a multiple of chunk
+        inv_deform_shard_size = tuple(args.output_shard_shape[::-1]) + (inv_deform_chunks[-1],)
+    else:
+        inv_deform_shard_size = None
     inv_deform_field = io_utility.create_dataset_array(
         inv_transform_path,
         inv_transform_subpath,
         local_deform_field.shape,
-        tuple(inv_transform_blocksize) + (len(inv_transform_blocksize),),
+        inv_deform_chunks,
         local_deform_field.dtype,
         overwrite=True,
         compressor=args.compressor,
@@ -189,7 +209,8 @@ def _run_compute_inverse(args):
         pixelResolution=calc_full_voxel_resolution_attr(local_deform_field.voxel_spacing,
                                                         local_deform_field.voxel_downsampling),
         downsamplingFactors=calc_downsampling_attr(local_deform_field.voxel_downsampling),
-        zarr_format=2,
+        zarr_format=args.output_zarr_format,
+        shard_shape=inv_deform_shard_size,
     )
 
     # open a dask client

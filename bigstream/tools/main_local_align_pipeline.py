@@ -122,7 +122,7 @@ def _define_args(local_descriptor):
                              help='Maximum number of concurrent reads from a zarr array')
     args_parser.add_argument('--compression', '--compressor',
                              dest='compressor',
-                             default='gzip',
+                             default='zstd',
                              type=str,
                              help='Codec used for zarr arrays. ' +
                              'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
@@ -131,6 +131,20 @@ def _define_args(local_descriptor):
                              default={},
                              type=dictfromjson,
                              help='Zarr array compression options')
+    args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
+                             dest='output_zarr_format',
+                             default=2,
+                             type=int,
+                             help='Zarr output format')
+    args_parser.add_argument('--output-shard-shape', '--output_shard_shape',
+                             dest='output_shard_shape',
+                             default=None,
+                             type=inttuple,
+                             help='Zarr v3 shard shape in xyz order, '
+                                  'e.g. 512,512,512. Each component must be '
+                                  'a positive multiple of the corresponding '
+                                  'chunk dimension. Ignored when '
+                                  '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -165,6 +179,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          logging_config:str|None=None,
                          compressor:str|None=None,
                          compressor_opts:dict={},
+                         zarr_format:int=2,
+                         shard_shape=None,
                          verbose=False,
                          foreground_percentage=0,
                          max_concurrent_zarr_reads=0,
@@ -190,7 +206,11 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         # block are defined as x,y,z so I am reversing it to z,y,x
         local_processing_size = processing_size[::-1]
     else:
-        default_processing_size = (default_blocksize,) * fix_image.ndim
+        if shard_shape:
+            # align work partitions to shard boundaries when sharding is enabled
+            default_processing_size = tuple(shard_shape[::-1])
+        else:
+            default_processing_size = (default_blocksize,) * fix_image.ndim
         local_processing_size = local_config.get('block_size',
                                                  default_processing_size)
 
@@ -312,6 +332,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             cluster_client,
             compressor,
             compressor_opts,
+            zarr_format,
+            shard_shape,
             foreground_percentage,
             max_concurrent_zarr_reads,
             max_cluster_jobs,
@@ -353,6 +375,8 @@ def _align_local_data(fix_image: ImageData,
                       cluster_client,
                       compressor,
                       compressor_opts,
+                      zarr_format,
+                      shard_shape,
                       foreground_percentage,
                       max_concurrent_zarr_reads,
                       max_cluster_jobs):
@@ -394,6 +418,10 @@ def _align_local_data(fix_image: ImageData,
             dataset_transformations=coordinate_transformations,
         )
         deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
+        if shard_shape:
+            deformfield_output_shardsize = tuple(shard_shape[::-1]) + (1,)  # xyz -> zyx, vector axis
+        else:
+            deformfield_output_shardsize = None
         deformfield = io_utility.create_dataset_array(
             deformfield_path,
             deformfield_subpath,
@@ -407,7 +435,8 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
                                                             transform_downsampling),
             downsamplingFactors=calc_downsampling_attr(transform_downsampling),
-            zarr_format=2,
+            zarr_format=zarr_format,
+            shard_shape=deformfield_output_shardsize,
         )
     else:
         deformfield = None
@@ -467,6 +496,10 @@ def _align_local_data(fix_image: ImageData,
             dataset_transformations=coordinate_transformations,
         )
         inv_deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
+        if shard_shape:
+            inv_deformfield_output_shardsize = tuple(shard_shape[::-1]) + (1,)  # xyz -> zyx, vector axis
+        else:
+            inv_deformfield_output_shardsize = None
         inv_deformfield = io_utility.create_dataset_array(
             inv_deformfield_path,
             inv_deformfield_subpath,
@@ -480,7 +513,8 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
                                                             transform_downsampling),
             downsamplingFactors=calc_downsampling_attr(transform_downsampling),
-            zarr_format=2,
+            zarr_format=zarr_format,
+            shard_shape=inv_deformfield_output_shardsize,
         )
 
         deform_field_spacing = get_spatial_values(fix_image.voxel_spacing)
@@ -545,6 +579,15 @@ def _align_local_data(fix_image: ImageData,
             align_chunk_size = (1,) * (len(align_shape)-len(align_chunksize)) + tuple(get_spatial_values(align_chunksize))
         else:
             align_chunk_size = tuple(get_spatial_values(align_chunksize))
+        if shard_shape:
+            align_shard_size = tuple(shard_shape[::-1])  # xyz -> zyx
+            if len(align_shard_size) < len(align_chunk_size):
+                align_shard_size = (
+                    (1,) * (len(align_chunk_size) - len(align_shard_size))
+                    + align_shard_size
+                )
+        else:
+            align_shard_size = None
         align = io_utility.create_dataset_array(
             align_path,
             align_subpath,
@@ -560,7 +603,8 @@ def _align_local_data(fix_image: ImageData,
             pixelResolution=calc_full_voxel_resolution_attr(mov_image.voxel_spacing,
                                                             mov_image.voxel_downsampling),
             downsamplingFactors=calc_downsampling_attr(mov_image.voxel_downsampling),
-            zarr_format=2,
+            zarr_format=zarr_format,
+            shard_shape=align_shard_size,
         )
         logger.info(f'Apply static transforms {static_transforms}' +
                     f'and local transform {deformfield_path}:{deformfield_subpath}' +
@@ -638,6 +682,8 @@ def main():
         logging_config=args.logging_config,
         compressor=args.compressor,
         compressor_opts=args.compressor_opts,
+        zarr_format=args.output_zarr_format,
+        shard_shape=args.output_shard_shape,
         verbose=args.verbose,
         foreground_percentage=args.foreground_percentage,
         max_concurrent_zarr_reads=args.max_concurrent_zarr_reads,

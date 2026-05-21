@@ -204,6 +204,7 @@ def _compute_registration_metric(args):
             output_subpath,
             axes=axes,
             dataset_transformations=coordinate_transformations,
+            zarr_format=args.output_zarr_format,
         )
         if args.output_shard_shape:
             output_shard_size = tuple(args.output_shard_shape[::-1])  # xyz -> zyx

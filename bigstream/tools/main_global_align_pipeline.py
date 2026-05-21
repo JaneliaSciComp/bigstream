@@ -297,6 +297,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             axes=axes,
             dataset_transformations=dataset_transformations,
             global_transformations=global_transformations,
+            zarr_format=zarr_format,
         )
         fix_shape = fix_image.shape
 

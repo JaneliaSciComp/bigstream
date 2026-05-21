@@ -241,6 +241,7 @@ def _run_apply_transform(args):
             output_subpath,
             axes=mov_data.get_attr('axes'),
             dataset_transformations=mov_data.get_attr('coordinateTransformations'),
+            zarr_format=args.output_zarr_format,
         )
         if args.output_timeindex is not None:
             output_timeindex = args.output_timeindex

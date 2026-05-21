@@ -59,6 +59,11 @@ def _define_args():
                              type=floattuple,
                              default=(),
                              help='Gaussian smoothing sigma at the finest shrink factor; coarser shrink factors use proportionally larger sigmas')
+    args_parser.add_argument('--mask-iterations',
+                             dest='mask_iterations',
+                             type=inttuple,
+                             default=(),
+                             help='Number of iterations per sigma for generating the foreground mask - if specified there must be a one to one correspondence with the sigmas')
     args_parser.add_argument('--mask-lambda',
                              dest='mask_lambda2',
                              type=float,
@@ -148,7 +153,11 @@ def _generate_foreground_mask(args):
     )
     logger.debug(f'Read image of shape: {image_array.shape}')
 
-    mask_iterations = [10, 20, 40]
+    if not args.mask_iterations:
+        mask_iterations = [10, 20, 40]
+    else:
+        mask_iterations = list(args.mask_iterations)
+
     if not args.mask_smooth_sigmas:
         smooth_sigmas = [8, 16, 24]
     elif len(args.mask_smooth_sigmas) < len(mask_iterations):
@@ -188,6 +197,7 @@ def _generate_foreground_mask(args):
         args.output_subpath,
         axes=axes,
         dataset_transformations=coordinate_transformations,
+        zarr_format=args.output_zarr_format,
     )
 
     if args.output_shard_shape:

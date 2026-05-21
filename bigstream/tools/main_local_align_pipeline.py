@@ -416,6 +416,7 @@ def _align_local_data(fix_image: ImageData,
             deformfield_subpath,
             axes=deformfield_axes,
             dataset_transformations=coordinate_transformations,
+            zarr_format=zarr_format,
         )
         deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
         if shard_shape:
@@ -494,6 +495,7 @@ def _align_local_data(fix_image: ImageData,
             inv_deformfield_subpath,
             axes=deformfield_axes,
             dataset_transformations=coordinate_transformations,
+            zarr_format=zarr_format,
         )
         inv_deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
         if shard_shape:
@@ -572,6 +574,7 @@ def _align_local_data(fix_image: ImageData,
             axes=axes,
             dataset_transformations=mov_image.get_attr('coordinateTransformations'),
             global_transformations=global_transformations,
+            zarr_format=zarr_format,
         )
         align_shape = fix_image.shape
         if len(align_chunksize) < len(align_shape):

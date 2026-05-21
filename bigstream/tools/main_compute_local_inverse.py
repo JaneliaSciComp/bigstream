@@ -189,6 +189,7 @@ def _run_compute_inverse(args):
         inv_transform_subpath,
         axes=local_deform_field.get_attr('axes'),
         dataset_transformations=local_deform_field.get_attr('coordinateTransformations'),
+        zarr_format=args.output_zarr_format,
     )
     inv_deform_chunks = tuple(inv_transform_blocksize) + (len(inv_transform_blocksize),)
     if args.output_shard_shape:

@@ -8,7 +8,17 @@ import re
 import tensorstore as ts
 import zarr
 
-from ome_zarr_models.v04.image import Dataset
+from dataclasses import asdict as _dc_asdict
+
+import ngff_zarr
+from ngff_zarr.v04.zarr_metadata import (
+    Axis as _AxisV04,
+    Dataset as _DatasetV04,
+    Metadata as _MetadataV04,
+    Scale as _ScaleV04,
+    Translation as _TranslationV04,
+)
+from ngff_zarr.v05.zarr_metadata import Metadata as _MetadataV05
 from tifffile import TiffFile
 
 
@@ -24,14 +34,16 @@ def _get_compressor(compressor: str | None, compression_opts: dict, zarr_format:
         import zarr.codecs as zv3codecs
 
         compressor_map = {
+            'zstd': zv3codecs.ZstdCodec,
+            'gzip': zv3codecs.GzipCodec,
+            'blosc': zv3codecs.BloscCodec,
+            'crc32c': zv3codecs.Crc32cCodec,
+            # 'packbits', 'zlib', 'bz2', 'lzma', 'lz4' → only available as numcodecs
             'packbits': zv3codecs.PackBits,
-            'zstd': zv3codecs.Zstd,
             'zlib': zv3codecs.Zlib,
-            'gzip': zv3codecs.GZip,
             'bz2': zv3codecs.BZ2,
             'lzma': zv3codecs.LZMA,
             'lz4': zv3codecs.LZ4,
-            'blosc': zv3codecs.Blosc,
         }
         codec_cls = compressor_map.get(compressor.lower())
         if codec_cls is None:
@@ -50,6 +62,21 @@ def _compressor_kwargs(codec, zarr_format: int):
         return {'compressors': compressors}
     else:
         return {'compressors': codec}
+
+
+def _ensure_parent_groups(root_group, container_subpath):
+    # Materialize each intermediate group along container_subpath so that
+    # the subsequent create_array call finds every parent already on disk.
+    # Workaround for zarr-python 3's ensure_parents=True path, which writes
+    # missing parent zarr.json via set_if_not_exists -> os.link, failing on
+    # filesystems without hardlink support (NFS/SMB/exFAT/FUSE).
+    if not container_subpath:
+        return
+    comps = [c for c in container_subpath.split('/') if c]
+    for i in range(1, len(comps)):
+        prefix = '/'.join(comps[:i])
+        if prefix not in root_group:
+            root_group.require_group(prefix)
 
 
 def create_dataset_array(
@@ -189,6 +216,7 @@ def _create_dataset_zarray(
 
         codec = _get_compressor(compressor, compression_opts, zarr_format)
         compressor_args = _compressor_kwargs(codec, zarr_format)
+        logger.info(f'Dataset compression arguments: {codec}:{compressor_args}')
 
         chunk_key_separator = {'name': 'v2', 'separator': '/'} if zarr_format == 2 else None
 
@@ -234,6 +262,7 @@ def _create_dataset_zarray(
                 # total replacement with empty container
                 final_dataset_shape = _get_array_shape(shape, for_timeindex, for_channel)
                 dataset_shape = final_dataset_shape
+                _ensure_parent_groups(root_group, container_subpath)
                 dataset_array = root_group.create_array(
                     container_subpath,
                     shape=_to_native_type(dataset_shape),
@@ -264,6 +293,7 @@ def _create_dataset_zarray(
                     final_dataset_shape = _get_array_shape(shape, for_timeindex, for_channel)
                     dataset_shape = final_dataset_shape
                     try:
+                        _ensure_parent_groups(root_group, container_subpath)
                         dataset_array = root_group.create_array(
                             container_subpath,
                             shape=_to_native_type(dataset_shape),
@@ -375,24 +405,150 @@ def _get_array_shape(dataset_shape, for_timeindex, for_channel):
     return final_shape
 
 
-def _merge_ome_parent_attrs(existing_attrs, new_attrs):
-    """Merge new parent attrs with existing, preserving OME datasets list."""
+def _detect_ome_version(group_attrs):
+    """Return '0.4' for top-level multiscales, '0.5' for ome.multiscales, else None."""
+    if not isinstance(group_attrs, dict):
+        return None
+    if group_attrs.get('multiscales'):
+        return '0.4'
+    ome = group_attrs.get('ome')
+    if isinstance(ome, dict) and ome.get('multiscales'):
+        return '0.5'
+    return None
+
+
+def _get_multiscales_entry(group_attrs, ome_version):
+    """Return first multiscales entry dict from group attrs."""
+    if ome_version == '0.4':
+        ms = group_attrs.get('multiscales')
+        return ms[0] if ms else None
+    if ome_version == '0.5':
+        ms = group_attrs.get('ome', {}).get('multiscales')
+        return ms[0] if ms else None
+    return None
+
+
+def _axis_input_to_axis(a):
+    if isinstance(a, _AxisV04):
+        return a
+    return _AxisV04(
+        name=a.get('name'),
+        type=a.get('type'),
+        unit=a.get('unit'),
+    )
+
+
+def _transform_input_to_object(td):
+    if td is None:
+        return None
+    if isinstance(td, (_ScaleV04, _TranslationV04)):
+        return td
+    ttype = td.get('type')
+    if ttype == 'scale':
+        return _ScaleV04(scale=list(td['scale']))
+    if ttype == 'translation':
+        return _TranslationV04(translation=list(td['translation']))
+    return None
+
+
+def _transform_object_to_dict(t):
+    if isinstance(t, _ScaleV04):
+        return {'type': 'scale', 'scale': list(t.scale)}
+    if isinstance(t, _TranslationV04):
+        return {'type': 'translation', 'translation': list(t.translation)}
+    if hasattr(t, '__dataclass_fields__'):
+        return _dc_asdict(t)
+    if isinstance(t, dict):
+        return t
+    return t
+
+
+def _clean_metadata_dict(metadata_dict):
+    """Strip optional/null fields from a serialized NGFF metadata dict.
+
+    Mirrors ngff_zarr.to_ngff_zarr._pop_metadata_optionals.
+    """
+    for ax in metadata_dict.get('axes', []) or []:
+        if ax.get('unit') is None:
+            ax.pop('unit', None)
+        ax.pop('orientation', None)
+    if metadata_dict.get('coordinateTransformations') is None:
+        metadata_dict.pop('coordinateTransformations', None)
+    if metadata_dict.get('omero') is None:
+        metadata_dict.pop('omero', None)
+    if metadata_dict.get('type') is None:
+        metadata_dict.pop('type', None)
+    if metadata_dict.get('metadata') is None:
+        metadata_dict.pop('metadata', None)
+    return metadata_dict
+
+
+def _build_ngff_metadata(name, dataset_path, axes,
+                        dataset_transformations,
+                        global_transformations,
+                        zarr_format):
+    """Build a typed ngff-zarr Metadata object for the target zarr_format."""
+    axis_objs = [_axis_input_to_axis(a) for a in (axes or [])]
+    dataset_xforms = [
+        _transform_input_to_object(t) for t in (dataset_transformations or [])
+    ]
+    dataset_xforms = [t for t in dataset_xforms if t is not None]
+    datasets = [_DatasetV04(path=dataset_path,
+                            coordinateTransformations=dataset_xforms)]
+    if global_transformations:
+        global_xforms = [
+            _transform_input_to_object(t) for t in global_transformations
+        ]
+        global_xforms = [t for t in global_xforms if t is not None] or None
+    else:
+        global_xforms = None
+    if zarr_format == 3:
+        return _MetadataV05(
+            axes=axis_objs,
+            datasets=datasets,
+            coordinateTransformations=global_xforms,
+            name=name,
+        )
+    return _MetadataV04(
+        axes=axis_objs,
+        datasets=datasets,
+        coordinateTransformations=global_xforms,
+        name=name,
+    )
+
+
+def _serialize_ngff_metadata(metadata, zarr_format):
+    """Serialize a typed metadata object to a dict laid out for the target version."""
+    metadata_dict = _clean_metadata_dict(_dc_asdict(metadata))
+    if zarr_format == 3:
+        # v0.5: ome envelope; version sits at ome level
+        return {'ome': {'version': '0.5', 'multiscales': [metadata_dict]}}
+    # v0.4: top-level multiscales; version inside multiscales[0]
+    return {'multiscales': [metadata_dict]}
+
+
+def _merge_ngff_metadata(existing_attrs, new_attrs):
+    """Merge new parent attrs with existing, preserving OME datasets list.
+
+    Handles both v0.4 (top-level `multiscales`) and v0.5 (`ome.multiscales`).
+    """
     if not new_attrs:
         return new_attrs
-
-    existing_multiscales = existing_attrs.get('multiscales')
-    new_multiscales = new_attrs.get('multiscales')
-
-    if not existing_multiscales or not new_multiscales:
+    new_version = _detect_ome_version(new_attrs)
+    if new_version is None:
+        return new_attrs
+    existing_version = _detect_ome_version(existing_attrs)
+    if existing_version != new_version:
         return new_attrs
 
-    existing_ms = existing_multiscales[0]
-    new_ms = new_multiscales[0]
+    existing_ms = _get_multiscales_entry(existing_attrs, existing_version)
+    new_ms = _get_multiscales_entry(new_attrs, new_version)
+    if existing_ms is None or new_ms is None:
+        return new_attrs
 
     existing_datasets = list(existing_ms.get('datasets', []))
     new_datasets = new_ms.get('datasets', [])
 
-    # merge: replace by path or append
     for new_ds in new_datasets:
         new_path = new_ds.get('path')
         replaced = False
@@ -404,21 +560,19 @@ def _merge_ome_parent_attrs(existing_attrs, new_attrs):
         if not replaced:
             existing_datasets.append(new_ds)
 
-    # merge paths list
-    existing_paths = list(existing_ms.get('paths', []))
-    new_paths = new_ms.get('paths', [])
-    for p in new_paths:
-        if p not in existing_paths:
-            existing_paths.append(p)
-
-    # build merged multiscales entry - start from new, override datasets/paths
     merged_ms = dict(new_ms)
     merged_ms['datasets'] = existing_datasets
-    merged_ms['paths'] = existing_paths
 
-    merged_attrs = dict(new_attrs)
-    merged_attrs['multiscales'] = [merged_ms]
-    return merged_attrs
+    if new_version == '0.4':
+        merged = {**existing_attrs, **new_attrs, 'multiscales': [merged_ms]}
+    else:
+        merged_ome = {
+            **(existing_attrs.get('ome') or {}),
+            **(new_attrs.get('ome') or {}),
+        }
+        merged_ome['multiscales'] = [merged_ms]
+        merged = {**existing_attrs, **new_attrs, 'ome': merged_ome}
+    return merged
 
 
 def _update_dataset_attrs(root_container, dataset,
@@ -436,7 +590,7 @@ def _update_dataset_attrs(root_container, dataset,
         parent_container = root_container
 
     # merge OME multiscales datasets if parent already has metadata
-    merged_attrs = _merge_ome_parent_attrs(
+    merged_attrs = _merge_ngff_metadata(
         dict(parent_container.attrs), parent_attrs
     )
 
@@ -584,9 +738,14 @@ def prepare_parent_group_attrs(container_path,
                                dataset_path,
                                axes=None,
                                dataset_transformations=None,
-                               global_transformations=[]):
+                               global_transformations=None,
+                               zarr_format=2):
     """
-    Prepare an attributes dictionary for a dataset in an OME-ZARR container
+    Prepare an OME-NGFF metadata dictionary for the parent group of a dataset.
+
+    The returned dict layout depends on ``zarr_format``:
+      - ``zarr_format == 2``: emits OME-NGFF v0.4 (top-level ``multiscales``).
+      - ``zarr_format == 3``: emits OME-NGFF v0.5 (under ``ome``).
 
     Parameters
     ----------
@@ -596,19 +755,22 @@ def prepare_parent_group_attrs(container_path,
     dataset_path : string
         Subpath to the dataset within the container
 
-    axes : list of Axis objects (default: None)
-        Which axes are present in the dataset
-        See ome_zarr_models.v04.axes.Axis
+    axes : list of dicts or ngff_zarr.Axis (default: None)
+        Which axes are present in the dataset.
 
-    dataset_transformations : tuple of VectorScale and/or VectorTranslation (default: None)
-        The scale and translation of the dataset.
-        See ome_zarr_models.v04.coordinate_transformations.VectorScale
-        See ome_zarr_models.v04.coordinate_transformations.VectorTranslation
+    dataset_transformations : iterable of dicts or transform objects (default: None)
+        Per-dataset scale and translation transformations.
+
+    global_transformations : iterable of dicts or transform objects (default: None)
+        Multiscale-level coordinate transformations.
+
+    zarr_format : int (default: 2)
+        Target zarr format. 2 → OME-NGFF v0.4. 3 → OME-NGFF v0.5.
 
     Returns
     -------
     attrs : dict
-        A dictionary with attributes formatted for OME-ZARR v.04
+        Group attributes ready to be written via ``parent.attrs.update(...)``.
     """
 
     # case of no relevant metadata
@@ -621,47 +783,24 @@ def prepare_parent_group_attrs(container_path,
         dataset_path_comps = [c for c in dataset_path.split('/') if c]
         logger.info(f'Lookup dataset path: {dataset_path} in {dataset_path_comps}')
         # take the last component of the dataset path to be the scale path
-        dataset_scale_subpath = dataset_path_comps.pop()
+        dataset_scale_subpath = dataset_path_comps.pop() if dataset_path_comps else '.'
     else:
         # No subpath was provided - I am using '.', but
         # this may be problematic - I don't know yet how to handle it properly
         logger.info('No dataset was provided - will use "." for dataset subpath')
         dataset_scale_subpath = '.'
 
-    # pull scales and translations out of dataset_transformations
-    scales, translations = None, None
-    if dataset_transformations is not None:
-        for t in dataset_transformations:
-            if t['type'] == 'scale':
-                scales = t['scale']
-            elif t['type'] == 'translation':
-                translations = t['translation']
+    name = os.path.basename(container_path)
+    metadata = _build_ngff_metadata(
+        name=name,
+        dataset_path=dataset_scale_subpath,
+        axes=axes,
+        dataset_transformations=dataset_transformations,
+        global_transformations=global_transformations,
+        zarr_format=zarr_format,
+    )
+    return _serialize_ngff_metadata(metadata, zarr_format)
 
-    # construct minimal attributes
-    multiscale_attrs = {
-        'name': os.path.basename(container_path),
-        'axes': axes if axes is not None else [],
-        'version': '0.4',
-    }
-
-    # add a dataset
-    if scales is not None:
-        dataset = Dataset.build(path=dataset_scale_subpath, scale=scales, translation=translations)
-        multiscale_attrs.update({
-            'datasets': (dataset.dict(exclude_none=True),),
-            'paths': [dataset_scale_subpath],
-        })
-
-    if global_transformations is not None and len(global_transformations) > 0:
-        multiscale_attrs.update({
-            'coordinateTransformations': global_transformations,
-        })
-
-    # format and return
-    return {
-        'multiscales': [ multiscale_attrs ],
-    }
-    
 
 def read_image_container_attributes(container_path, subpath, container_type=None):
     """
@@ -848,169 +987,190 @@ def _open_zarr(data_path, data_subpath,
                data_timeindex=None, data_channels=None,
                block_coords=None):
     """
-    Open a zarr container, optionally read a region into memory
+    Open a zarr container, optionally read a region into memory.
+
+    For OME-NGFF containers (v0.4 or v0.5) metadata parsing is delegated to
+    ngff-zarr. Data is read directly from the underlying ``zarr.Array`` to
+    preserve the existing contract (numpy on selection, lazy zarr otherwise)
+    and avoid pulling in a dask scheduler.
     """
     try:
-        # guarantee a metadata file is in the container folder, identify store, open
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath)
         data_store = _get_data_store(zarr_container_path)
         data_container = zarr.open(store=data_store, mode='r')
-        multiscales_group, dataset_subpath, multiscale_attrs = _find_ome_multiscales(data_container, zarr_subpath)
-        if multiscales_group is not None:
-            # if ome-zarr parse appropriately, otherwise apply subpath and block_coords and return
+
+        ome_group, ome_group_subpath, remaining_subpath, ome_version = (
+            _find_ome_in_zarr(data_container, zarr_subpath)
+        )
+        if ome_group is not None:
             logger.debug((
-                f'Open OME container {data_container}, '
-                f'dataset: {dataset_subpath}, timeindex: {data_timeindex}, '
+                f'Open OME container {data_container} at {ome_group_subpath}, '
+                f'dataset: {remaining_subpath}, timeindex: {data_timeindex}, '
                 f'channels: {data_channels}, block_coords {block_coords} '
             ))
-            return _open_ome_zarr(multiscales_group, multiscale_attrs, dataset_subpath,
-                                  data_timeindex=data_timeindex,
-                                  data_channels=data_channels,
-                                  block_coords=block_coords)
-        else:
-            a = data_container[zarr_subpath] if zarr_subpath else data_container
-            ba = a[block_coords] if block_coords is not None else a
-            return ba, a.attrs.asdict()
+            ome_store_path = (
+                f'{zarr_container_path}/{ome_group_subpath}'
+                if ome_group_subpath else zarr_container_path
+            )
+            multiscales = ngff_zarr.from_ngff_zarr(ome_store_path, version=ome_version)
+            image, dataset_metadata = _select_ngff_dataset(multiscales, remaining_subpath)
+            dataset_in_container = (
+                f'{ome_group_subpath}/{dataset_metadata.path}'
+                if ome_group_subpath else dataset_metadata.path
+            )
+            arr_node = data_container[dataset_in_container]
+            data = _slice_zarr_array(arr_node, multiscales.metadata.axes,
+                                     data_timeindex, data_channels, block_coords)
+            attrs = _build_attrs_view(
+                multiscales, dataset_metadata, arr_node,
+                data_timeindex, data_channels,
+            )
+            arr_attrs = arr_node.attrs.asdict()
+            for k in ('axes', 'coordinateTransformations',
+                      'globalCoordinateTransformations', 'multiscales',
+                      'dataset_path', 'dimensions', 'dataType', 'blockSize',
+                      'timeindex', 'channels'):
+                arr_attrs.pop(k, None)
+            attrs = {**arr_attrs, **attrs}
+            return data, attrs
+
+        # plain zarr: no OME multiscales
+        a = data_container[zarr_subpath] if zarr_subpath else data_container
+        ba = a[block_coords] if block_coords is not None else a
+        return ba, a.attrs.asdict()
     except Exception as e:
-        logger.exception(f'Error opening {data_path} : {data_subpath} : {data_timeindex} : {data_channels} : {block_coords} -> {e}')
+        logger.exception(
+            f'Error opening {data_path} : {data_subpath} : {data_timeindex} : '
+            f'{data_channels} : {block_coords} -> {e}'
+        )
         raise e
 
 
-def _find_ome_multiscales(data_container, data_subpath):
-    logger.info(f'Find OME multiscales group within {data_subpath}')
-    dataset_subpath_arg = data_subpath if data_subpath is not None else ''
-    dataset_comps = [c for c in dataset_subpath_arg.split('/') if c]
+def _find_ome_in_zarr(data_container, data_subpath):
+    """Walk subpath looking for the first group with OME multiscales attrs.
 
-    dataset_comps_index = 0
-    while dataset_comps_index < len(dataset_comps):
-        group_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
-        dataset_item = data_container[group_subpath]
-        dataset_item_attrs = dataset_item.attrs.asdict()
-        is_ome_candidate = dataset_item_attrs.get('multiscales') or dataset_item_attrs.get('ome')
-        if not is_ome_candidate:
-            dataset_comps_index = dataset_comps_index + 1
-        else:
-            logger.debug(f'Found multiscales at {group_subpath}: {dataset_item_attrs}')
-            # found a group that has attributes which contain multiscales list
-            return dataset_item, '/'.join(dataset_comps[dataset_comps_index:]), dataset_item_attrs
-
-    data_container_attrs = data_container.attrs.asdict()
-    is_ome_candidate = data_container_attrs.get('multiscales') or data_container_attrs.get('ome')
-    if is_ome_candidate:
-        # the container itself has multiscales attributes
-        return data_container, '', data_container_attrs
-    else:
-        return None, None, {}
-
-
-def _open_ome_zarr(multiscales_group, multiscales_attrs, dataset_subpath,
-                   data_timeindex=None, data_channels=None, block_coords=None):
-    dataset_comps = [c for c in dataset_subpath.split('/') if c]
-    multiscales = multiscales_attrs.get('multiscales') or multiscales_attrs.get('ome', {}).get('multiscales')
-    multiscale_metadata = multiscales[0]
-    # pprint.pprint(ome_metadata)
-    dataset_metadata = None
-    # lookup the dataset by path
-    for ds in multiscale_metadata.get('datasets', []):
-        ds_path = ds.get('path', '')
-        current_ds_path_comps = [c for c in ds_path.split('/') if c]
-        logger.debug((
-            f'Compare current dataset path: {ds_path} ({current_ds_path_comps}) '
-            f'with {dataset_subpath} ({dataset_comps}) '
-        ))
-        if (len(current_ds_path_comps) <= len(dataset_comps) and
-            tuple(current_ds_path_comps) == tuple(dataset_comps[-len(current_ds_path_comps):])):
-            # found a dataset that has a path matching a suffix of the dataset_subpath arg
-            dataset_metadata = ds
-            currrent_dataset_path = ds.get('path')
-            # drop the matching suffix
-            dataset_comps = dataset_comps[-len(current_ds_path_comps):]
-            logger.debug((
-                f'Found dataset: {currrent_dataset_path}, '
-                f'remaining dataset components: {dataset_comps}'
-            ))
+    Returns (ome_group, group_subpath, remaining_subpath, ome_version) or
+    (None, None, None, None) if no OME group is found.
+    """
+    subpath_arg = data_subpath if data_subpath is not None else ''
+    comps = [c for c in subpath_arg.split('/') if c]
+    for i in range(len(comps) + 1):
+        group_subpath = '/'.join(comps[:i])
+        try:
+            item = data_container[group_subpath] if group_subpath else data_container
+        except KeyError:
             break
-
-    if dataset_metadata is None:
-        # could not find a dataset using the subpath 
-        # look at the last subpath component and get the dataset index from there
-        # e.g., if the subpath looks like:
-        #       '/s<n>' => datasets[n] if n < len(datasets) otherwise datasets[0]
-        dataset_index_comp = dataset_comps[-1]
-        logger.info(f'No dataset was found using {dataset_subpath} - try to use: {dataset_index_comp}')
-        dataset_index = _extract_numeric_comp(dataset_index_comp)
-        if dataset_index < len(multiscale_metadata.get('datasets', [])):
-            dataset_metadata = multiscale_metadata['datasets'][dataset_index]
-        else:
-            dataset_metadata = multiscale_metadata['datasets'][0]
-
-    dataset_axes = multiscale_metadata.get('axes')
-    dataset_path = dataset_metadata.get('path')
-    dataset_transformations = dataset_metadata.get('coordinateTransformations')
-    global_transformations = multiscale_metadata.get('coordinateTransformations')
-    a = multiscales_group[dataset_path]
-    # a is potentially a 5-dim array: [timepoint?, channel?, z, y, x]
-    if block_coords is not None:
-        ba = _get_array_selector(dataset_axes, data_timeindex, data_channels, block_coords)(a)
-    else:
-        ba = _get_array_selector(dataset_axes, data_timeindex, data_channels, None)(a)
-    multiscales_attrs.update(a.attrs.asdict())
-    multiscales_attrs.update({
-        'dataset_path': dataset_path,
-        'axes': dataset_axes,
-        'dimensions': a.shape,
-        'dataType': a.dtype,
-        'blockSize': a.chunks,
-        'timeindex': data_timeindex,
-        'channels': data_channels,
-        'coordinateTransformations': dataset_transformations,
-        'globalCoordinateTransformations': global_transformations,
-    })
-    return ba, multiscales_attrs
+        attrs = item.attrs.asdict()
+        version = _detect_ome_version(attrs)
+        if version is not None:
+            return item, group_subpath, '/'.join(comps[i:]), version
+    return None, None, None, None
 
 
-def _get_array_selector(axes, timeindex: int | None,
-                        ch:int | list[int] | None,
-                        block_coords: tuple | None):
+def _select_ngff_dataset(multiscales, dataset_subpath):
+    """Pick an NgffImage + Dataset from a parsed NgffMultiscales by subpath.
+
+    First tries a suffix match against each dataset's stored path; falls back
+    to extracting a numeric index from the last subpath component (e.g. 's2'
+    → datasets[2]); otherwise returns datasets[0].
+    """
+    datasets = multiscales.metadata.datasets
+    images = multiscales.images
+    if not datasets:
+        raise ValueError(f'No datasets in multiscales for subpath {dataset_subpath!r}')
+    comps = [c for c in (dataset_subpath or '').split('/') if c]
+    for idx, ds in enumerate(datasets):
+        ds_comps = [c for c in (ds.path or '').split('/') if c]
+        if (ds_comps and len(ds_comps) <= len(comps) and
+            tuple(ds_comps) == tuple(comps[-len(ds_comps):])):
+            return images[idx], ds
+    if comps:
+        match = re.match(r'^(\D*)(\d+)$', comps[-1])
+        if match:
+            i = int(match.group(2))
+            if i < len(datasets):
+                return images[i], datasets[i]
+    return images[0], datasets[0]
+
+
+def _slice_zarr_array(arr, axes, timeindex, channels, block_coords):
+    """Apply time/channel/block selection to a zarr.Array.
+
+    Returns numpy when any selection was applied (matching zarr indexing
+    semantics); otherwise returns the lazy zarr.Array unchanged.
+    """
     selector = []
     selection_exists = False
-    spatial_selection = []
-    for a in axes:
-        if a.get('type') == 'time':
+    spatial_default = []
+    for ax in axes:
+        ax_type = ax.type if hasattr(ax, 'type') else ax.get('type')
+        if ax_type == 'time':
             if timeindex is not None:
                 selector.append(timeindex)
                 selection_exists = True
             else:
                 selector.append(slice(None, None))
-        elif a.get('type') == 'channel':
-            if ch is None or ch == []:
+        elif ax_type == 'channel':
+            if channels is None or channels == []:
                 selector.append(slice(None, None))
             else:
-                selector.append(ch)
+                selector.append(channels)
                 selection_exists = True
         else:
-            spatial_selection.append(slice(None, None))
+            spatial_default.append(slice(None, None))
 
     if block_coords is not None:
         selector.extend(block_coords)
         selection_exists = True
     else:
-        selector.extend(spatial_selection)
+        selector.extend(spatial_default)
 
-    def _selector(a):
-        if selection_exists:
-            try:
-                logger.debug(f'Read {selector}')
-                # try to select the data using the selector
-                return a[tuple(selector)]
-            except Exception  as e:
-                logger.exception(f'Error selecting data from {a} with selector {selector}')
-                raise e
-        else:
-            # no selection was made, so return the whole array
-            return a
+    if not selection_exists:
+        return arr
+    try:
+        logger.debug(f'Read {selector}')
+        return arr[tuple(selector)]
+    except Exception as e:
+        logger.exception(f'Error selecting data from {arr} with selector {selector}')
+        raise e
 
-    return _selector
+
+def _axis_to_dict(ax):
+    out = {'name': ax.name, 'type': ax.type}
+    if ax.unit is not None:
+        out['unit'] = ax.unit
+    return out
+
+
+def _build_attrs_view(multiscales, dataset_metadata, arr,
+                      data_timeindex, data_channels):
+    """Build the legacy attrs dict from parsed ngff-zarr objects and the
+    underlying zarr.Array (whose ``shape``/``dtype``/``chunks`` are used for
+    the dimensions/dataType/blockSize keys).
+    """
+    md = multiscales.metadata
+    axes_dicts = [_axis_to_dict(ax) for ax in md.axes]
+    dataset_xforms = [
+        _transform_object_to_dict(t)
+        for t in (dataset_metadata.coordinateTransformations or [])
+    ]
+    global_xforms = (
+        [_transform_object_to_dict(t) for t in md.coordinateTransformations]
+        if md.coordinateTransformations else None
+    )
+    metadata_dict = _clean_metadata_dict(_dc_asdict(md))
+    return {
+        'dataset_path': dataset_metadata.path,
+        'axes': axes_dicts,
+        'dimensions': arr.shape,
+        'dataType': arr.dtype,
+        'blockSize': arr.chunks,
+        'coordinateTransformations': dataset_xforms,
+        'globalCoordinateTransformations': global_xforms,
+        'timeindex': data_timeindex,
+        'channels': data_channels,
+        'multiscales': [metadata_dict],
+    }
 
 
 def _open_n5_attrs(data_path, data_subpath):
@@ -1074,20 +1234,40 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath)
         data_store = _get_data_store(zarr_container_path)
         data_container = zarr.open(store=data_store, mode='r')
-        multiscales_group, dataset_subpath, multiscale_attrs = _find_ome_multiscales(data_container, zarr_subpath)
-        print(f'!!!!!! dataset: {dataset_subpath} attrs: {multiscale_attrs}')
-        if multiscales_group is not None:
-            a, dataset_attrs = _open_ome_zarr(multiscales_group, multiscale_attrs, dataset_subpath)
-            dataset_attrs.update(a.attrs.asdict())
+
+        ome_group, ome_group_subpath, remaining_subpath, ome_version = (
+            _find_ome_in_zarr(data_container, zarr_subpath)
+        )
+        if ome_group is not None:
+            ome_store_path = (
+                f'{zarr_container_path}/{ome_group_subpath}'
+                if ome_group_subpath else zarr_container_path
+            )
+            multiscales = ngff_zarr.from_ngff_zarr(ome_store_path, version=ome_version)
+            _, dataset_metadata = _select_ngff_dataset(multiscales, remaining_subpath)
+            dataset_in_container = (
+                f'{ome_group_subpath}/{dataset_metadata.path}'
+                if ome_group_subpath else dataset_metadata.path
+            )
+            arr_node = data_container[dataset_in_container]
+            dataset_attrs = _build_attrs_view(multiscales, dataset_metadata, arr_node,
+                                              None, None)
+            arr_attrs = arr_node.attrs.asdict()
+            for k in ('axes', 'coordinateTransformations',
+                      'globalCoordinateTransformations', 'multiscales',
+                      'dataset_path', 'dimensions', 'dataType', 'blockSize',
+                      'timeindex', 'channels'):
+                arr_attrs.pop(k, None)
+            dataset_attrs = {**arr_attrs, **dataset_attrs}
         else:
             a = data_container[zarr_subpath] if zarr_subpath else data_container
             dataset_attrs = a.attrs.asdict()
+            dataset_attrs.update({
+                'dataType': a.dtype,
+                'dimensions': a.shape,
+                'blockSize': a.chunks,
+            })
 
-        dataset_attrs.update({
-            'dataType': a.dtype,
-            'dimensions': a.shape,
-            'blockSize': a.chunks,
-        })
         logger.info(f'{data_path}:{data_subpath} attrs: {dataset_attrs}')
         return dataset_attrs
     except Exception as e:
@@ -1168,9 +1348,3 @@ def _read_nrrd_attrs(input_path):
     return nrrd.read_header(input_path)
 
 
-def _extract_numeric_comp(v):
-    match = re.match(r'^(\D*)(\d+)$', v)
-    if match:
-        return int(match.groups()[1])
-    else:
-        raise ValueError(f'Invalid component: {v}')

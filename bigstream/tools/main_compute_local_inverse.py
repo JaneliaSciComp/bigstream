@@ -13,7 +13,7 @@ from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
                                   calc_downsampling_attr)
 
-from .cli import (dictfromjson, inttuple, floattuple)
+from .cli import (derive_shard_shape, dictfromjson, inttuple, floattuple)
 
 
 logger:logging.Logger
@@ -129,14 +129,17 @@ def _define_args():
                              default=2,
                              type=int,
                              help='Zarr output format')
-    args_parser.add_argument('--output-shard-shape', '--output_shard_shape',
-                             dest='output_shard_shape',
+    args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
+                             dest='output_sharding_factor',
                              default=None,
                              type=inttuple,
-                             help='Zarr v3 shard shape in xyz order, '
-                                  'e.g. 512,512,512. Each component must be '
-                                  'a positive multiple of the corresponding '
-                                  'chunk dimension. Ignored when '
+                             help='Zarr v3 sharding factor in xyz order, '
+                                  'e.g. 8,8,4. The shard shape is computed '
+                                  'elementwise as inv_transform_blocksize * '
+                                  'sharding_factor (the trailing vector axis '
+                                  'is not sharded). When sharding is enabled, '
+                                  'the processing block size defaults to the '
+                                  'shard spatial shape. Ignored when '
                                   '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
@@ -192,11 +195,23 @@ def _run_compute_inverse(args):
         zarr_format=args.output_zarr_format,
     )
     inv_deform_chunks = tuple(inv_transform_blocksize) + (len(inv_transform_blocksize),)
-    if args.output_shard_shape:
-        # xyz -> zyx, then match the chunk vector dim so shard is a multiple of chunk
-        inv_deform_shard_size = tuple(args.output_shard_shape[::-1]) + (inv_deform_chunks[-1],)
+    # apply factor to the spatial axes only; vector axis is never sharded
+    spatial_shard_size = derive_shard_shape(
+        args.output_sharding_factor,
+        tuple(inv_transform_blocksize),
+        args.output_zarr_format,
+    )
+    if spatial_shard_size is not None:
+        inv_deform_shard_size = tuple(spatial_shard_size) + (inv_deform_chunks[-1],)
+        processing_blocksize = tuple(spatial_shard_size)
     else:
         inv_deform_shard_size = None
+        processing_blocksize = tuple(inv_transform_blocksize)
+    logger.info(
+        f'Inverse processing block size: {processing_blocksize} '
+        f'(inv_transform_blocksize={inv_transform_blocksize}, '
+        f'inv_deform_shard_size={inv_deform_shard_size})'
+    )
     inv_deform_field = io_utility.create_dataset_array(
         inv_transform_path,
         inv_transform_subpath,
@@ -251,7 +266,7 @@ def _run_compute_inverse(args):
         distributed_invert_displacement_vector_field(
             local_deform_field.image_array,
             local_deform_spacing / args.deform_expansion_factor,
-            inv_transform_blocksize, # use blocksize for partitioning the work
+            processing_blocksize, # = shard spatial shape when sharding, else blocksize
             inv_deform_field,
             cluster_client,
             overlap_factor=args.processing_overlap_factor,

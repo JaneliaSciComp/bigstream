@@ -21,7 +21,7 @@ from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, get_algorithm_parameters,
                   extract_registration_input_args, get_input_images,
-                  dictfromjson, inttuple, floattuple)
+                  derive_shard_shape, dictfromjson, inttuple, floattuple)
 
 
 logger:logging.Logger
@@ -136,14 +136,18 @@ def _define_args(local_descriptor):
                              default=2,
                              type=int,
                              help='Zarr output format')
-    args_parser.add_argument('--output-shard-shape', '--output_shard_shape',
-                             dest='output_shard_shape',
+    args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
+                             dest='output_sharding_factor',
                              default=None,
                              type=inttuple,
-                             help='Zarr v3 shard shape in xyz order, '
-                                  'e.g. 512,512,512. Each component must be '
-                                  'a positive multiple of the corresponding '
-                                  'chunk dimension. Ignored when '
+                             help='Zarr v3 sharding factor in xyz order, '
+                                  'e.g. 8,8,4. Applied to each output chunk '
+                                  'shape (deformfield, inv-deformfield, '
+                                  'aligned volume) to derive its absolute '
+                                  'shard shape. When sharding is enabled and '
+                                  '--local-processing-size is not set, the '
+                                  'processing block size defaults to the '
+                                  'shard spatial shape. Ignored when '
                                   '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
@@ -180,7 +184,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          compressor:str|None=None,
                          compressor_opts:dict={},
                          zarr_format:int=2,
-                         shard_shape=None,
+                         sharding_factor=None,
                          verbose=False,
                          foreground_percentage=0,
                          max_concurrent_zarr_reads=0,
@@ -206,11 +210,16 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         # block are defined as x,y,z so I am reversing it to z,y,x
         local_processing_size = processing_size[::-1]
     else:
-        if shard_shape:
-            # align work partitions to shard boundaries when sharding is enabled
-            default_processing_size = tuple(shard_shape[::-1])
+        default_blocksize_tuple = (default_blocksize,) * fix_image.ndim
+        # when sharding is on, default the processing size to the shard shape
+        # so each worker processes one shard
+        default_shard = derive_shard_shape(
+            sharding_factor, default_blocksize_tuple, zarr_format
+        )
+        if default_shard is not None:
+            default_processing_size = default_shard
         else:
-            default_processing_size = (default_blocksize,) * fix_image.ndim
+            default_processing_size = default_blocksize_tuple
         local_processing_size = local_config.get('block_size',
                                                  default_processing_size)
 
@@ -333,7 +342,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             compressor,
             compressor_opts,
             zarr_format,
-            shard_shape,
+            sharding_factor,
             foreground_percentage,
             max_concurrent_zarr_reads,
             max_cluster_jobs,
@@ -376,7 +385,7 @@ def _align_local_data(fix_image: ImageData,
                       compressor,
                       compressor_opts,
                       zarr_format,
-                      shard_shape,
+                      sharding_factor,
                       foreground_percentage,
                       max_concurrent_zarr_reads,
                       max_cluster_jobs):
@@ -419,8 +428,14 @@ def _align_local_data(fix_image: ImageData,
             zarr_format=zarr_format,
         )
         deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
-        if shard_shape:
-            deformfield_output_shardsize = tuple(shard_shape[::-1]) + (1,)  # xyz -> zyx, vector axis
+        # factor applies to spatial axes only; vector axis is never sharded
+        deformfield_spatial_shard = derive_shard_shape(
+            sharding_factor,
+            tuple(get_spatial_values(deformfield_chunksize)),
+            zarr_format,
+        )
+        if deformfield_spatial_shard is not None:
+            deformfield_output_shardsize = tuple(deformfield_spatial_shard) + (1,)
         else:
             deformfield_output_shardsize = None
         deformfield = io_utility.create_dataset_array(
@@ -498,8 +513,13 @@ def _align_local_data(fix_image: ImageData,
             zarr_format=zarr_format,
         )
         inv_deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
-        if shard_shape:
-            inv_deformfield_output_shardsize = tuple(shard_shape[::-1]) + (1,)  # xyz -> zyx, vector axis
+        inv_deformfield_spatial_shard = derive_shard_shape(
+            sharding_factor,
+            tuple(get_spatial_values(deformfield_chunksize)),
+            zarr_format,
+        )
+        if inv_deformfield_spatial_shard is not None:
+            inv_deformfield_output_shardsize = tuple(inv_deformfield_spatial_shard) + (1,)
         else:
             inv_deformfield_output_shardsize = None
         inv_deformfield = io_utility.create_dataset_array(
@@ -582,15 +602,9 @@ def _align_local_data(fix_image: ImageData,
             align_chunk_size = (1,) * (len(align_shape)-len(align_chunksize)) + tuple(get_spatial_values(align_chunksize))
         else:
             align_chunk_size = tuple(get_spatial_values(align_chunksize))
-        if shard_shape:
-            align_shard_size = tuple(shard_shape[::-1])  # xyz -> zyx
-            if len(align_shard_size) < len(align_chunk_size):
-                align_shard_size = (
-                    (1,) * (len(align_chunk_size) - len(align_shard_size))
-                    + align_shard_size
-                )
-        else:
-            align_shard_size = None
+        align_shard_size = derive_shard_shape(
+            sharding_factor, align_chunk_size, zarr_format
+        )
         align = io_utility.create_dataset_array(
             align_path,
             align_subpath,
@@ -686,7 +700,7 @@ def main():
         compressor=args.compressor,
         compressor_opts=args.compressor_opts,
         zarr_format=args.output_zarr_format,
-        shard_shape=args.output_shard_shape,
+        sharding_factor=args.output_sharding_factor,
         verbose=args.verbose,
         foreground_percentage=args.foreground_percentage,
         max_concurrent_zarr_reads=args.max_concurrent_zarr_reads,

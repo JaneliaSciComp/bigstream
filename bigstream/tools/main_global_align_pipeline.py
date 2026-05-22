@@ -16,7 +16,7 @@ from bigstream.transform import apply_transform
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, get_algorithm_parameters,
                   extract_registration_input_args, get_input_images,
-                  dictfromjson, inttuple)
+                  derive_shard_shape, dictfromjson, inttuple)
 
 
 logger:logging.Logger
@@ -55,14 +55,15 @@ def _define_args(args_descriptor):
                              default=2,
                              type=int,
                              help='Zarr output format')
-    args_parser.add_argument('--output-shard-shape', '--output_shard_shape',
-                             dest='output_shard_shape',
+    args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
+                             dest='output_sharding_factor',
                              default=None,
                              type=inttuple,
-                             help='Zarr v3 shard shape in xyz order, '
-                                  'e.g. 512,512,512. Each component must be '
-                                  'a positive multiple of the corresponding '
-                                  'chunk dimension. Ignored when '
+                             help='Zarr v3 sharding factor in xyz order, '
+                                  'e.g. 8,8,4. The shard shape is computed '
+                                  'elementwise as output_blocksize * '
+                                  'sharding_factor (each factor must be a '
+                                  'positive integer). Ignored when '
                                   '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--cpus', dest='cpus',
@@ -85,7 +86,7 @@ def _run_global_align(reg_args:RegistrationInputs,
                       compressor,
                       compressor_opts,
                       zarr_format,
-                      shard_shape=None):
+                      sharding_factor=None):
     global_steps, _ = get_algorithm_parameters(align_config,
                                                'global_align',
                                                reg_args.registration_steps)
@@ -120,7 +121,7 @@ def _run_global_align(reg_args:RegistrationInputs,
             compressor,
             compressor_opts,
             zarr_format,
-            shard_shape,
+            sharding_factor,
         )
     else:
         logger.info('Skip global alignment - both fix and moving image are needed')
@@ -194,7 +195,7 @@ def _apply_global_transform(reg_args:RegistrationInputs,
                             compressor,
                             compressor_opts,
                             zarr_format,
-                            shard_shape=None):
+                            sharding_factor=None):
     (fix_image, _, mov_image, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
         full_image_coords = tuple(slice(None) for _ in range(fix_image.spatial_ndim))
@@ -232,7 +233,7 @@ def _apply_global_transform(reg_args:RegistrationInputs,
             compressor,
             compressor_opts,
             zarr_format,
-            shard_shape,
+            sharding_factor,
         )
     else:
         # both fix and mov volume must be valid
@@ -272,7 +273,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          compressor,
                          compressor_opts,
                          zarr_format,
-                         shard_shape=None):
+                         sharding_factor=None):
     align_path = reg_args.align_path()
     # prepare global coordinate transform from reg_args.mov_origin_transform
     global_transformations = []
@@ -318,15 +319,9 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
         else:
             aligned_dataset_chunksize = align_blocksize
 
-        if shard_shape:
-            aligned_dataset_shardsize = shard_shape[::-1]  # xyz -> zyx
-            if len(aligned_dataset_shardsize) < len(aligned_dataset_chunksize):
-                aligned_dataset_shardsize = (
-                    (1,) * (len(aligned_dataset_chunksize) - len(aligned_dataset_shardsize))
-                    + tuple(aligned_dataset_shardsize)
-                )
-        else:
-            aligned_dataset_shardsize = None
+        aligned_dataset_shardsize = derive_shard_shape(
+            sharding_factor, aligned_dataset_chunksize, zarr_format
+        )
 
         logger.info((
             f'Save global aligned volume to {align_path} '
@@ -399,14 +394,14 @@ def main():
                           args.compressor,
                           args.compressor_opts,
                           args.output_zarr_format,
-                          shard_shape=args.output_shard_shape)
+                          sharding_factor=args.output_sharding_factor)
     else:
         # global transform found -> just apply it
         _apply_global_transform(reg_inputs,
                                 global_transform,
                                 args.compressor, args.compressor_opts,
                                 args.output_zarr_format,
-                                shard_shape=args.output_shard_shape)
+                                sharding_factor=args.output_sharding_factor)
 
 
 if __name__ == '__main__':

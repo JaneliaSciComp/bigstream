@@ -10,7 +10,7 @@ from bigstream.ome_utils import get_spatial_values
 
 from bigstream.io_utility import read_block as read_image
 
-from .cli import (dictfromjson, floattuple, inttuple)
+from .cli import (derive_shard_shape, dictfromjson, floattuple, inttuple)
 
 
 logger:logging.Logger
@@ -92,14 +92,15 @@ def _define_args():
                              default=2,
                              type=int,
                              help='Zarr output format')
-    args_parser.add_argument('--output-shard-shape', '--output_shard_shape',
-                             dest='output_shard_shape',
+    args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
+                             dest='output_sharding_factor',
                              default=None,
                              type=inttuple,
-                             help='Zarr v3 shard shape in xyz order, '
-                                  'e.g. 512,512,512. Each component must be '
-                                  'a positive multiple of the corresponding '
-                                  'chunk dimension. Ignored when '
+                             help='Zarr v3 sharding factor in xyz order, '
+                                  'e.g. 8,8,4. The shard shape is computed '
+                                  'elementwise as output_blocksize * '
+                                  'sharding_factor (each factor must be a '
+                                  'positive integer). Ignored when '
                                   '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--radius',
@@ -206,15 +207,9 @@ def _compute_registration_metric(args):
             dataset_transformations=coordinate_transformations,
             zarr_format=args.output_zarr_format,
         )
-        if args.output_shard_shape:
-            output_shard_size = tuple(args.output_shard_shape[::-1])  # xyz -> zyx
-            if len(output_shard_size) < len(output_chunk_size):
-                output_shard_size = (
-                    (1,) * (len(output_chunk_size) - len(output_shard_size))
-                    + output_shard_size
-                )
-        else:
-            output_shard_size = None
+        output_shard_size = derive_shard_shape(
+            args.output_sharding_factor, output_chunk_size, args.output_zarr_format
+        )
         output_array = io_utility.create_dataset_array(
             args.output,
             output_subpath,

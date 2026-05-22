@@ -14,8 +14,8 @@ from bigstream.image_data import (ImageData,
                                   calc_downsampling_attr)
 from bigstream.ome_utils import get_spatial_values
 
-from .cli import (dictfromjson, inttuple, floattuple, stringlist,
-                  get_algorithm_parameters)
+from .cli import (derive_shard_shape, dictfromjson, inttuple, floattuple,
+                  stringlist, get_algorithm_parameters)
 
 
 logger:logging.Logger
@@ -171,15 +171,18 @@ def _define_args():
                              default=2,
                              type=int,
                              help='Zarr output format')
-    args_parser.add_argument('--output-shard-shape', '--output_shard_shape',
-                             dest='output_shard_shape',
+    args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
+                             dest='output_sharding_factor',
                              default=None,
                              type=inttuple,
-                             help='Zarr v3 shard shape in xyz order, '
-                                  'e.g. 512,512,512. Each component must be '
-                                  'a positive multiple of the corresponding '
-                                  'chunk dimension. Ignored when '
-                                  '--output-zarr-format is not 3.')
+                             help='Zarr v3 sharding factor in xyz order, '
+                                  'e.g. 8,8,4. The shard shape is computed '
+                                  'elementwise as output_blocksize * '
+                                  'sharding_factor. When sharding is enabled, '
+                                  'the processing block size defaults to the '
+                                  'shard shape so each dask task writes a full '
+                                  'shard. Ignored when --output-zarr-format '
+                                  'is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -275,15 +278,20 @@ def _run_apply_transform(args):
         else:
             output_chunk_size = tuple(get_spatial_values(output_blocks))
 
-        if args.output_shard_shape:
-            output_shard_size = tuple(args.output_shard_shape[::-1])  # xyz -> zyx
-            if len(output_shard_size) < len(output_chunk_size):
-                output_shard_size = (
-                    (1,) * (len(output_chunk_size) - len(output_shard_size))
-                    + output_shard_size
-                )
+        output_shard_size = derive_shard_shape(
+            args.output_sharding_factor, output_chunk_size, args.output_zarr_format
+        )
+
+        # processing block size: full shard when sharding is on, else output_blocks
+        if output_shard_size is not None:
+            processing_blocksize = tuple(output_shard_size[-len(output_blocks):])
         else:
-            output_shard_size = None
+            processing_blocksize = tuple(output_blocks)
+        logger.info(
+            f'Apply-transform processing block size: {processing_blocksize} '
+            f'(output_blocks={output_blocks}, '
+            f'output_shard_size={output_shard_size})'
+        )
 
         output_dataarray = io_utility.create_dataset_array(
             args.output,
@@ -383,7 +391,7 @@ def _run_apply_transform(args):
                 np.array(get_spatial_values(fix_data.voxel_spacing)) / fix_data.expansion_factor,
                 mov_data,
                 np.array(get_spatial_values(mov_data.voxel_spacing)) / mov_data.expansion_factor,
-                output_blocks, # use block chunk size for distributing the work
+                processing_blocksize, # processing block size (= shard when sharding is on)
                 all_transforms, # transform_list
                 cluster_client,
                 overlap_factor=args.blocks_overlap_factor,

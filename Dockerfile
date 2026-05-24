@@ -34,4 +34,4 @@ COPY *.toml .
 COPY *.md .
 
 RUN pip install -e . && \
-    pip install "zarr-tools @ git+https://github.com/JaneliaSciComp/zarr-tools.git@2b9dace"
+    pip install "zarr-tools @ git+https://github.com/JaneliaSciComp/zarr-tools.git@ca8126c"

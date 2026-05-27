@@ -16,7 +16,10 @@ def generate_foreground_mask(image,
                              mask_smoothing=2,
                              iterations=[40,20,10],
                              smooth_sigmas=[32,24,16],
-                             lambda2=1.5,
+                             shrink_factors=(4,2,1),
+                             lambda1=1,
+                             lambda2=10,
+                             background=None,
                              percentile_thresh=None):
     subsampled_image = image[::image_subsampling, ::image_subsampling, ::image_subsampling]
     subsampled_image_spacing = image_spacing * image_subsampling
@@ -31,8 +34,11 @@ def generate_foreground_mask(image,
             subsampled_image, subsampled_image_spacing,
             mask_smoothing=mask_smoothing,
             iterations=iterations,
+            shrink_factors=shrink_factors,
             smooth_sigmas=smooth_sigmas,
+            lambda1=lambda1,
             lambda2=lambda2,
+            background=background,
             return_largest_cc_only=False,
         )
     else:

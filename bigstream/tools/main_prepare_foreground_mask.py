@@ -64,12 +64,27 @@ def _define_args():
                              type=inttuple,
                              default=(),
                              help='Number of iterations per sigma for generating the foreground mask - if specified there must be a one to one correspondence with the sigmas')
-    args_parser.add_argument('--mask-lambda',
+    args_parser.add_argument('--mask-shrink-factors',
+                             dest='mask_shrink_factors',
+                             type=inttuple,
+                             default=(),
+                             help='Shrink factor per sigma/iteration')
+    args_parser.add_argument('--lambda1', '--mask-lambda',
+                             dest='mask_lambda1',
+                             type=float,
+                             default=1,
+                             metavar='lambda1',
+                             help='Controls the variance of the foreground region.')
+    args_parser.add_argument('--lambda2',
                              dest='mask_lambda2',
                              type=float,
                              default=2,
                              metavar='lambda2',
                              help='Controls the variance of the foreground region. A larger number means larger segment(s).')
+    args_parser.add_argument('--background',
+                             dest='background',
+                             type=float,
+                             help='Image background')
     args_parser.add_argument('--mask-threshold-percentile',
                              dest='mask_thresh_percentile',
                              type=int,
@@ -152,7 +167,7 @@ def _generate_foreground_mask(args):
         image_timeindex=image_data.image_timeindex,
         image_channel=image_data.image_channel,
     )
-    logger.debug(f'Read image of shape: {image_array.shape}')
+    logger.debug(f'Read timeindex: {image_data.image_timeindex}, channel: {image_data.image_channel} image of shape: {image_array.shape}')
 
     if not args.mask_iterations:
         mask_iterations = [10, 20, 40]
@@ -170,14 +185,24 @@ def _generate_foreground_mask(args):
     else:
         smooth_sigmas = args.mask_smooth_sigmas[0:len(mask_iterations)]
 
+    if not args.mask_shrink_factors:
+        mask_shrink_factors = (1,) * len(mask_iterations)
+    elif len(args.mask_shrink_factors) < len(mask_iterations):
+        mask_shrink_factors = (1,) * (len(mask_iterations) - len(args.mask_shrink_factors)) + args.mask_shrink_factors
+    else:
+        mask_shrink_factors = args.mask_shrink_factors[0:len(mask_iterations)]
+
     mask, mask_spacing = generate_foreground_mask(
         image_array,
         get_spatial_values(image_data.voxel_spacing),
         image_subsampling=args.mask_subsampling,
         mask_smoothing=args.mask_smoothing,
+        lambda1=args.mask_lambda1,
         lambda2=args.mask_lambda2,
         iterations=mask_iterations[::-1],
         smooth_sigmas=smooth_sigmas[::-1],
+        shrink_factors=mask_shrink_factors[::-1],
+        background=args.background,
         percentile_thresh=args.mask_thresh_percentile,
     )
 

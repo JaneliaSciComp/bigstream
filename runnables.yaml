@@ -1,0 +1,47 @@
+name: BigStream Registration Tool
+runnables:
+  - id: global-registration
+    name: BigStream global registration
+    container: ghcr.io/janeliascicomp/bigstream:5.2.0-omezarr-dask2025.11.0-py12-ol9
+    parameters:
+      - flag: --global-fix
+        name: Path to the global fix volume container
+        type: file
+        required: true
+      - flag: --global-fix-subpath
+        name: Subpath to the global fix dataset
+        type: string
+      - flag: --global-fix-timeindex
+        name: Fix volume time index
+      - flag: --global-fix-channel
+        name: Fix volume channel
+      - flag: --global-fix-expansion
+        name: Fix volume expansion factor
+      - flag: --global-mov
+        name: Path to the global moving volume container
+        type: file
+        required: true
+      - flag: --global-mov-subpath
+        name: Subpath to the global moving dataset
+        type: string
+      - flag: --global-mov-timeindex
+        name: Moving volume time index
+      - flag: --global-mov-channel
+        name: Moving volume channel
+      - flag: --global-mov-expansion
+        name: Moving volume expansion
+      - flag: --global-align-name
+        name: Global aligned volume container
+      - flag: --global-align-timeindex
+        name: Global aligned output time index
+      - flag: --global-align-channel
+        name: Global aligned output time channel
+      - flag: --output-zarr-format
+        name: Global aligned volume zarr format
+      - flag: --output-sharding-factor
+        name: Global aligned volume sharding factir
+
+  - id: local-registration
+    name: BigStream local registration
+    container: ghcr.io/janeliascicomp/bigstream:5.2.0-omezarr-dask2025.11.0-py12-ol9
+    parameters:

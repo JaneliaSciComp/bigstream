@@ -911,6 +911,7 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
                 else:
                     block_selector.append(image_channel)
             block_selector.extend(block_coords)
+            logger.debug(f'Read block: {block_selector}')
             return image[tuple(block_selector)]
 
     # image must be opened first, use generalized open function
@@ -919,7 +920,7 @@ def read_block(block_coords, image=None, image_path=None, image_subpath=None,
                                         data_timeindex=image_timeindex,
                                         data_channels=image_channel,
                                         block_coords=block_coords)
-        logger.debug(f'Read {block.shape} block at {block_coords}')
+        logger.debug(f'Read {block.shape} block at {block_coords}, timeindex: {image_timeindex}, channel: {image_channel}')
         return block
 
     # this is when there are block coords but no image nd-array or

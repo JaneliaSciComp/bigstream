@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 from scipy.ndimage import zoom
 from scipy.ndimage.filters import gaussian_filter
@@ -6,7 +7,10 @@ from scipy.ndimage.measurements import label, labeled_comprehension
 import morphsnakes
 
 
-def estimate_background(image, rad=5):
+logger = logging.getLogger(__name__)
+
+
+def estimate_background(image, rad=10):
     """
     Estimate typical background intensity value from the 8 corners of the image
 
@@ -35,6 +39,7 @@ def estimate_background(image, rad=5):
 
 def segment(
     image,
+    lambda1,
     lambda2,
     iterations,
     smoothing=1,
@@ -50,6 +55,9 @@ def segment(
     ----------
     image : nd-array
         The image whose foreground you want to segment
+
+    lambda1 : scalar float
+        Controls how it penalizes the inside
 
     lambda2 : scalar float
         Controls variance of foreground region. A larger number means a larger segment.
@@ -77,14 +85,24 @@ def segment(
     if threshold is not None:
         image[image < threshold] = 0
     if init is None:
-        init = np.zeros_like(image, dtype=np.uint8)
+        init = np.ones_like(image, dtype=np.uint8)
         bounds = np.ceil(np.array(image.shape) * 0.1).astype(int)
-        init[tuple(slice(b, -b) for b in bounds)] = 1
+        mask_bounds = tuple(slice(b, -b) for b in bounds)
+        logger.info(f'Set initial mask: {image.shape}, mask boundary: {mask_bounds}')
+        init[mask_bounds] = 1
+    else:
+        logger.info(f'Use initial mask: {init.shape}')
+
+    logger.debug((
+        f'Morphological segmentation: iterations: {iterations} '
+        f'smoothing: {smoothing}, lambda2: {lambda2}, lambda1: {lambda1} '
+    ))
     return morphsnakes.morphological_chan_vese(
         image,
         iterations,
         init_level_set=init,
         smoothing=smoothing,
+        lambda1=lambda1,
         lambda2=lambda2,
     ).astype(np.uint8)
 
@@ -117,7 +135,8 @@ def foreground_segmentation(
     iterations=(40,8,2),
     shrink_factors=(4,2,1),
     smooth_sigmas=(8.,4.,2.),
-    lambda2=20.,
+    lambda1=1.,
+    lambda2=10.,
     background=None,
     return_largest_cc_only=True,
     mask=None,
@@ -144,6 +163,8 @@ def foreground_segmentation(
 
     smooth_sigmas : tuple of float (default: (8., 4., 2.))
         The gaussian_smoothing kernel width to use at each scale in physical units
+
+    lambda1 : scalar float (default: 1.)
 
     lambda2 : scalar float (default: 20.)
         Controls variance of foreground region. A larger number means a larger segment.
@@ -175,15 +196,24 @@ def foreground_segmentation(
     # segment
     if background is None:
         background = estimate_background(image)
-    for its, sf, ss in zip(iterations, shrink_factors, smooth_sigmas):
+        logger.debug(f'Estimated background for {image.ndim}-D image: {background}')
+    else:
+        logger.debug(f'Use background for {image.ndim}-D image: {background}')
+
+    seg_iter_params = list(zip(iterations, shrink_factors, smooth_sigmas))
+    logger.debug(f'Segmentation iteration params (iter/shrink_factor/sigma): {seg_iter_params}')
+    for its, sf, ss in seg_iter_params:
+        logger.debug(f'Apply gaussian {ss}/{voxel_spacing} = {ss/voxel_spacing}, 1/{sf} = {1./sf}')
         image_small = zoom(gaussian_filter(image, ss/voxel_spacing), 1./sf)
         if mask is not None:
             zoom_factors = [x/y for x, y in zip(image_small.shape, mask.shape)]
+            logger.debug(f'Zoom factors: {zoom_factors}')
             mask = zoom(mask, zoom_factors, order=0)
         mask = segment(
             image_small,
-            lambda2=lambda2,
-            iterations=its,
+            lambda1,
+            lambda2,
+            its,
             smoothing=mask_smoothing,
             threshold=background,
             init=mask,

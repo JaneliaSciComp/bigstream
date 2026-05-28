@@ -497,8 +497,7 @@ def _align_local_data(fix_image: ImageData,
         ))
     else:
         deform_ok = False
-        logger.warning('Fix image or moving image has no data or ' +
-                       'the distributed alignment failed')
+        logger.warning('Either the fix or moving image has no data or the distributed alignment failed')
 
     if deform_ok and deformfield and inv_deformfield_path:
         logger.info(f'Create inverse deform field container {inv_deformfield_path}')

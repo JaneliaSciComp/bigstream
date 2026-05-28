@@ -56,7 +56,7 @@ def get_processing_size(input_processing_size, shard_shape=None, blocksize=None)
     if unit is None:
         return tuple(input_processing_size)
     processing_size = tuple(int(ceil(p / s)) * s for p, s in zip(input_processing_size, unit))
-    logger.warning(
+    logger.info(
         f'Final processing size: {processing_size} '
         f'based on processing unit size: {unit} and provided processing size: {input_processing_size} '
     )

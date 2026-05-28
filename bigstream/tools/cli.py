@@ -12,6 +12,7 @@ from bigstream.image_data import ImageData
 
 logger = logging.getLogger(__name__)
 
+
 def dictfromjson(arg:str):
     if arg:
         return json.loads(arg)
@@ -47,44 +48,8 @@ def stringlist(arg):
         return []
 
 
-def derive_shard_shape(sharding_factor_xyz, output_blocksize_zyx, zarr_format):
-    """Compute the absolute zarr v3 shard shape from a sharding factor.
 
-    Parameters
-    ----------
-    sharding_factor_xyz : tuple[int, ...] or None
-        Sharding factor as given on the CLI (xyz order). When None, empty,
-        or zarr_format != 3, returns None.
 
-    output_blocksize_zyx : tuple[int, ...]
-        Output chunk shape in zyx order (after the launcher has reversed the
-        xyz CLI value and padded for non-spatial axes).
-
-    zarr_format : int
-        Target zarr format. Sharding is only emitted for format 3.
-
-    Returns
-    -------
-    tuple[int, ...] or None
-        Absolute shard shape in the same axis order as output_blocksize_zyx,
-        equal to blocksize * factor elementwise. None when sharding is off.
-    """
-    if not sharding_factor_xyz or zarr_format != 3:
-        return None
-    factor = tuple(sharding_factor_xyz[::-1])  # xyz -> zyx
-    if len(factor) < len(output_blocksize_zyx):
-        factor = (1,) * (len(output_blocksize_zyx) - len(factor)) + factor
-    elif len(factor) > len(output_blocksize_zyx):
-        raise ValueError(
-            f'output_sharding_factor {sharding_factor_xyz} has higher rank '
-            f'than output_blocksize {output_blocksize_zyx}'
-        )
-    if any(f <= 0 for f in factor):
-        raise ValueError(
-            f'output_sharding_factor components must be positive: '
-            f'{sharding_factor_xyz}'
-        )
-    return tuple(b * f for b, f in zip(output_blocksize_zyx, factor))
 
 
 class CliArgsHelper:
@@ -292,6 +257,11 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       default=None,
                       help='Aligned volume channel')
 
+    args.add_argument(args_descriptor.argflag('output-blocksize'),
+                      dest=args_descriptor.argdest('output_blocksize'),
+                      type=inttuple,
+                      default=(128,128,128),
+                      help='Output blocksize')
     args.add_argument(args_descriptor.argflag('transform-blocksize'),
                       dest=args_descriptor.argdest('transform_blocksize'),
                       type=inttuple,
@@ -367,6 +337,7 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'mov_mask_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'mov_roi', registration_args)
     _extract_arg(args, args_descriptor, 'default_output_dir', registration_args)
+    _extract_arg(args, args_descriptor, 'output_blocksize', registration_args)
     _extract_arg(args, args_descriptor, 'transform_dir', registration_args)
     _extract_arg(args, args_descriptor, 'transform_name', registration_args)
     _extract_arg(args, args_descriptor, 'transform_subpath', registration_args)

@@ -16,7 +16,9 @@ from bigstream.transform import apply_transform
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, get_algorithm_parameters,
                   extract_registration_input_args, get_input_images,
-                  derive_shard_shape, dictfromjson, inttuple)
+                  dictfromjson, inttuple)
+
+from .utils import derive_shard_shape
 
 
 logger:logging.Logger
@@ -305,7 +307,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
         if reg_args.align_blocksize:
             align_blocksize = reg_args.align_blocksize[::-1]
         else:
-            align_blocksize = (128,) * fix_image.spatial_ndim
+            align_blocksize = reg_args.output_blocksize[::-1]
 
         if len(aligned_array.shape) < len(fix_shape):
             aligned_dataset_shape = (1,) * (len(fix_shape) - len(aligned_array.shape)) + aligned_array.shape

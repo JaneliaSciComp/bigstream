@@ -136,7 +136,7 @@ def foreground_segmentation(
     shrink_factors=(4,2,1),
     smooth_sigmas=(8.,4.,2.),
     lambda1=1.,
-    lambda2=10.,
+    lambda2=1.,
     background=None,
     return_largest_cc_only=True,
     mask=None,

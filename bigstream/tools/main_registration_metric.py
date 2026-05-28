@@ -10,7 +10,9 @@ from bigstream.ome_utils import get_spatial_values
 
 from bigstream.io_utility import read_block as read_image
 
-from .cli import (derive_shard_shape, dictfromjson, floattuple, inttuple)
+from .cli import (dictfromjson, floattuple, inttuple)
+
+from .utils import derive_shard_shape
 
 
 logger:logging.Logger

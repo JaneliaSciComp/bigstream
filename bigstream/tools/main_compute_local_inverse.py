@@ -13,7 +13,9 @@ from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
                                   calc_downsampling_attr)
 
-from .cli import (derive_shard_shape, dictfromjson, inttuple, floattuple)
+from .cli import (dictfromjson, inttuple, floattuple)
+
+from .utils import derive_shard_shape
 
 
 logger:logging.Logger

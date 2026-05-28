@@ -21,7 +21,9 @@ from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, get_algorithm_parameters,
                   extract_registration_input_args, get_input_images,
-                  derive_shard_shape, dictfromjson, inttuple, floattuple)
+                  dictfromjson, inttuple, floattuple)
+
+from .utils import get_processing_size, derive_shard_shape
 
 
 logger:logging.Logger
@@ -167,7 +169,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          processing_size=None,
                          processing_overlap=None,
                          transform_overlap=0.1,
-                         default_blocksize=128,
                          default_overlap=0.5,
                          inv_step=1.0,
                          inv_iterations=(10,),
@@ -206,28 +207,35 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         raise Exception(f'{mov_image} expected to have ',
                         f'the same ndim as {fix_image}')
 
+    # Compute storage unit once; used both for default and alignment check below
+    output_blocksize_zyx = reg_args.output_blocksize[::-1]
+    shard_shape_zyx = derive_shard_shape(sharding_factor, output_blocksize_zyx, zarr_format)
+
     if processing_size:
         # block are defined as x,y,z so I am reversing it to z,y,x
         local_processing_size = processing_size[::-1]
+        logger.info(f'Set processing size to {local_processing_size} (from process size arg: {processing_size})')
     else:
-        default_blocksize_tuple = (default_blocksize,) * fix_image.ndim
         # when sharding is on, default the processing size to the shard shape
         # so each worker processes one shard
-        default_shard = derive_shard_shape(
-            sharding_factor, default_blocksize_tuple, zarr_format
-        )
-        if default_shard is not None:
-            default_processing_size = default_shard
-        else:
-            default_processing_size = default_blocksize_tuple
-        local_processing_size = local_config.get('block_size',
-                                                 default_processing_size)
+        default_processing_size = shard_shape_zyx if shard_shape_zyx is not None else output_blocksize_zyx
+        local_processing_size = local_config.get('block_size', default_processing_size)
+        logger.info((
+            f'Set processing size to {local_processing_size} '
+            f'from blocksize: {output_blocksize_zyx} and sharding factor: {sharding_factor} '
+        ))
+
+    # Round up to storage boundary (shard for zarr3, blocksize for zarr2)
+    local_processing_size = get_processing_size(
+        local_processing_size,
+        shard_shape=shard_shape_zyx,
+        blocksize=output_blocksize_zyx if shard_shape_zyx is None else None,
+    )
 
     if processing_overlap:
         local_processing_overlap_factor = processing_overlap
     else:
-        local_processing_overlap_factor = local_config.get('block_overlap',
-                                                           default_overlap)
+        local_processing_overlap_factor = local_config.get('block_overlap', default_overlap)
     if (local_processing_overlap_factor <= 0 and
         local_processing_overlap_factor >= 1):
         raise ValueError((
@@ -259,7 +267,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         deformfield_chunksize = reg_args.transform_blocksize[::-1]
     else:
         # default to processing
-        deformfield_chunksize = local_processing_size
+        deformfield_chunksize = reg_args.output_blocksize[::-1]
 
     if reg_args.inv_transform_subpath:
         inv_deformfield_subpath = reg_args.inv_transform_subpath

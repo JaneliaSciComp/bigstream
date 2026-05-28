@@ -14,8 +14,10 @@ from bigstream.image_data import (ImageData,
                                   calc_downsampling_attr)
 from bigstream.ome_utils import get_spatial_values
 
-from .cli import (derive_shard_shape, dictfromjson, inttuple, floattuple,
+from .cli import (dictfromjson, inttuple, floattuple,
                   stringlist, get_algorithm_parameters)
+
+from .utils import derive_shard_shape
 
 
 logger:logging.Logger

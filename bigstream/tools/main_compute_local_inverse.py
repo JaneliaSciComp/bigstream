@@ -212,6 +212,7 @@ def _run_compute_inverse(args):
     logger.info(
         f'Inverse processing block size: {processing_blocksize} '
         f'(inv_transform_blocksize={inv_transform_blocksize}, '
+        f'inv_deform_chunks={inv_deform_chunks}, '
         f'inv_deform_shard_size={inv_deform_shard_size})'
     )
     inv_deform_field = io_utility.create_dataset_array(

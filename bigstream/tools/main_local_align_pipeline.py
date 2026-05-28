@@ -435,15 +435,16 @@ def _align_local_data(fix_image: ImageData,
             dataset_transformations=coordinate_transformations,
             zarr_format=zarr_format,
         )
-        deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
+        deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
+        deformfield_output_chunksize = deformfield_spatial_chunksize + (len(deformfield_spatial_chunksize),)
         # factor applies to spatial axes only; vector axis is never sharded
         deformfield_spatial_shard = derive_shard_shape(
             sharding_factor,
-            tuple(get_spatial_values(deformfield_chunksize)),
+            deformfield_spatial_chunksize,
             zarr_format,
         )
         if deformfield_spatial_shard is not None:
-            deformfield_output_shardsize = tuple(deformfield_spatial_shard) + (1,)
+            deformfield_output_shardsize = tuple(deformfield_spatial_shard) + (deformfield_output_chunksize[-1],)
         else:
             deformfield_output_shardsize = None
         deformfield = io_utility.create_dataset_array(
@@ -519,14 +520,15 @@ def _align_local_data(fix_image: ImageData,
             dataset_transformations=coordinate_transformations,
             zarr_format=zarr_format,
         )
-        inv_deformfield_output_chunksize = tuple(get_spatial_values(deformfield_chunksize)) + (1,)
+        inv_deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
+        inv_deformfield_output_chunksize = inv_deformfield_spatial_chunksize + (len(inv_deformfield_spatial_chunksize),)
         inv_deformfield_spatial_shard = derive_shard_shape(
             sharding_factor,
-            tuple(get_spatial_values(deformfield_chunksize)),
+            inv_deformfield_spatial_chunksize,
             zarr_format,
         )
         if inv_deformfield_spatial_shard is not None:
-            inv_deformfield_output_shardsize = tuple(inv_deformfield_spatial_shard) + (1,)
+            inv_deformfield_output_shardsize = tuple(inv_deformfield_spatial_shard) + (inv_deformfield_output_chunksize[-1],)
         else:
             inv_deformfield_output_shardsize = None
         inv_deformfield = io_utility.create_dataset_array(

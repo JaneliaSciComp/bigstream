@@ -52,7 +52,7 @@ def _define_args(local_descriptor):
                              dest='local_processing_overlap_factor',
                              type=float,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
-    args_parser.add_argument('--local-adjust-existing-deform',
+    args_parser.add_argument('--local-use-existing-deform',
                              dest='reuse_existing_deform',
                              action='store_true',
                              default=False,

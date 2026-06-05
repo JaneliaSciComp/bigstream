@@ -166,7 +166,7 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       dest=args_descriptor.argdest('fix_roi'),
                       type=inttuple,
                       metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
-                      help='Fixed volume ROI a tuple of 6 values representing min and max voxel coordinates')
+                      help='Fixed volume ROI a tuple of 6 values representing min and max physical coordinates')
 
     args.add_argument(args_descriptor.argflag('mov'),
                       dest=args_descriptor.argdest('mov'),
@@ -204,7 +204,7 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       dest=args_descriptor.argdest('mov_roi'),
                       type=inttuple,
                       metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
-                      help='Moving volume ROI a tuple of 6 values representing min and max voxel coordinates')
+                      help='Moving volume ROI a tuple of 6 values representing min and max physical coordinates')
 
     args.add_argument(args_descriptor.argflag('mov-origin-transform'),
                       dest=args_descriptor.argdest('mov_origin_transform'),

@@ -1484,7 +1484,6 @@ def ransac_masks_meta_align(
     neighborhood_radius,
     lcc_radius,
     lcc_spacing=None,
-    well_matched_voxel_tolerance=0.,
     number_of_transforms_to_return=None,
     fix_mask=None,
     mov_mask=None,
@@ -1569,10 +1568,6 @@ def ransac_masks_meta_align(
         to make the lcc step faster, but also less robust. If None, then no skip sampling
         is done.
 
-    well_matched_voxel_tolerance : float in the interval [0, 1) (default: 0)
-        A voxel is considered well aligned if its LCC value larger than:
-            (1 - well_matched_voxel_tolerance) * median_LCC_in_ransac_foreground_mask
-
     number_of_transforms_to_return : int (default: None)
         The top number_of_transforms_to_return transforms with respect to the well matched
         voxels score are returned. If None, all transforms are returned, sorted by their score.
@@ -1638,6 +1633,31 @@ def ransac_masks_meta_align(
         Parallel list to list_of_transforms. The scores for each transform
     """
 
+    # realize masks
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
+
+    # determine skip sampling
+    if lcc_spacing is None: lcc_spacing = fix_spacing
+    skip_values = np.round( lcc_spacing / fix_spacing ).astype(int)
+    skip_sampling = tuple(slice(None, None, x) for x in skip_values)
+
+    # get baseline lcc image
+    identity_aligned = bst.apply_transform(
+        fix[skip_sampling], mov,
+        fix_spacing * skip_values, mov_spacing,
+        transform_list=static_transform_list + [np.eye(fix.ndim+1),],
+        fix_origin=fix_origin,
+        mov_origin=mov_origin,
+    )
+    _, identity_lcc_image = local_correlation_coefficient(
+        fix[skip_sampling], identity_aligned,
+        fix_spacing * skip_values,
+        lcc_radius, return_image=True,
+    )
+    if fix_mask is not None:
+        identity_lcc_image = identity_lcc_image * fix_mask[skip_sampling]
+
     # create containers for the ransac related components
     transforms, scores = [], []
     ransac_mask = np.empty(fix.shape, dtype=np.uint8)
@@ -1649,7 +1669,7 @@ def ransac_masks_meta_align(
         # determine the number of connected components for this iteration mask
         if isinstance(number_of_connected_components, (tuple,)):
             low, high = number_of_connected_components
-            ncc = np.random.randint(low=low, high=high)
+            ncc = np.random.randint(low=low, high=high+1)
         else:
             ncc = number_of_connected_components
 
@@ -1668,8 +1688,10 @@ def ransac_masks_meta_align(
         # create the foreground mask
         ransac_mask[...] = 0
         for point in points:
-            neighborhood = tuple(slice(x-r, x+r+1) for x, r in zip(point, radius))
+            neighborhood = tuple(slice(max(0, x-r), x+r+1) for x, r in zip(point, radius))
             ransac_mask[neighborhood] = 1
+        if fix_mask is not None:
+            ransac_mask = ransac_mask * fix_mask
 
         # call the alignment pipeline
         transform = alignment_pipeline(
@@ -1683,15 +1705,10 @@ def ransac_masks_meta_align(
             **kwargs,
         )
 
-        # determine skip sampling
-        if lcc_spacing is None: lcc_spacing = fix_spacing
-        skip_values = np.round( lcc_spacing / fix_spacing ).astype(int)
-        skip_sampling = tuple(slice(None, None, x) for x in skip_values)
-
-        # apply the transform
+        # apply the transform    NOTE: static_transform_list spacings not considered, latent bug
         aligned = bst.apply_transform(
-                fix[skip_sampling], mov[skip_sampling],
-                fix_spacing * skip_values, mov_spacing * skip_values,
+                fix[skip_sampling], mov,
+                fix_spacing * skip_values, mov_spacing,
                 transform_list=static_transform_list + [transform,],
                 fix_origin=fix_origin,
                 mov_origin=mov_origin,
@@ -1703,11 +1720,11 @@ def ransac_masks_meta_align(
             fix_spacing * skip_values,
             lcc_radius, return_image=True,
         )
+        if fix_mask is not None:
+            lcc_image = lcc_image * fix_mask[skip_sampling]
 
-        # count the well matched voxels
-        threshold = np.median(lcc_image[ransac_mask[skip_sampling] > 0])
-        threshold = threshold * (1 - well_matched_voxel_tolerance)
-        score = np.sum( (lcc_image > threshold).astype(np.float32) ) * threshold
+        # count the improved voxels
+        score = np.nansum( (lcc_image > identity_lcc_image).astype(np.uint32) )
 
         # store result
         transforms.append(transform)

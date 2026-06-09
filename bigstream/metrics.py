@@ -5,6 +5,148 @@ from bigstream.configure_irm import configure_irm
 import bigstream.utility as ut
 from itertools import product
 from ClusterWrap.decorator import cluster
+from scipy.spatial import cKDTree
+from scipy.spatial.distance import cdist
+from scipy.optimize import milp, LinearConstraint, Bounds
+
+
+def soma_print_score_point_clouds(
+    points_a,
+    points_b,
+    Na, Nb, M, D, L,
+    slc=slice(None, None),
+):
+    """
+    
+    """
+
+    # get soma prints
+    soma_prints_a, tree_a = soma_print_point_cloud(points_a, Na)
+    soma_prints_b, tree_b = soma_print_point_cloud(points_b, Nb)
+
+    # get potential matches lists
+    neighbors = tree_a.query_ball_tree(tree_b, D)
+
+    # initialize the k_assignment_solver
+    kas = k_assignment_solver(Na, Nb, M)
+
+    # compare points in points_a to their neighbors in points_b
+    scores, distances = [], []
+    for iii in range(points_a.shape[0])[slc]:
+        if iii % 1000 == 0: print(iii, flush=True)
+        spa = soma_prints_a[iii]
+        spb_neighbors = neighbors[iii]
+        local_scores = []
+        for spb_neighbor in spb_neighbors:
+            spb = soma_prints_b[spb_neighbor]
+            sp_distances = cdist(spa, spb)
+            rows, cols = kas.solve(sp_distances)
+            local_scores.append(np.mean(sp_distances[rows, cols]))
+
+        # rescale and weight the scores
+        local_distances = []
+        if local_scores:
+            a = points_a[iii][None, ...]
+            b = points_b[spb_neighbors]
+            if b.ndim == 1:
+                b = b[None, ...]
+            local_distances = cdist(a, b)[0]
+            weights = np.exp( -1 * (local_distances / L)**2 )
+            local_scores = 100 / (1 + np.array(local_scores)) * weights
+
+        scores.append(list(local_scores))
+        distances.append(list(local_distances))
+
+    return scores, distances, neighbors
+
+
+def soma_print_point_cloud(
+    points,
+    num_neighbors,
+):
+    """
+    For each point, return the displacement vectors to its nearest neighbors
+
+    Parameters
+    ----------
+    points : nd-array
+        N x d array of N points in d dimensions
+    num_neighbors : int
+        The number of nearest neighbors
+
+    Returns
+    -------
+    soma_prints : 3d-array
+        N x num_neighbors x d. The displacement vectors for each point
+        to its nearest neighbhors
+
+    tree : scipy.spatial.cKDTree
+        Useful for any further processing of the point cloud
+    """
+
+    tree = cKDTree(points)
+    _, neighbor_indxs = tree.query(points, k=num_neighbors)
+    output_shape = (points.shape[0], num_neighbors, points.shape[1])
+    soma_prints = np.empty(output_shape, dtype=points.dtype)
+    for iii in range(points.shape[0]):
+        point = points[iii:iii+1]
+        neighbors = points[neighbor_indxs[iii]]
+        soma_prints[iii] = neighbors - point
+    return soma_prints, tree
+
+
+class k_assignment_solver:
+
+    def __init__(self, n, m, k):
+
+        # constraints: rows and cols should sum to 1 and whole decision matrix
+        # should sum to k
+        row_constraint = np.zeros((n, n * m))
+        for i in range(n):
+            row_constraint[i, i*m:(i+1)*m] = 1
+        col_constraint = np.zeros((m, n * m))
+        for j in range(m):
+            col_constraint[j, j::m] = 1
+        k_constraint = np.ones((1, n * m))
+        A = np.vstack([row_constraint, col_constraint, k_constraint])
+        constraints = LinearConstraint(A,
+            lb=np.array([0]*n + [0]*m + [k], dtype=float),
+            ub=np.array([1]*n + [1]*m + [k], dtype=float)
+        )
+
+        # all decision variables should be in {0, 1}
+        integrality = np.ones(n * m)
+        bounds = Bounds(lb=0, ub=1)
+
+        # store constraints
+        self.constraints = constraints
+        self.integrality = integrality
+        self.bounds = bounds
+
+    def solve(self, arr):
+        """
+        Given an array of costs, select the minimum cost assignment of
+        k rows-to-columns.
+
+        Parameters
+        ----------
+        arr : 2d array
+            N x M array of costs associated with assigning row i to column j
+
+        Returns
+        -------
+        """
+
+        result = milp(
+            arr.ravel().astype(float),
+            constraints=self.constraints,
+            integrality=self.integrality,
+            bounds=self.bounds,
+        )
+        x = np.round(result.x).reshape(arr.shape)
+        return np.where(x == 1)
+
+
 
 
 def patch_mutual_information(
@@ -112,7 +254,6 @@ def local_correlation_coefficient(
     spacing,
     radius,
     return_image=False,
-    tolerance=1e-6,
 ):
     """
     Compute correlation coefficient for neighborhoods around every voxel
@@ -143,16 +284,15 @@ def local_correlation_coefficient(
         If True this function will also return the image of the local correlation
         coefficients
 
-    tolerance : float (default: 1e-6)
-        The lower bound on standard deviation for CC to adequately be computed
-
     Returns
     -------
     LCC : float
         A single scalar value - the average of the LCCs across the whole image domain
 
     LCC_image : ndarray
-        Only returned if return_image is True
+        Only returned if return_image is True. The local correlation coefficient image.
+        Warning: this image may contain NaNs. Correlation Coefficients are not well defined
+        for some image data regions, for example where there is uniform intensity (std == 0).
     """
 
     # convert radius to integer voxel units
@@ -171,22 +311,14 @@ def local_correlation_coefficient(
     fix_mov_cov = _local_means(fix_mov_product, radius) - fix_means*mov_means
 
     # compute LCCs
-    # TODO: instead of disabling divide by zero warnings, just mask zero values with np.ma
     with np.errstate(divide='ignore', invalid='ignore'):
         lcc = fix_mov_cov / (fix_std * mov_std)
 
-    # replace NaNs (occur when there is no data, or data values are constant)
-    mn, mx = np.percentile(fix, [0.1, 99.9])
-    fix_mask = fix_std / (mx - mn) < tolerance
-    mn, mx = np.percentile(mov, [0.1, 99.9])
-    mov_mask = mov_std / (mx - mn) < tolerance
-    lcc[fix_mask + mov_mask] = 0.
-    
     # return
     if return_image:
-        return lcc.mean(), lcc.astype(np.float32)
+        return np.nanmean(lcc), lcc.astype(np.float32)
     else:
-        return lcc.mean()
+        return np.nanmean(lcc)
 
 
 def _local_means(image, radius):

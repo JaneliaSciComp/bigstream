@@ -48,7 +48,7 @@ def generate_foreground_mask(image,
         mask = gaussian_filter(subsampled_image, smooth_sigmas[-1]) > thresh
 
     # enlarge and smooth mask
-    mask = binary_closing(mask, np.ones((5,5,5))).astype(np.uint8)
-    mask = binary_dilation(mask, np.ones((10,10,10))).astype(np.uint8)
+    mask = binary_closing(mask, np.ones((10,10,10))).astype(np.uint8)
+    mask = binary_dilation(mask, np.ones((5,5,5))).astype(np.uint8)
     mask = zoom(mask, np.array(image.shape) / subsampled_image.shape, order=0)
     return mask, subsampled_image_spacing / image_subsampling

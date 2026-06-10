@@ -1,16 +1,19 @@
 import logging
 import numpy as np
+import morphsnakes
+
 from scipy.ndimage import zoom
 from scipy.ndimage.filters import gaussian_filter
 from scipy.ndimage.morphology import binary_erosion, binary_dilation, binary_fill_holes
 from scipy.ndimage.measurements import label, labeled_comprehension
-import morphsnakes
+
+from skimage import filters
 
 
 logger = logging.getLogger(__name__)
 
 
-def estimate_background(image, rad=10):
+def estimate_background(image, rad=5):
     """
     Estimate typical background intensity value from the 8 corners of the image
 
@@ -82,21 +85,20 @@ def segment(
         Foreground segmentation, same shape as image, uint8
     """
 
-    if threshold is not None:
-        image[image < threshold] = 0
     if init is None:
-        init = np.ones_like(image, dtype=np.uint8)
-        bounds = np.ceil(np.array(image.shape) * 0.1).astype(int)
-        mask_bounds = tuple(slice(b, -b) for b in bounds)
-        logger.info(f'Set initial mask: {image.shape}, mask boundary: {mask_bounds}')
-        init[mask_bounds] = 1
+        if threshold is not None:
+            logger.info(f'Use provided init threshold {threshold}')
+            init = image > threshold
+        else:
+            init = "checkerboard"
     else:
         logger.info(f'Use initial mask: {init.shape}')
 
-    logger.debug((
+    logger.info((
         f'Morphological segmentation: iterations: {iterations} '
         f'smoothing: {smoothing}, lambda2: {lambda2}, lambda1: {lambda1} '
     ))
+
     return morphsnakes.morphological_chan_vese(
         image,
         iterations,
@@ -194,21 +196,20 @@ def foreground_segmentation(
     """
 
     # segment
-    if background is None:
-        background = estimate_background(image)
-        logger.debug(f'Estimated background for {image.ndim}-D image: {background}')
-    else:
-        logger.debug(f'Use background for {image.ndim}-D image: {background}')
-
     seg_iter_params = list(zip(iterations, shrink_factors, smooth_sigmas))
     logger.debug(f'Segmentation iteration params (iter/shrink_factor/sigma): {seg_iter_params}')
     for its, sf, ss in seg_iter_params:
-        logger.debug(f'Apply gaussian {ss}/{voxel_spacing} = {ss/voxel_spacing}, 1/{sf} = {1./sf}')
-        image_small = zoom(gaussian_filter(image, ss/voxel_spacing), 1./sf)
+        logger.debug(f'Apply gaussian: {ss}/{voxel_spacing}/{sf} -> {ss/voxel_spacing/sf}')
+        image_small = zoom(image, 1./sf, order=3)
+        image_small = gaussian_filter(image_small, ss/voxel_spacing/sf) if ss > 0 else image_small
         if mask is not None:
             zoom_factors = [x/y for x, y in zip(image_small.shape, mask.shape)]
             logger.debug(f'Zoom factors: {zoom_factors}')
             mask = zoom(mask, zoom_factors, order=0)
+        elif background is None:
+            background = filters.threshold_triangle(image_small)
+            logger.debug(f'Estimated background for {image.ndim}-D image: {background}')
+
         mask = segment(
             image_small,
             lambda1,
@@ -224,10 +225,12 @@ def foreground_segmentation(
         mask = binary_erosion(mask, iterations=2)
         mask = largest_connected_component(mask)
         mask = binary_dilation(mask, iterations=2)
+
     mask = binary_fill_holes(mask).astype(np.uint8)
 
     # ensure output is on correct grid
     if mask.shape != image.shape:
+        logger.info(f'Final mask reshape {mask.shape} -> {image.shape}')
         zoom_factors = [x/y for x, y in zip(image.shape, mask.shape)]
         mask = zoom(mask, zoom_factors, order=0)
     return mask

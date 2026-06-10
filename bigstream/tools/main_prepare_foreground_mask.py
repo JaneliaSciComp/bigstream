@@ -71,13 +71,13 @@ def _define_args():
                              type=inttuple,
                              default=(),
                              help='Shrink factor per sigma/iteration')
-    args_parser.add_argument('--lambda1',
+    args_parser.add_argument('--lambda1', '--mask-lambda1',
                              dest='mask_lambda1',
                              type=float,
                              default=1.,
                              metavar='lambda1',
                              help='Controls the variance of the foreground region.')
-    args_parser.add_argument('--lambda2', '--mask-lambda',
+    args_parser.add_argument('--lambda2', '--mask-lambda2',
                              dest='mask_lambda2',
                              type=float,
                              default=1.,

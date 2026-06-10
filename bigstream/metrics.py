@@ -63,6 +63,7 @@ def soma_print_score_point_clouds(
 def soma_print_point_cloud(
     points,
     num_neighbors,
+    landmark_points=None,
 ):
     """
     For each point, return the displacement vectors to its nearest neighbors
@@ -73,6 +74,9 @@ def soma_print_point_cloud(
         N x d array of N points in d dimensions
     num_neighbors : int
         The number of nearest neighbors
+    landmark_points : nd-array (default: None)
+        An optional set of landmark points used in place of the points themselves
+        to define soma print distance vectors
 
     Returns
     -------
@@ -84,13 +88,14 @@ def soma_print_point_cloud(
         Useful for any further processing of the point cloud
     """
 
-    tree = cKDTree(points)
+    tree_points = points if landmark_points is None else landmark_points
+    tree = cKDTree(tree_points)
     _, neighbor_indxs = tree.query(points, k=num_neighbors)
     output_shape = (points.shape[0], num_neighbors, points.shape[1])
     soma_prints = np.empty(output_shape, dtype=points.dtype)
     for iii in range(points.shape[0]):
         point = points[iii:iii+1]
-        neighbors = points[neighbor_indxs[iii]]
+        neighbors = tree_points[neighbor_indxs[iii]]
         soma_prints[iii] = neighbors - point
     return soma_prints, tree
 

@@ -199,9 +199,9 @@ def foreground_segmentation(
     seg_iter_params = list(zip(iterations, shrink_factors, smooth_sigmas))
     logger.debug(f'Segmentation iteration params (iter/shrink_factor/sigma): {seg_iter_params}')
     for its, sf, ss in seg_iter_params:
-        logger.debug(f'Apply gaussian: {ss}/{voxel_spacing}/{sf} -> {ss/voxel_spacing/sf}')
-        image_small = zoom(image, 1./sf, order=3)
-        image_small = gaussian_filter(image_small, ss/voxel_spacing/sf) if ss > 0 else image_small
+        logger.debug(f'Apply gaussian: {ss}/{voxel_spacing} -> {ss/voxel_spacing}, shrink factor: {sf}')
+        smoothed_image = gaussian_filter(image, ss/voxel_spacing) if ss > 0 else image
+        image_small = zoom(smoothed_image, 1./sf, order=3)
         if mask is not None:
             zoom_factors = [x/y for x, y in zip(image_small.shape, mask.shape)]
             logger.debug(f'Zoom factors: {zoom_factors}')

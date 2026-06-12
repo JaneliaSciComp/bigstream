@@ -76,3 +76,17 @@ local_align:
       learningRate: 2
       minStep: 0.001
       numberOfIterations: 50
+  demons:
+    iterations: [30, 20, 10]
+    smooth_sigmas: [2.0, 1.0, 0.5]
+    shrink_factors: [4, 2, 1]
+    variant: diffeomorphic
+    field_smoothing_sigma: 1.0
+    update_smoothing_sigma: 0.0
+    smooth_displacement_field: true
+    smooth_update_field: false
+    max_rms_error: 0.01
+    histogram_match: true
+    histogram_match_levels: 1024
+    histogram_match_points: 7
+    histogram_match_threshold_at_mean: true

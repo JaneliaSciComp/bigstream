@@ -8,12 +8,132 @@ from ClusterWrap.decorator import cluster
 from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 from scipy.optimize import milp, LinearConstraint, Bounds
+from dask.distributed import as_completed
+
+
+@cluster
+def distributed_iterated_soma_print_score_point_clouds(
+    points_a_path,
+    points_b_path,
+    Na, Nb, M, D, L,
+    blocksize,
+    max_iterations=1,
+    temporary_directory=None,
+    cluster_kwargs={},
+    cluster=None,
+):
+    """
+    """
+
+    # make tempdir for passing large arrays (match arrays)
+    temporary_directory = tempfile.TemporaryDirectory(
+        prefix='.', dir=temporary_directory or os.getcwd(),
+    )
+    matched_a_path = temporary_directory.name + '/matched_a.npy'
+    matched_b_path = temporary_directory.name + '/matched_b.npy'
+
+    # define blocks
+    points_a = np.load(points_a_path)
+    points_b = np.load(points_b_path)
+    slices, start = [], 0
+    while (start < points_a.shape[0]):
+        lb = start
+        ub = min(start+blocksize, points_a.shape[0])
+        slices.append(slice(lb, ub))
+        start += blocksize
+
+    # what to do on each block
+    def process_block(slc):
+        points_a = np.load(points_a_path)
+        points_b = np.load(points_b_path)
+        matched_a, matched_b = None, None
+        if os.path.exists(matched_a_path):
+            matched_a = np.load(matched_a_path)
+        if os.path.exists(matched_b_path):
+            matched_b = np.load(matched_b_path)
+        return soma_print_score_point_clouds(
+            points_a, points_b, Na, Nb, M, D, L,
+            matched_a=matched_a,
+            matched_b=matched_b,
+            slc=slc,
+        )[:3]
+
+    # iterate map->reduce cycle
+    for iteration in range(max_iterations):
+
+        # map the blocks
+        futures = cluster.client.map(process_block, slices, pure=False)
+        future_keys = [f.key for f in futures]
+
+        # collect results
+        _scores = [[],] * len(slices)
+        for batch in as_completed(futures, with_results=True).batches():
+            for future, result in batch:
+                iii = future_keys.index(future.key)
+                _scores[iii] = result[0]
+        scores = []
+        for sublist in _scores:
+            scores += sublist
+        neighbors = result[1]
+        weights = result[2]
+
+        # determine matches
+        matched_a, matched_b = soma_print_matches(
+            points_a, points_b, scores, neighbors,
+        )
+        np.save(matched_a_path, matched_a)
+        np.save(matched_b_path, matched_b)
+        print('number of matches: ', np.sum(matched_a), np.sum(matched_b), flush=True)
+
+    return scores, neighbors, weights
+
+
+# TODO: Michael's idea: keep matches from previous iterations as landmarks, but
+#       keep their features separate from new iterations, multichannel landmarks
+def iterated_soma_print_score_point_clouds(
+    points_a,
+    points_b,
+    Na, Nb, M, D, L,
+    max_iterations=1,
+    slc=slice(None, None),
+):
+    """
+    
+    """
+
+    for iteration in range(max_iterations):
+
+        # get scores
+        if iteration == 0:
+            scores, neighbors, weights, kas = soma_print_score_point_clouds(
+                points_a, points_b, Na, Nb, M, D, L, slc=slc,
+            )
+        else:
+            scores, neighbors, weights, kas = soma_print_score_point_clouds(
+                points_a, points_b, Na, Nb, M, D, L,
+                matched_a=matched_a, matched_b=matched_b,
+                kas=kas, neighbors=neighbors, weights=weights,
+                slc=slc,
+            )
+
+        # determine matches
+        matched_a, matched_b = soma_print_matches(
+            points_a, points_b, scores, neighbors[slc],
+        )
+        print('number of matches: ', np.sum(matched_a), np.sum(matched_b), flush=True)
+
+    return scores, neighbors, weights
 
 
 def soma_print_score_point_clouds(
     points_a,
     points_b,
     Na, Nb, M, D, L,
+    matched_a=None,
+    matched_b=None,
+    kas=None,
+    neighbors=None,
+    weights=None,
     slc=slice(None, None),
 ):
     """
@@ -21,43 +141,51 @@ def soma_print_score_point_clouds(
     """
 
     # get soma prints
-    soma_prints_a, tree_a = soma_print_point_cloud(points_a, Na)
-    soma_prints_b, tree_b = soma_print_point_cloud(points_b, Nb)
+    if matched_a is None:
+        soma_prints_a = soma_print_point_cloud(points_a, Na)
+    else:
+        soma_prints_a = soma_print_point_cloud(points_a, Na, points_a[matched_a])
+    if matched_b is None:
+        soma_prints_b = soma_print_point_cloud(points_b, Nb)
+    else:
+        soma_prints_b = soma_print_point_cloud(points_b, Nb, points_b[matched_b])
 
-    # get potential matches lists
-    neighbors = tree_a.query_ball_tree(tree_b, D)
+    # initialize solver, neighbors and weights
+    if kas is None:
+        kas = k_assignment_solver(Na, Nb, M)
+    if neighbors is None:
+        tree_a = cKDTree(points_a)
+        tree_b = cKDTree(points_b)
+        neighbors = tree_a.query_ball_tree(tree_b, D)
+    if weights is None:
+        weights = []
+        for iii, local_neighbors in enumerate(neighbors):
+            if local_neighbors:
+                a = points_a[iii][None, ...]
+                b = points_b[local_neighbors]
+                if b.ndim == 1:
+                    b = b[None, ...]
+                weights.append( list( np.exp( -1 * (cdist(a, b)[0] / L)**2 ) ))
+            else:
+                weights.append([])
 
-    # initialize the k_assignment_solver
-    kas = k_assignment_solver(Na, Nb, M)
-
-    # compare points in points_a to their neighbors in points_b
-    scores, distances = [], []
+    # get soma print scores
+    scores = []
     for iii in range(points_a.shape[0])[slc]:
         if iii % 1000 == 0: print(iii, flush=True)
-        spa = soma_prints_a[iii]
-        spb_neighbors = neighbors[iii]
-        local_scores = []
-        for spb_neighbor in spb_neighbors:
-            spb = soma_prints_b[spb_neighbor]
-            sp_distances = cdist(spa, spb)
-            rows, cols = kas.solve(sp_distances)
-            local_scores.append(np.mean(sp_distances[rows, cols]))
+        if neighbors[iii]:
+            spa = soma_prints_a[iii]
+            local_scores = []
+            for neighbor in neighbors[iii]:
+                spb = soma_prints_b[neighbor]
+                sp_distances = cdist(spa, spb)
+                rows, cols = kas.solve(sp_distances)
+                local_scores.append(np.mean(sp_distances[rows, cols]))
+            scores.append( list( 100 / (1 + np.array(local_scores)) * weights[iii] ))
+        else:
+            scores.append([])
 
-        # rescale and weight the scores
-        local_distances = []
-        if local_scores:
-            a = points_a[iii][None, ...]
-            b = points_b[spb_neighbors]
-            if b.ndim == 1:
-                b = b[None, ...]
-            local_distances = cdist(a, b)[0]
-            weights = np.exp( -1 * (local_distances / L)**2 )
-            local_scores = 100 / (1 + np.array(local_scores)) * weights
-
-        scores.append(list(local_scores))
-        distances.append(list(local_distances))
-
-    return scores, distances, neighbors
+    return scores, neighbors, weights, kas
 
 
 def soma_print_point_cloud(
@@ -83,9 +211,6 @@ def soma_print_point_cloud(
     soma_prints : 3d-array
         N x num_neighbors x d. The displacement vectors for each point
         to its nearest neighbhors
-
-    tree : scipy.spatial.cKDTree
-        Useful for any further processing of the point cloud
     """
 
     tree_points = points if landmark_points is None else landmark_points
@@ -97,7 +222,43 @@ def soma_print_point_cloud(
         point = points[iii:iii+1]
         neighbors = tree_points[neighbor_indxs[iii]]
         soma_prints[iii] = neighbors - point
-    return soma_prints, tree
+    return soma_prints
+
+
+def soma_print_matches(
+    points_a,
+    points_b,
+    scores,
+    neighbors,
+    percentile=95,
+):
+    """
+    """
+
+    # get the top two scores
+    top_two_scores = np.empty((len(scores), 2), dtype=float)
+    for iii in range(len(scores)):
+        if len(scores[iii]) > 2:
+            top_two_scores[iii] = -np.partition(-np.array(scores[iii]), 2)[:2]
+        elif len(scores[iii]) == 2:
+            top_two_scores[iii] = np.sort(scores[iii])[::-1]
+        elif len(scores[iii]) == 1:
+            top_two_scores[iii] = (scores[iii][0], np.nan)
+        else:
+            top_two_scores[iii] = (np.nan, np.nan)
+
+    # determine threshold
+    threshold = np.nanpercentile(top_two_scores[:, 1], percentile)
+
+    # determine point matches
+    # TODO: this currently allows many fix to one mov matching
+    matched_a = top_two_scores[:, 0] > threshold
+    matched_b = np.zeros(points_b.shape[0], dtype=bool)
+    for iii in matched_a.nonzero()[0]:
+        indx = neighbors[iii][np.argmax(scores[iii])]
+        matched_b[indx] = True
+
+    return matched_a, matched_b
 
 
 class k_assignment_solver:

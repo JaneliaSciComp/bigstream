@@ -1387,7 +1387,7 @@ def demons_align(
     update_smoothing_sigma=0.0,
     smooth_displacement_field=True,
     smooth_update_field=False,
-    max_rms_error=0.01,
+    max_rms_error=0.00,
     histogram_match=True,
     histogram_match_levels=1024,
     histogram_match_points=7,
@@ -1654,14 +1654,18 @@ def demons_align(
             demons.SetUpdateFieldStandardDeviations(float(update_smoothing_sigma))
         demons.SetMaximumRMSError(float(max_rms_error))
 
-        def _make_iter_log(f, lv, ctx):
-            def _log():
-                logger.debug(
-                    f'{ctx} Demons level {lv} iter {f.GetElapsedIterations()}: '
-                    f'metric={f.GetMetric():.6f}'
-                )
-            return _log
-        demons.AddCommand(sitk.sitkIterationEvent, _make_iter_log(demons, level, context))
+        def _make_iter_callback(df, lv, ctx):
+            def _iter_callback():
+                iteration = df.GetElapsedIterations()
+                metric = df.GetMetric()
+                logger.debug((
+                    f'{ctx} LEVEL: {lv} '
+                    f'ITERATION: {iteration} '
+                    f'METRIC: {metric}'
+                ))
+            return _iter_callback
+
+        demons.AddCommand(sitk.sitkIterationEvent, _make_iter_callback(demons, level, context))
 
         try:
             disp = demons.Execute(f_l, m_l, disp_l)

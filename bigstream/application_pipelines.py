@@ -1,5 +1,5 @@
 import numpy as np
-from ClusterWrap import cluster as cluster_constructor
+from ClusterWrap.decorator import cluster as cluster_constructor
 from bigstream.align import alignment_pipeline
 from bigstream.transform import apply_transform
 from bigstream.piecewise_align import distributed_piecewise_alignment_pipeline

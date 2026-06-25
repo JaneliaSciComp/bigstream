@@ -10,7 +10,7 @@ from dask.distributed import as_completed, MultiLock
 from itertools import product
 from toolz import partition_all
 
-from .align import alignment_pipeline
+from .align import alignment_pipeline, deform_field_diagnostics
 from .distutils import validate_processing_block_size,ThrottledArraySliceReader
 from .image_data import (ImageData, as_image_data)
 from .ome_utils import get_spatial_values
@@ -328,7 +328,7 @@ def _compute_block_transform(compute_transform_params,
             )
         else:
             #  if it's a displacement field validate it
-            _validate_transform(transform)
+            deform_field_diagnostics(transform, fix_spacing, context=f'{block_index} displacement diagnostics')
 
     # Finished computing transformation for current block_index
     logger.info((
@@ -375,7 +375,7 @@ def _compute_block_transform(compute_transform_params,
             logger.info(f'Writing block {block_index} at {block_coords}')
             output_block = output_transform[block_coords] + transform
             # validate it again after applying the weights
-            _validate_transform(output_block)
+            deform_field_diagnostics(output_block, fix_spacing, context=f'{block_index} final displacement diagnostics')
             output_transform[block_coords] = output_block
             logger.info(f'Finished writing block {block_index} at {block_coords}')
         finally:
@@ -434,26 +434,6 @@ def _get_transform_weights(block_index,
             weights = weights[tuple(region)]
 
     return weights
-
-
-def _validate_transform(transform, correct=False, throw_exc=True):
-    """Check displacement field for NaN/Inf values and zero them out."""
-    bad = np.isnan(transform)
-    if bad.any():
-        count = np.count_nonzero(bad)
-        logger.warning(f'Transform has {count} NaN values - replacing with 0')
-        if correct:
-            transform[bad] = 0.
-        elif throw_exc:
-            raise ValueError(f'Invalid value error found at {bad}')
-    bad = np.isinf(transform)
-    if bad.any():
-        count = np.count_nonzero(bad)
-        logger.warning(f'Transform has {count} +Inf values - replacing with 0')
-        if correct:
-            transform[bad] = 0.
-        elif throw_exc:
-            raise ValueError(f'Invalid value error found at {bad}')
 
 
 def distributed_alignment_pipeline(

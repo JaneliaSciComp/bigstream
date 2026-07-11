@@ -23,7 +23,7 @@ from .cli import (CliArgsHelper, RegistrationInputs,
                   extract_registration_input_args, get_input_images,
                   dictfromjson, inttuple, floattuple)
 
-from .utils import get_processing_size, derive_shard_shape
+from .utils import derive_shard_shape, get_processing_size, get_zarr_format
 
 
 logger:logging.Logger
@@ -141,7 +141,6 @@ def _define_args(local_descriptor):
                              help='Zarr array compression options')
     args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
                              dest='output_zarr_format',
-                             default=2,
                              type=int,
                              help='Zarr output format')
     args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
@@ -191,7 +190,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          logging_config:str|None=None,
                          compressor:str|None=None,
                          compressor_opts:dict={},
-                         zarr_format:int=2,
+                         zarr_format:int=3,
                          sharding_factor=None,
                          verbose=False,
                          foreground_percentage=0,
@@ -696,6 +695,8 @@ def main():
                             if (args.inv_shrink_spacings is not None and
                                 len(args.inv_shrink_spacings) > 0)
                             else (None,) * len(args.inv_iterations))
+    output_zarr_format = get_zarr_format(reg_inputs.transform_path(),
+                                         args.output_zarr_format)
     _run_local_alignment(
         reg_inputs,
         args.align_config,
@@ -718,7 +719,7 @@ def main():
         logging_config=args.logging_config,
         compressor=args.compressor,
         compressor_opts=args.compressor_opts,
-        zarr_format=args.output_zarr_format,
+        zarr_format=output_zarr_format,
         sharding_factor=args.output_sharding_factor,
         verbose=args.verbose,
         foreground_percentage=args.foreground_percentage,

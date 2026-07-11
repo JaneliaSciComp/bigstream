@@ -11,7 +11,7 @@ from bigstream.io_utility import read_block as read_image
 
 from .cli import (dictfromjson, floattuple, inttuple)
 
-from .utils import derive_shard_shape
+from .utils import derive_shard_shape, get_zarr_format
 
 
 logger:logging.Logger
@@ -120,7 +120,6 @@ def _define_args():
                              help='Zarr array compression options')
     args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
                              dest='output_zarr_format',
-                             default=2,
                              type=int,
                              help='Zarr output format')
     args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
@@ -220,16 +219,18 @@ def _generate_foreground_mask(args):
         if ct.get('type') in ('scale', 'translation')
     ]
 
+    output_zarr_format = get_zarr_format(args.output, args.output_zarr_format)
+
     output_attrs = io_utility.prepare_parent_group_attrs(
         args.output,
         args.output_subpath,
         axes=axes,
         dataset_transformations=coordinate_transformations,
-        zarr_format=args.output_zarr_format,
+        zarr_format=output_zarr_format,
     )
 
     output_shard_size = derive_shard_shape(
-        args.output_sharding_factor, output_chunk_size, args.output_zarr_format
+        args.output_sharding_factor, output_chunk_size, output_zarr_format
     )
     output_array = io_utility.create_dataset_array(
         args.output,
@@ -240,7 +241,7 @@ def _generate_foreground_mask(args):
         compressor=args.compressor,
         compression_opts=args.compressor_opts,
         parent_attrs=output_attrs,
-        zarr_format=args.output_zarr_format,
+        zarr_format=output_zarr_format,
         shard_shape=output_shard_size,
     )
     output_array[...] = mask

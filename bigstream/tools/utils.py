@@ -1,4 +1,5 @@
 import logging
+import os
 
 from math import ceil
 
@@ -62,3 +63,16 @@ def get_processing_size(input_processing_size, shard_shape=None, blocksize=None)
     )
 
     return processing_size
+
+
+def get_zarr_format(output_name, zarr_format):
+    if zarr_format == 2 or zarr_format == 3:
+        return zarr_format
+
+    if output_name:
+        path_comps = os.path.splitext(output_name)
+        container_ext = path_comps[1]
+        return 2 if container_ext == '.zarr2' else 3
+    else:
+        return 3
+

@@ -18,7 +18,7 @@ from .cli import (CliArgsHelper, RegistrationInputs,
                   extract_registration_input_args, get_input_images,
                   dictfromjson, inttuple)
 
-from .utils import derive_shard_shape
+from .utils import derive_shard_shape, get_zarr_format
 
 
 logger:logging.Logger
@@ -54,7 +54,6 @@ def _define_args(args_descriptor):
                              help='Zarr array compression options')
     args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
                              dest='output_zarr_format',
-                             default=2,
                              type=int,
                              help='Zarr output format')
     args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
@@ -389,20 +388,22 @@ def main():
 
     set_cpu_resources(args.cpus)
 
+    output_zarr_format = get_zarr_format(reg_inputs.align_path(), args.output_zarr_format)
+
     if global_transform is None:
         # no global transform found -> calculate it and then apply it
         _run_global_align(reg_inputs,
                           args.align_config,
                           args.compressor,
                           args.compressor_opts,
-                          args.output_zarr_format,
+                          output_zarr_format,
                           sharding_factor=args.output_sharding_factor)
     else:
         # global transform found -> just apply it
         _apply_global_transform(reg_inputs,
                                 global_transform,
                                 args.compressor, args.compressor_opts,
-                                args.output_zarr_format,
+                                output_zarr_format,
                                 sharding_factor=args.output_sharding_factor)
 
 

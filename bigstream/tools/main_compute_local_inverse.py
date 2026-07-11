@@ -15,7 +15,7 @@ from bigstream.image_data import (ImageData,
 
 from .cli import (dictfromjson, inttuple, floattuple)
 
-from .utils import derive_shard_shape
+from .utils import derive_shard_shape, get_zarr_format
 
 
 logger:logging.Logger
@@ -128,7 +128,6 @@ def _define_args():
                              help='Zarr array compression options')
     args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
                              dest='output_zarr_format',
-                             default=2,
                              type=int,
                              help='Zarr output format')
     args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
@@ -189,19 +188,21 @@ def _run_compute_inverse(args):
                              if args.inv_transform_blocksize
                              else deform_blocksize[0:-1])
 
+    output_zarr_format = get_zarr_format(inv_transform_path, args.output_zarr_format)
+
     inv_transform_attrs = io_utility.prepare_parent_group_attrs(
         inv_transform_path,
         inv_transform_subpath,
         axes=local_deform_field.get_attr('axes'),
         dataset_transformations=local_deform_field.get_attr('coordinateTransformations'),
-        zarr_format=args.output_zarr_format,
+        zarr_format=output_zarr_format,
     )
     inv_deform_chunks = tuple(inv_transform_blocksize) + (len(inv_transform_blocksize),)
     # apply factor to the spatial axes only; vector axis is never sharded
     spatial_shard_size = derive_shard_shape(
         args.output_sharding_factor,
         tuple(inv_transform_blocksize),
-        args.output_zarr_format,
+        output_zarr_format,
     )
     if spatial_shard_size is not None:
         inv_deform_shard_size = tuple(spatial_shard_size) + (inv_deform_chunks[-1],)
@@ -228,7 +229,7 @@ def _run_compute_inverse(args):
         pixelResolution=calc_full_voxel_resolution_attr(local_deform_field.voxel_spacing,
                                                         local_deform_field.voxel_downsampling),
         downsamplingFactors=calc_downsampling_attr(local_deform_field.voxel_downsampling),
-        zarr_format=args.output_zarr_format,
+        zarr_format=output_zarr_format,
         shard_shape=inv_deform_shard_size,
     )
 

@@ -17,7 +17,7 @@ from bigstream.ome_utils import get_spatial_values
 from .cli import (dictfromjson, inttuple, floattuple,
                   stringlist, get_algorithm_parameters)
 
-from .utils import derive_shard_shape
+from .utils import derive_shard_shape, get_zarr_format
 
 
 logger:logging.Logger
@@ -170,7 +170,6 @@ def _define_args():
                              help='Zarr array compression options')
     args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
                              dest='output_zarr_format',
-                             default=2,
                              type=int,
                              help='Zarr output format')
     args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
@@ -241,12 +240,14 @@ def _run_apply_transform(args):
         output_blocks = (args.output_chunk_size,) * fix_data.spatial_ndim
 
     if args.output:
+        output_zarr_format = get_zarr_format(args.output, args.output_zarr_format)
+
         output_attrs = io_utility.prepare_parent_group_attrs(
             args.output,
             output_subpath,
             axes=mov_data.get_attr('axes'),
             dataset_transformations=mov_data.get_attr('coordinateTransformations'),
-            zarr_format=args.output_zarr_format,
+            zarr_format=output_zarr_format,
         )
         if args.output_timeindex is not None:
             output_timeindex = args.output_timeindex
@@ -281,7 +282,7 @@ def _run_apply_transform(args):
             output_chunk_size = tuple(get_spatial_values(output_blocks))
 
         output_shard_size = derive_shard_shape(
-            args.output_sharding_factor, output_chunk_size, args.output_zarr_format
+            args.output_sharding_factor, output_chunk_size, output_zarr_format
         )
 
         # processing block size: full shard when sharding is on, else output_blocks
@@ -309,7 +310,7 @@ def _run_apply_transform(args):
             pixelResolution=calc_full_voxel_resolution_attr(mov_data.voxel_spacing,
                                                             mov_data.voxel_downsampling),
             downsamplingFactors=calc_downsampling_attr(mov_data.voxel_downsampling),
-            zarr_format=args.output_zarr_format,
+            zarr_format=output_zarr_format,
             shard_shape=output_shard_size,
         )
 

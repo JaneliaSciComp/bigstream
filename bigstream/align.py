@@ -1302,6 +1302,11 @@ def deformable_align(
     transform = sitk.BSplineTransformInitializer(
         image1=fix, transformDomainMeshSize=initial_cp_grid, order=3,
     )
+    logger.debug((
+        f'{context} '
+        f'BSpline control point grid: {initial_cp_grid}, '
+        f'BSpline transform {transform} '
+    ))
     irm.SetInitialTransformAsBSpline(
         transform, inPlace=True, scaleFactors=control_point_levels[::-1],
     )

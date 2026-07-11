@@ -660,7 +660,7 @@ def get_voxel_spacing(attrs: dict):
 
 def open_image_container(container_path, subpath,
                          data_timeindex=None, data_channels=None,
-                         block_coords=None, container_type=None):
+                         block_coords=None):
     """
     A generalized open function that supports nrrd, tiff, npy, n5, and zarr
     containers. Maps to the appropriate format specific open function.
@@ -685,12 +685,6 @@ def open_image_container(container_path, subpath,
         A sub-region of the spatial axes you want returned. None returns
         the whole spatial domain.
 
-    container_type : string (default: None)
-        Explicit identifier of container type. Options include:
-        'nrrd', 'tif', 'npy', 'n5', and 'zarr'.
-        If None, we attempt to infer the container type from the container_path
-        extension, which is not always reliable.
-
     Returns
     -------
     data : array like
@@ -706,23 +700,21 @@ def open_image_container(container_path, subpath,
     container_ext = path_comps[1]
 
     # call the appropriate format specific open function
-    if container_ext == '.nrrd' or container_type == 'nrrd':
+    if container_ext == '.nrrd':
         logger.info(f'Open nrrd {container_path} ({real_container_path})')
         return _read_nrrd(real_container_path, block_coords=block_coords)
-    elif container_ext == '.tif' or container_ext == '.tiff' or container_type == 'tif':
+    elif container_ext == '.tif' or container_ext == '.tiff':
         logger.info(f'Open tiff {container_path} ({real_container_path})')
         return _read_tiff(real_container_path, block_coords=block_coords)
-    elif container_ext == '.npy' or container_type == 'npy':
+    elif container_ext == '.npy':
         im = np.load(real_container_path)
         bim = im[block_coords] if block_coords is not None else im
         return bim, {}
-    elif (container_ext == '.n5'
-          or os.path.exists(f'{real_container_path}/attributes.json')
-          or container_type == 'n5'):
+    elif container_ext == '.n5' or os.path.exists(f'{real_container_path}/attributes.json'):
         logger.info(f'Open N5 {container_path} ({real_container_path})')
         return _open_n5(real_container_path, subpath,
                         block_coords=block_coords)
-    elif container_ext == '.zarr' or container_type == 'zarr':
+    elif container_ext == '.zarr' or container_ext == '.zarr2':
         logger.info(f'Open Zarr {container_path}:{subpath} ({real_container_path})')
         return _open_zarr(real_container_path, subpath,
                           data_timeindex=data_timeindex,
@@ -802,7 +794,7 @@ def prepare_parent_group_attrs(container_path,
     return _serialize_ngff_metadata(metadata, zarr_format)
 
 
-def read_image_container_attributes(container_path, subpath, container_type=None):
+def read_image_container_attributes(container_path, subpath):
     """
     A generalized attribute reader that supports nrrd, tiff, n5, and zarr
     containers. Maps to the appropriate format specific attributes reader.
@@ -814,12 +806,6 @@ def read_image_container_attributes(container_path, subpath, container_type=None
 
     subpath : string
         Subpath to the dataset within the container. For nrrd and tiff can be None.
-
-    container_type : string (default: None)
-        Explicit identifier of container type. Options include:
-        'nrrd', 'tif', 'n5', and 'zarr'.
-        If None, we attempt to infer the container type from the container_path
-        extension, which is not always reliable.
 
     Returns
     -------
@@ -834,18 +820,16 @@ def read_image_container_attributes(container_path, subpath, container_type=None
 
     # map container type to appropriate attributes reader
     # read and return attributes
-    if container_ext == '.nrrd' or container_type == 'nrrd':
+    if container_ext == '.nrrd':
         logger.info(f'Read nrrd attrs {container_path} ({real_container_path})')
         return _read_nrrd_attrs(container_path)
-    elif (container_ext == '.n5' or os.path.exists(f'{container_path}/attributes.json')
-          or container_type == 'n5'):
+    elif container_ext == '.n5' or os.path.exists(f'{container_path}/attributes.json'):
         logger.info(f'Read N5 attrs {container_path} ({real_container_path})')
         return _open_n5_attrs(real_container_path, subpath)
-    elif container_ext == '.zarr' or container_type == 'zarr':
+    elif container_ext == '.zarr' or container_ext == '.zarr2':
         logger.info(f'Read Zarr attrs {container_path} ({real_container_path})')
         return _open_zarr_attrs(real_container_path, subpath)
-    elif (container_ext == '.tif' or container_ext == '.tiff'
-          or container_type == 'tif'):
+    elif container_ext == '.tif' or container_ext == '.tiff':
         logger.info(f'Read TIFF attrs {container_path} ({real_container_path})')
         return _read_tiff_attrs(container_path)
     else:

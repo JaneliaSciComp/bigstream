@@ -1056,14 +1056,9 @@ def physical_parameters_to_affine_matrix_3d(params, center):
         The affine matrix representing those physical transform parameters
     """
 
-    # translation
-    aff = np.eye(4)
-    aff[:3, -1] = params[:3]
     # rotation
-    x = np.eye(4)
-    x[:3, :3] = Rotation.from_rotvec(params[3:6]).as_matrix()
-    x = change_affine_matrix_origin(x, -center)
-    aff = np.matmul(x, aff)
+    aff = np.eye(4)
+    aff[:3, :3] = Rotation.from_rotvec(params[3:6]).as_matrix()
     # scale
     x = np.diag(tuple(params[6:9]) + (1,))
     aff = np.matmul(x, aff)
@@ -1073,7 +1068,13 @@ def physical_parameters_to_affine_matrix_3d(params, center):
     shy[0, 1], shy[2, 1] = params[9], params[11]
     shz[0, 2], shz[1, 2] = params[9], params[10]
     x = np.matmul(shz, np.matmul(shy, shx))
-    return np.matmul(x, aff)
+    aff = np.matmul(x, aff)
+    # translation
+    x = np.eye(4)
+    x[:3, -1] = params[:3]
+    aff = np.matmul(x, aff)
+    # apply the center
+    return change_affine_matrix_origin(aff, -center)
 
 
 def matrix_to_displacement_field(matrix, shape, spacing=None, centered=False):

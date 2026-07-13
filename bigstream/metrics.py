@@ -9,6 +9,7 @@ from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 from scipy.optimize import milp, LinearConstraint, Bounds
 from dask.distributed import as_completed
+import pickle
 
 
 @cluster
@@ -51,12 +52,21 @@ def distributed_iterated_soma_print_score_point_clouds(
             matched_a = np.load(matched_a_path)
         if os.path.exists(matched_b_path):
             matched_b = np.load(matched_b_path)
-        return soma_print_score_point_clouds(
+        scores, neighbors, weights = soma_print_score_point_clouds(
             points_a, points_b, Na, Nb, M, D, L,
             matched_a=matched_a,
             matched_b=matched_b,
             slc=slc,
         )[:3]
+        suffix = '_' + str(slc.start) + '_' + str(slc.stop) + '.pkl'
+        with open(temporary_directory.name + '/scores' + suffix, 'wb') as f:
+            pickle.dump(scores, f)
+        if slc.start == 0:
+            with open(temporary_directory.name + '/neighbors.pkl', 'wb') as f:
+                pickle.dump(neighbors, f)
+            with open(temporary_directory.name + '/weights.pkl', 'wb') as f:
+                pickle.dump(weights, f)
+        return slc
 
     # iterate map->reduce cycle
     for iteration in range(max_iterations):
@@ -70,12 +80,16 @@ def distributed_iterated_soma_print_score_point_clouds(
         for batch in as_completed(futures, with_results=True).batches():
             for future, result in batch:
                 iii = future_keys.index(future.key)
-                _scores[iii] = result[0]
+                suffix = '_' + str(result.start) + '_' + str(result.stop) + '.pkl'
+                with open(temporary_directory.name + '/scores' + suffix, 'rb') as f:
+                    _scores[iii] = pickle.load(f)
         scores = []
         for sublist in _scores:
             scores += sublist
-        neighbors = result[1]
-        weights = result[2]
+        with open(temporary_directory.name + '/neighbors.pkl', 'rb') as f:
+            neighbors = pickle.load(f)
+        with open(temporary_directory.name + '/weights.pkl', 'rb') as f:
+            weights = pickle.load(f)
 
         # determine matches
         matched_a, matched_b = soma_print_matches(

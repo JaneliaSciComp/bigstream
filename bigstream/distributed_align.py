@@ -374,8 +374,6 @@ def _compute_block_transform(compute_transform_params,
             # write result to disk
             logger.info(f'Writing block {block_index} at {block_coords}')
             output_block = output_transform[block_coords] + transform
-            # validate it again after applying the weights
-            deform_field_diagnostics(output_block, fix_spacing, context=f'{block_index} final displacement diagnostics')
             output_transform[block_coords] = output_block
             logger.info(f'Finished writing block {block_index} at {block_coords}')
         finally:
@@ -453,6 +451,7 @@ def distributed_alignment_pipeline(
     output_transform=None,
     max_concurrent_reads=0,
     max_cluster_jobs=0,
+    display_displacement_diagnostics=False,
     **kwargs,
 ):
     """
@@ -728,6 +727,16 @@ def distributed_alignment_pipeline(
         del blocks_transform_res
         gc.collect()
 
+    # Run displacement field diagnostics once on the fully-assembled output.
+    # Per-block diagnostics during accumulation are unreliable because a block's
+    # overlap regions only reach their final (partition-of-unity) values after
+    # all overlapping neighbors have added their weighted contributions.
+    if output_transform is not None and display_displacement_diagnostics:
+        _display_displacement_diagnostics(output_transform,
+                                              fix_blocks_ids,
+                                              fix_blocks_coords,
+                                              fix_spatial_spacing)
+
     logger.info('Distributed alignment completed successfully')
     return res
 
@@ -749,3 +758,25 @@ def _collect_results(futures):
         f.release()
 
     return res
+
+
+def _display_displacement_diagnostics(output_transform, blocks_ids, blocks_coords, fix_spacing):
+    """
+    Single diagnostic pass over the fully-assembled displacement field.
+
+    Reads each block region (including its halo) back from the assembled
+    output and reports jacobian/folding statistics on the final field, where
+    the overlap-add weighting has fully converged.
+    """
+    logger.info(f'Compute displacement diagnostics for {len(blocks_coords)} '
+                'blocks of the assembled output transform')
+    for block_index, block_coords in zip(blocks_ids, blocks_coords):
+        try:
+            output_block = output_transform[block_coords]
+            deform_field_diagnostics(
+                output_block, fix_spacing,
+                context=f'{block_index} final displacement diagnostics',
+            )
+        except Exception as e:
+            logger.error(f'Error computing diagnostics for block {block_index} '
+                         f'at {block_coords}: {e}')

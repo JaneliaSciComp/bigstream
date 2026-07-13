@@ -128,6 +128,13 @@ def _define_args(local_descriptor):
                              dest='max_concurrent_zarr_reads',
                              type=int, default=0,
                              help='Maximum number of concurrent reads from a zarr array')
+    args_parser.add_argument('--with-displacement-diagnostics',
+                             '--with_displacement_diagnostics',
+                             dest='display_displacement_diagnostics',
+                             action='store_true',
+                             help='Run displacement field diagnostics (jacobian '
+                                  'folding statistics) on the fully-assembled '
+                                  'output transform after local alignment')
     args_parser.add_argument('--compression', '--compressor',
                              dest='compressor',
                              default='zstd',
@@ -196,6 +203,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          foreground_percentage=0,
                          max_concurrent_zarr_reads=0,
                          max_cluster_jobs=0,
+                         display_displacement_diagnostics=False,
                          ):
     local_steps, local_config = get_algorithm_parameters(align_config,
                                                          'local_align',
@@ -361,6 +369,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             foreground_percentage,
             max_concurrent_zarr_reads,
             max_cluster_jobs,
+            display_displacement_diagnostics,
         )
     finally:
         cluster_client.close()
@@ -404,7 +413,8 @@ def _align_local_data(fix_image: ImageData,
                       sharding_factor,
                       foreground_percentage,
                       max_concurrent_zarr_reads,
-                      max_cluster_jobs):
+                      max_cluster_jobs,
+                      display_displacement_diagnostics):
     logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
                 f'using {ut.get_number_of_cores()} cpus')
 
@@ -498,6 +508,7 @@ def _align_local_data(fix_image: ImageData,
             foreground_percentage=foreground_percentage,
             max_concurrent_reads=max_concurrent_zarr_reads,
             max_cluster_jobs=max_cluster_jobs,
+            display_displacement_diagnostics=display_displacement_diagnostics,
         )
         logger.info((
             'Finished computing the deformation field '
@@ -725,6 +736,7 @@ def main():
         foreground_percentage=args.foreground_percentage,
         max_concurrent_zarr_reads=args.max_concurrent_zarr_reads,
         max_cluster_jobs=args.max_cluster_jobs,
+        display_displacement_diagnostics=args.display_displacement_diagnostics,
     )
 
 

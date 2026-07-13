@@ -17,7 +17,6 @@ ENV OMP_NUM_THREADS=
 
 ENV PYTHONPATH=/app/bigstream
 ENV ITKWASM_CACHE_DIR=/tmp
-
 ENV PIP_ROOT_USER_ACTION=ignore
 
 # Use the base environment from the baseImage and the conda-env

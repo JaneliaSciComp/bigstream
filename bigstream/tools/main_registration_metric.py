@@ -12,7 +12,7 @@ from bigstream.io_utility import read_block as read_image
 
 from .cli import (dictfromjson, floattuple, inttuple)
 
-from .utils import derive_shard_shape
+from .utils import derive_shard_shape, get_zarr_format
 
 
 logger:logging.Logger
@@ -202,12 +202,14 @@ def _compute_registration_metric(args):
             if ct.get('type') in ('scale', 'translation')
         ]
 
+        output_zarr_format = get_zarr_format(args.output, args.output_zarr_format)
+
         output_attrs = io_utility.prepare_parent_group_attrs(
             args.output,
             output_subpath,
             axes=axes,
             dataset_transformations=coordinate_transformations,
-            zarr_format=args.output_zarr_format,
+            zarr_format=output_zarr_format,
         )
         output_shard_size = derive_shard_shape(
             args.output_sharding_factor, output_chunk_size, args.output_zarr_format

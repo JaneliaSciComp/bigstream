@@ -2,7 +2,7 @@ import numpy as np
 from ClusterWrap.decorator import cluster
 import bigstream.utility as ut
 from bigstream.align import affine_align
-from bigstream.transform import apply_transform
+from bigstream.transform import apply_transform, generate_random_affine_transforms_3d
 from scipy.ndimage import zoom
 import zarr
 from zarr import blosc
@@ -14,7 +14,87 @@ from distributed import Event
 import time
 import os
 import aicspylibczi
-from ngff_zarr import to_ngff_image, to_multiscales, to_ngff_zarr
+#from ngff_zarr import to_ngff_image, to_multiscales, to_ngff_zarr
+import nrrd
+import glob
+
+
+def create_synthetic_tiles(
+    image,
+    spacing,
+    tile_size,
+    overlap_factor,
+    output_folder,
+    max_translation,
+    max_rotation,
+    max_scale,
+    max_shear,
+    reconstruct=False,
+):
+    """
+    
+    """
+
+    # get virtual tile origins (voxel units) and shape
+    overlaps = np.round(tile_size * overlap_factor).astype(int)
+    ntiles = np.ceil(image.shape / tile_size).astype(int)
+    origins = [tile_size * (i, j, k) - overlaps for (i, j, k) in np.ndindex(*ntiles)]
+    tile_size_with_overlaps = tile_size + 2 * overlaps
+
+    # generate random affines
+    centers = np.array(origins) + tile_size_with_overlaps / 2 * spacing
+    affines = generate_random_affine_transforms_3d(
+        np.prod(ntiles)-1, max_translation, max_rotation, max_scale, max_shear, centers,
+    )
+    affines = np.concatenate((np.eye(4)[None, ...], affines), axis=0)
+    affines_inv = np.linalg.inv(affines)
+    np.save(output_folder + '/affines.npy', affines)
+    np.save(output_folder + '/affines_inv.npy', affines_inv)
+
+    # apply affines to virtual tiles
+    fix = tuple(int(x) for x in tile_size_with_overlaps) + (image.dtype,)
+    for iii, origin in enumerate(origins):
+        tile = apply_transform(
+            fix, image, spacing, spacing,
+            transform_list=[affines[iii],],
+            fix_origin=origin * spacing,
+        )
+        write_path = output_folder + f'/tile_{iii:03d}.nrrd'
+        nrrd.write(write_path, tile.transpose(2,1,0), compression_level=2)
+    tile_paths = glob.glob(output_folder + '/tile_*.nrrd')
+
+    if not reconstruct:
+        return affines, affines_inv, tile_paths
+
+    # apply inverse affines to reconstruct
+    reconstructed_image = np.zeros_like(image)
+    for iii, origin in enumerate(origins):
+
+        # read and transform tile
+        read_path = output_folder + f'/tile_{iii:03d}.nrrd'
+        tile = nrrd.read(read_path)[0].transpose(2,1,0)
+        fix = tile.shape + (image.dtype,)
+        tile = apply_transform(
+            fix, tile, spacing, spacing,
+            transform_list=[affines_inv[iii],],
+            fix_origin=origin * spacing,
+            mov_origin=origin * spacing,
+        )
+
+        # crop domain overflows and write to reconstructed image
+        start = [abs(x) if x < 0 else 0 for x in origin]
+        overflows = np.array(image.shape) - origin - tile.shape
+        stop = [x if x < 0 else None for x in overflows]
+        tile = tile[tuple(slice(x, y) for x, y in zip(start, stop))]
+        image_crop = tuple(slice(x+y, x+y+z) for x, y, z in zip(origin, start, tile.shape))
+        tile = np.maximum(reconstructed_image[image_crop], tile)
+        reconstructed_image[image_crop] = tile
+
+    # write it
+    write_path = output_folder + '/reconstructed_image.nrrd'
+    nrrd.write(write_path, reconstructed_image.transpose(2,1,0), compression_level=2)
+
+    return affines, affines_inv, tile_paths
 
 
 def _get_tile_info(czi_file_path):
@@ -404,38 +484,38 @@ def distributed_apply_stitch(
     return output_zarr
 
 
-@cluster
-def generate_ome_ngff_zarr(
-    input_zarr_array,
-    spacing,
-    write_path,
-    scale_factors,
-    chunks,
-    cluster=None,
-    cluster_kwargs={},
-    **kwargs,
-):
-    """
-    """
-    
-    print('calling to_ngff_image', flush=True)
-    ngff_image = to_ngff_image(
-        input_zarr_array,
-        dims=('z', 'y', 'x'),
-        scale={a:b for a, b in zip('zyx', spacing)},
-        axes_units={a:'micrometer' for a in 'zyx'}
-    )
-    print('calling to_multiscales', flush=True)
-    multiscales = to_multiscales(
-        ngff_image,
-        scale_factors,
-        chunks=chunks,
-    )
-    print('calling to_ngff_zarr', flush=True)
-    to_ngff_zarr(
-        write_path,
-        multiscales,
-        **kwargs,
-    )
-    return zarr.open(write_path, 'r+')
+#@cluster
+#def generate_ome_ngff_zarr(
+#    input_zarr_array,
+#    spacing,
+#    write_path,
+#    scale_factors,
+#    chunks,
+#    cluster=None,
+#    cluster_kwargs={},
+#    **kwargs,
+#):
+#    """
+#    """
+#    
+#    print('calling to_ngff_image', flush=True)
+#    ngff_image = to_ngff_image(
+#        input_zarr_array,
+#        dims=('z', 'y', 'x'),
+#        scale={a:b for a, b in zip('zyx', spacing)},
+#        axes_units={a:'micrometer' for a in 'zyx'}
+#    )
+#    print('calling to_multiscales', flush=True)
+#    multiscales = to_multiscales(
+#        ngff_image,
+#        scale_factors,
+#        chunks=chunks,
+#    )
+#    print('calling to_ngff_zarr', flush=True)
+#    to_ngff_zarr(
+#        write_path,
+#        multiscales,
+#        **kwargs,
+#    )
+#    return zarr.open(write_path, 'r+')
 

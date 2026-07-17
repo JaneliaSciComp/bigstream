@@ -108,27 +108,60 @@ def apply_alignment_spacing(
         fix_mask_spacing = ut.relative_spacing(fix_mask.shape,
                                                fix.shape,
                                                fix_spacing)
+        logger.debug((
+            f'Fix shape {fix.shape}, '
+            f'Fix spacing {fix_spacing}, '
+            f'Fix mask shape {fix_mask.shape} => '
+            f'Fix mask spacing {fix_mask_spacing} '
+        ))
+
     mov_mask_spacing = None
     if mov_mask is not None:
         mov_mask_spacing = ut.relative_spacing(mov_mask.shape,
                                                mov.shape,
                                                mov_spacing)
+        logger.debug((
+            f'Mov shape {mov.shape}, '
+            f'Mov spacing {mov_spacing}, '
+            f'Mov mask shape {mov_mask.shape} => '
+            f'Mov mask spacing {mov_mask_spacing} '
+        ))
 
     # skip sample
     if alignment_spacing:
-        fix, fix_spacing = ut.skip_sample(fix, fix_spacing, alignment_spacing)
-        mov, mov_spacing = ut.skip_sample(mov, mov_spacing, alignment_spacing)
+        resampled_fix, resampled_fix_spacing = ut.skip_sample(fix, fix_spacing, alignment_spacing)
+        logger.debug((
+            f'Resampled fix {fix.shape} to {resampled_fix.shape} '
+            f'spacing from {alignment_spacing}/{fix_spacing} to {resampled_fix_spacing} '
+        ))
+
+        resampled_mov, resampled_mov_spacing = ut.skip_sample(mov, mov_spacing, alignment_spacing)
+        logger.debug((
+            f'Resampled mov {mov.shape} to {resampled_mov.shape} '
+            f'spacing from {alignment_spacing}/{mov_spacing} to {resampled_mov_spacing} '
+        ))
         if fix_mask is not None:
             fix_mask, fix_mask_spacing = ut.skip_sample(
                 fix_mask, fix_mask_spacing, alignment_spacing,
             )
+            logger.debug((
+                f'Resampled fix mask to {fix_mask.shape}, '
+                f'new fix mask spacing is {fix_mask_spacing} '
+            ))
         if mov_mask is not None:
             mov_mask, mov_mask_spacing = ut.skip_sample(
                 mov_mask, mov_mask_spacing, alignment_spacing,
             )
+            logger.debug((
+                f'Resampled mov mask to {mov_mask.shape}, '
+                f'new mov mask spacing is {mov_mask_spacing} '
+            ))
+    else:
+        resampled_fix, resampled_fix_spacing = (fix, fix_spacing)
+        resampled_mov, resampled_mov_spacing = (mov, mov_spacing)
 
-    return (fix, mov, fix_mask, mov_mask,
-            fix_spacing, mov_spacing, fix_mask_spacing, mov_mask_spacing,)
+    return (resampled_fix, resampled_mov, fix_mask, mov_mask,
+            resampled_fix_spacing, resampled_mov_spacing, fix_mask_spacing, mov_mask_spacing,)
 
 
 def images_to_sitk(

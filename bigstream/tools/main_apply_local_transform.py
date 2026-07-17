@@ -242,11 +242,12 @@ def _run_apply_transform(args):
     if args.output:
         output_zarr_format = get_zarr_format(args.output, args.output_zarr_format)
 
+        # resampled aligned output will use the same grid as the fixed image
         output_attrs = io_utility.prepare_parent_group_attrs(
             args.output,
             output_subpath,
             axes=mov_data.get_attr('axes'),
-            dataset_transformations=mov_data.get_attr('coordinateTransformations'),
+            dataset_transformations=fix_data.get_attr('coordinateTransformations'),
             zarr_format=output_zarr_format,
         )
         if args.output_timeindex is not None:

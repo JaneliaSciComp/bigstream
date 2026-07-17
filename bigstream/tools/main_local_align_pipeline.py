@@ -434,10 +434,10 @@ def _align_local_data(fix_image: ImageData,
                 'type': 'displacement',
                 'discrete': True,
             })
-        coordinate_transformations = fix_image.get_attr('coordinateTransformations')
-        if coordinate_transformations is not None:
+        deformfield_coord_transforms = fix_image.get_attr('coordinateTransformations')
+        if deformfield_coord_transforms is not None:
             new_transforms = []
-            for ct in coordinate_transformations:
+            for ct in deformfield_coord_transforms:
                 cttype = ct['type']
                 tx = ct[cttype]
                 chtx = tx[1]
@@ -445,12 +445,12 @@ def _align_local_data(fix_image: ImageData,
                     'type': cttype,
                     ct['type']: get_spatial_values(tx) + [chtx],
                 })
-            coordinate_transformations = new_transforms
+            deformfield_coord_transforms = new_transforms
         deformfield_attrs = io_utility.prepare_parent_group_attrs(
             deformfield_path,
             deformfield_subpath,
             axes=deformfield_axes,
-            dataset_transformations=coordinate_transformations,
+            dataset_transformations=deformfield_coord_transforms,
             zarr_format=zarr_format,
         )
         deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
@@ -536,7 +536,7 @@ def _align_local_data(fix_image: ImageData,
             inv_deformfield_path,
             inv_deformfield_subpath,
             axes=deformfield_axes,
-            dataset_transformations=coordinate_transformations,
+            dataset_transformations=deformfield_coord_transforms,
             zarr_format=zarr_format,
         )
         inv_deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
@@ -620,7 +620,7 @@ def _align_local_data(fix_image: ImageData,
             align_path,
             align_subpath,
             axes=axes,
-            dataset_transformations=mov_image.get_attr('coordinateTransformations'),
+            dataset_transformations=fix_image.get_attr('coordinateTransformations'),
             global_transformations=global_transformations,
             zarr_format=zarr_format,
         )

@@ -55,6 +55,7 @@ def apply_alignment_spacing(
     fix_spacing,
     mov_spacing,
     alignment_spacing,
+    context=''
 ):
     """
     Skip sample all images to as close to alignment_spacing as possible
@@ -109,6 +110,7 @@ def apply_alignment_spacing(
                                                fix.shape,
                                                fix_spacing)
         logger.debug((
+            f'{context} '
             f'Fix shape {fix.shape}, '
             f'Fix spacing {fix_spacing}, '
             f'Fix mask shape {fix_mask.shape} => '
@@ -121,6 +123,7 @@ def apply_alignment_spacing(
                                                mov.shape,
                                                mov_spacing)
         logger.debug((
+            f'{context} '
             f'Mov shape {mov.shape}, '
             f'Mov spacing {mov_spacing}, '
             f'Mov mask shape {mov_mask.shape} => '
@@ -131,12 +134,14 @@ def apply_alignment_spacing(
     if alignment_spacing:
         resampled_fix, resampled_fix_spacing = ut.skip_sample(fix, fix_spacing, alignment_spacing)
         logger.debug((
+            f'{context} '
             f'Resampled fix {fix.shape} to {resampled_fix.shape} '
             f'spacing from {alignment_spacing}/{fix_spacing} to {resampled_fix_spacing} '
         ))
 
         resampled_mov, resampled_mov_spacing = ut.skip_sample(mov, mov_spacing, alignment_spacing)
         logger.debug((
+            f'{context} '
             f'Resampled mov {mov.shape} to {resampled_mov.shape} '
             f'spacing from {alignment_spacing}/{mov_spacing} to {resampled_mov_spacing} '
         ))
@@ -145,6 +150,7 @@ def apply_alignment_spacing(
                 fix_mask, fix_mask_spacing, alignment_spacing,
             )
             logger.debug((
+                f'{context} '
                 f'Resampled fix mask to {fix_mask.shape}, '
                 f'new fix mask spacing is {fix_mask_spacing} '
             ))
@@ -153,6 +159,7 @@ def apply_alignment_spacing(
                 mov_mask, mov_mask_spacing, alignment_spacing,
             )
             logger.debug((
+                f'{context} '
                 f'Resampled mov mask to {mov_mask.shape}, '
                 f'new mov mask spacing is {mov_mask_spacing} '
             ))
@@ -519,6 +526,7 @@ def feature_point_ransac_affine_align(
         fix_mask, mov_mask,
         fix_spacing, mov_spacing,
         alignment_spacing,
+        context=context,
     )
     fix = X[0]
     mov = X[1]
@@ -838,6 +846,7 @@ def random_affine_search(
         fix_mask, mov_mask,
         fix_spacing, mov_spacing,
         alignment_spacing,
+        context=context,
     )
     fix = X[0]
     mov = X[1]
@@ -1073,6 +1082,7 @@ def affine_align(
         fix_mask, mov_mask,
         fix_spacing, mov_spacing,
         alignment_spacing,
+        context=context,
     )
     fix, mov, fix_mask, mov_mask = images_to_sitk(
         *X, fix_origin, mov_origin,
@@ -1210,12 +1220,19 @@ def deformable_align(
         The spacing in physical units (e.g. mm or um) between voxels
         of the moving image.
 
-    control_point_spacing : float
+    control_point_spacing : float or 1d array
         The spacing in physical units (e.g. mm or um) between control
         points that parameterize the deformation. Smaller means
         more precise alignment, but also longer compute time. Larger
         means shorter compute time and smoother transform, but less
         precise.
+
+        A scalar is broadcast to every spatial axis. An array shorter
+        than the image dimensionality is extended by repeating its last
+        element, e.g. [128, 64] becomes [128, 64, 64] for a 3D image.
+        Values are given in the same axis order as `fix_spacing` (zyx),
+        which allows different control point spacing per axis to
+        account for anisotropic images.
 
     control_point_levels : list of type int
         The optimization scales for control point spacing. E.g. if
@@ -1317,6 +1334,7 @@ def deformable_align(
         fix_mask, mov_mask,
         fix_spacing, mov_spacing,
         alignment_spacing,
+        context=context,
     )
     fix, mov, fix_mask, mov_mask = images_to_sitk(
         *X, fix_origin, mov_origin,
@@ -1329,15 +1347,39 @@ def deformable_align(
     # set up registration object
     irm = configure_irm(context=context, **kwargs)
 
+    # allow control_point_spacing to be a scalar or a per-axis array; an
+    # array shorter than the image dimensionality is extended by repeating
+    # its last value, e.g. [64, 128] -> [64, 128, 128] for a 3D image.
+    # Values are given in zyx order (matching fix_spacing), so reverse to
+    # xyz to align with fix.GetSize()/fix.GetSpacing() (sitk order).
+    ndim = fix.GetDimension()
+    control_point_spacing = np.atleast_1d(control_point_spacing)
+    if control_point_spacing.size < 1:
+        raise ValueError('control_point_spacing must not be empty')
+    if control_point_spacing.size > ndim:
+        # truncate to the image dimensions
+        control_point_spacing = control_point_spacing[:ndim]
+
+    if control_point_spacing.size < ndim:
+        control_point_spacing = np.concatenate([
+            control_point_spacing,
+            np.full(ndim - control_point_spacing.size, control_point_spacing[-1]),
+        ])
+    control_point_spacing_xyz = control_point_spacing[::-1]
+
     # initial control point grid
-    z = control_point_spacing * control_point_levels[0]
-    initial_cp_grid = [max(1, int(x*y/z)) for x, y in zip(fix.GetSize(), fix.GetSpacing())]
+    cp_divisor = control_point_spacing_xyz * control_point_levels[0]
+    initial_cp_grid = [
+        max(1, int(x*y/d))
+        for x, y, d in zip(fix.GetSize(), fix.GetSpacing(), cp_divisor)
+    ]
     transform = sitk.BSplineTransformInitializer(
         image1=fix, transformDomainMeshSize=initial_cp_grid, order=3,
     )
     logger.debug((
         f'{context} '
-        f'BSpline control point grid: {initial_cp_grid}, '
+        'BSpline control point grid: '
+        f'{fix.GetSize()}*{fix.GetSpacing()}/({control_point_spacing_xyz}*{control_point_levels[0]})={initial_cp_grid}, '
         f'BSpline transform {transform} '
     ))
     irm.SetInitialTransformAsBSpline(
@@ -1644,6 +1686,7 @@ def demons_align(
         fix_mask, mov_mask,
         fix_spacing, mov_spacing,
         alignment_spacing,
+        context=context,
     )
     fix, mov, fix_mask, mov_mask = images_to_sitk(*X, fix_origin, mov_origin)
 

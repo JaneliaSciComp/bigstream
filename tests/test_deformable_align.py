@@ -268,7 +268,44 @@ def test_pipeline_default_case_deform():
 
 
 # ---------------------------------------------------------------------------
-# 8. Return-tuple consistency test
+# 8. Anisotropic control_point_spacing test
+# ---------------------------------------------------------------------------
+
+def test_anisotropic_control_point_spacing():
+    """control_point_spacing accepts a scalar, a short array (last value
+    repeated to fill remaining axes), or a full per-axis (zyx) array."""
+    fix = _random_smooth_volume(SHAPE)
+    mov = fix.copy()
+
+    for cps in (8.0, [16.0, 8.0], [16.0, 8.0, 4.0]):
+        params, field = deformable_align(
+            fix, mov, SPACING, SPACING,
+            cps, [1],
+            metric='MS', shrink_factors=(1,), smooth_sigmas=(0.0,),
+        )
+        assert field.shape == SHAPE + (3,), (
+            f"control_point_spacing={cps}: expected {SHAPE + (3,)}, got {field.shape}"
+        )
+
+
+def test_control_point_spacing_too_many_elements_truncates():
+    """An array longer than the image dimensionality is truncated to the
+    leading `ndim` (zyx) elements rather than rejected."""
+    fix = _random_smooth_volume(SHAPE)
+    mov = fix.copy()
+
+    params, field = deformable_align(
+        fix, mov, SPACING, SPACING,
+        [16.0, 8.0, 4.0, 2.0], [1],
+        metric='MS', shrink_factors=(1,), smooth_sigmas=(0.0,),
+    )
+    assert field.shape == SHAPE + (3,), (
+        f"expected {SHAPE + (3,)}, got {field.shape}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. Return-tuple consistency test
 # ---------------------------------------------------------------------------
 
 def test_return_tuple_consistency():

@@ -1,6 +1,8 @@
 import argparse
 import logging
 import numpy as np
+import os
+
 import bigstream.io_utility as io_utility
 
 from dask.distributed import (Client, LocalCluster)
@@ -322,13 +324,15 @@ def _run_apply_transform(args):
         if args.static_transforms:
             logger.info(f'Static transformations arg: {args.static_transforms}')
             applied_affines.append(args.static_transforms)
-            affine_transforms_list.extend([np.loadtxt(tfile) for tfile in args.static_transforms])
+            affine_transforms_list.extend([np.loadtxt(tfile) for tfile in args.static_transforms
+                                                             if os.path.exists(tfile)])
 
         # read affine transformations
         if args.affine_transformations:
             logger.info(f'Affine transformations arg: {args.affine_transformations}')
             applied_affines = [args.affine_transformations]
-            affine_transforms_list.extend([np.loadtxt(tfile) for tfile in args.affine_transformations])
+            affine_transforms_list.extend([np.loadtxt(tfile) for tfile in args.affine_transformations
+                                                             if os.path.exists(tfile)])
 
         if len(affine_transforms_list) > 0:
             # affines should already be in physical space of the fixed image

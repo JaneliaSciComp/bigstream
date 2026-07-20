@@ -28,7 +28,7 @@ dependencies = [
     "pyyaml==6.0.3",
     "scikit-image>=0.26.0",
     "scipy>=1.16.3",
-    "SimpleITK>=2.5.3",
+    "SimpleITK>=2.5.5",
     "tensorstore==0.1.81",
     "tifffile[all]==2026.6.1",
     "toolz==1.1.0",

@@ -2,11 +2,9 @@ import bigstream.transform as bst
 import cv2
 import numpy as np
 import os
-import shutil
 import SimpleITK as sitk
 import bigstream.utility as ut
 import logging
-import tempfile
 
 from bigstream.configure_irm import configure_irm
 from bigstream.metrics import patch_mutual_information
@@ -1427,11 +1425,11 @@ def deformable_align(
     # otherwise return default
     if final_metric_check and final_metric_value > initial_metric_value:
         logger.warning((
-            f'{context} Deformable align optimization failed to improve metric: '
+            f'{context} Deform align optimization failed to improve metric: '
             f'initial: {initial_metric_value}, '
             f'final: {final_metric_value} '
         ))
-        logger.info(f'{context} Deformable align returning default')
+        logger.info(f'{context} Deform align returning default')
         return default
     else:
         params = np.concatenate((transform.GetFixedParameters(), transform.GetParameters()))
@@ -1445,7 +1443,7 @@ def deformable_align(
         deform_field_diagnostics(field, initial_fix_spacing, context=context)
 
         logger.info((
-            f'{context} Deformable align succeeded: '
+            f'{context} Deform align succeeded: '
             f'(initial_metric={initial_metric_value}, final_metric={final_metric_value}) '
         ))
         return params, field
@@ -1481,7 +1479,7 @@ def deform_field_diagnostics(field, spacing, context=''):
     jac_arr = sitk.GetArrayFromImage(jac)
     n_folded = int(np.count_nonzero(jac_arr <= 0))
     logger.info((
-        f'{context} Deformable align jacobian determinant: '
+        f'{context} Deform align jacobian determinant: '
         f'min={jac_arr.min()}, max={jac_arr.max()}, '
         f'mean={jac_arr.mean()}, '
         f'folded voxels (det<=0)={n_folded} '
@@ -1492,7 +1490,7 @@ def deform_field_diagnostics(field, spacing, context=''):
     u = field
     mag = np.linalg.norm(u, axis=-1)
     logger.info((
-        f'{context} Deformable align field stats: '
+        f'{context} Deform align field stats: '
         f'has NaN={bool(np.isnan(u).any())}, has Inf={bool(np.isinf(u).any())}, '
         f'disp magnitude min={mag.min()}, max={mag.max()}, '
         f'mean={mag.mean()}, p99={np.percentile(mag, 99)}'
@@ -1504,790 +1502,9 @@ def deform_field_diagnostics(field, spacing, context=''):
     gz = np.linalg.norm(np.diff(u, axis=0), axis=-1)
     for name, g in [("dx", gx), ("dy", gy), ("dz", gz)]:
         logger.info((
-            f'{context} Deformable align field smoothness {name}: '
+            f'{context} Deform align field smoothness {name}: '
             f'max jump={g.max()}, p99 jump={np.percentile(g, 99)}'
         ))
-
-
-_DEMONS_VARIANTS = {
-    'demons':         sitk.DemonsRegistrationFilter,
-    'symmetric':      sitk.SymmetricForcesDemonsRegistrationFilter,
-    'fast_symmetric': sitk.FastSymmetricForcesDemonsRegistrationFilter,
-    'diffeomorphic':  sitk.DiffeomorphicDemonsRegistrationFilter,
-}
-
-
-def demons_align(
-    fix,
-    mov,
-    fix_spacing,
-    mov_spacing,
-    iterations,
-    smooth_sigmas,
-    shrink_factors,
-    alignment_spacing=None,
-    fix_mask=None,
-    mov_mask=None,
-    fix_origin=None,
-    mov_origin=None,
-    static_transform_list=[],
-    default=None,
-    final_metric_check=True,
-    context='',
-    variant='diffeomorphic',
-    field_smoothing_sigma=1.0,
-    update_smoothing_sigma=0.0,
-    smooth_displacement_field=True,
-    smooth_update_field=False,
-    max_rms_error=0.00,
-    histogram_match=True,
-    histogram_match_levels=1024,
-    histogram_match_points=7,
-    histogram_match_threshold_at_mean=True,
-):
-    """
-    Register moving to fixed image with intensity-based Demons deformable registration.
-
-    Uses a manual multi-resolution pyramid with the SimpleITK Demons filter family.
-    Unlike deformable_align (BSpline via IRM), Demons operates directly on image
-    pairs and returns a dense displacement field; there is no metric class, no
-    optimizer, and no built-in mask interface.
-
-    Parameters
-    ----------
-    fix : ndarray
-        The fixed image.
-
-    mov : ndarray
-        The moving image; fix.ndim must equal mov.ndim.
-
-    fix_spacing : 1d array
-        Physical spacing between voxels of the fixed image.
-
-    mov_spacing : 1d array
-        Physical spacing between voxels of the moving image.
-
-    iterations : list of int
-        Number of iterations per pyramid level, ordered coarse -> fine.
-
-    smooth_sigmas : list of float
-        Gaussian smoothing sigma (physical units) per pyramid level.
-
-    shrink_factors : list of int
-        Downsampling factor per pyramid level (1 = no downsampling).
-        Passing [1], [0], [N] is supported and bypasses the pyramid.
-
-    alignment_spacing : float (default: None)
-        Skip-sample fix and mov to approximately this voxel spacing before
-        running the pyramid.
-
-    fix_mask : ndarray, tuple, or callable (default: None)
-        Foreground mask for the fixed image. Because Demons has no metric-mask
-        interface, masking is approximated by zeroing fix/mov outside the mask.
-        This biases Demons forces toward zero in masked-out regions and is NOT
-        equivalent to IRM's SetMetricFixedMask.
-
-    mov_mask : ndarray, tuple, or callable (default: None)
-        Foreground mask for the moving image (same caveat as fix_mask).
-
-    fix_origin : 1d array (default: None)
-        Physical origin of the fixed image.
-
-    mov_origin : 1d array (default: None)
-        Physical origin of the moving image.
-
-    static_transform_list : list of ndarray (default: [])
-        Transforms applied to the moving image before Demons, analogous to IRM's
-        SetMovingInitialTransform. The moving image is physically resampled by
-        the composite of these transforms. The returned field is the Demons
-        correction ONLY (residual on top of the static transforms), not the
-        total displacement, so alignment_pipeline can compose steps correctly.
-
-    default : any (default: None)
-        Returned on failure. If None, a zero displacement field matching
-        fix.shape + (ndim,) is used.
-
-    final_metric_check : bool (default: True)
-        Return default if the final SSD metric (lower is better) is worse than
-        the metric measured before the final pyramid level.
-
-    context : str (default: '')
-        Prefix for log messages.
-
-    variant : str (default: 'diffeomorphic')
-        Demons filter variant: 'demons' | 'symmetric' | 'fast_symmetric' |
-        'diffeomorphic'. Use 'diffeomorphic' to guarantee invertible warps,
-        which matters for downstream spot warping that depends on the inverse
-        field. For non-matched modalities use deformable_align with MMI instead
-        -- Demons assumes intensity correspondence.
-
-    field_smoothing_sigma : float (default: 1.0)
-        Physical-unit standard deviation for displacement field regularization
-        applied between iterations.
-
-    update_smoothing_sigma : float (default: 0.0)
-        Physical-unit standard deviation for update field smoothing; 0 disables.
-
-    smooth_displacement_field : bool (default: True)
-        Enable displacement field smoothing.
-
-    smooth_update_field : bool (default: False)
-        Enable update field smoothing.
-
-    max_rms_error : float (default: 0.01)
-        Convergence threshold (RMS displacement change between iterations).
-
-    histogram_match : bool (default: True)
-        Histogram-match mov to fix before running. Improves convergence for
-        same-modality multi-round acquisitions but adds ~50 ms per block.
-
-    histogram_match_levels : int (default: 1024)
-        Number of histogram bins for matching.
-
-    histogram_match_points : int (default: 7)
-        Number of quantile-matched control points.
-
-    histogram_match_threshold_at_mean : bool (default: True)
-        Threshold histogram matching at mean intensity.
-
-    Returns
-    -------
-    params : 1d array
-        Flattened displacement field (field.ravel(), float32). Demons has no
-        compact parameterization; params is exposed so callers that store
-        params for caching still get a valid array.
-
-    field : ndarray, shape fix.shape + (ndim,), float32
-        Dense displacement field on the original (pre-alignment-spacing) fixed
-        image grid, in physical units.
-    """
-    if len(iterations) != len(smooth_sigmas) or len(iterations) != len(shrink_factors):
-        raise ValueError(
-            f'iterations, smooth_sigmas, and shrink_factors must have equal length; '
-            f'got {len(iterations)}, {len(smooth_sigmas)}, {len(shrink_factors)}'
-        )
-
-    # store original fixed image grid; the returned field lives on this grid
-    initial_fix_shape = fix.shape
-    initial_fix_spacing = fix_spacing
-    initial_fix_origin = fix_origin
-
-    # format static transform data
-    a, b = format_static_transform_data(
-        static_transform_list, fix, fix_spacing, fix_origin,
-    )
-    static_transform_spacing = a
-    static_transform_origin = b
-
-    # realize masks
-    fix_mask = realize_mask(fix, fix_mask)
-    mov_mask = realize_mask(mov, mov_mask)
-
-    # skip-sample and convert to SITK images (images_to_sitk casts to float32)
-    X = apply_alignment_spacing(
-        fix, mov,
-        fix_mask, mov_mask,
-        fix_spacing, mov_spacing,
-        alignment_spacing,
-        context=context,
-    )
-    fix, mov, fix_mask, mov_mask = images_to_sitk(*X, fix_origin, mov_origin)
-
-    ndim = fix.GetDimension()
-
-    # set default identity field
-    if default is None:
-        zero_field = np.zeros(initial_fix_shape + (ndim,), dtype=np.float32)
-        default = (zero_field.ravel(), zero_field)
-
-    # pre-warp mov by static transforms before running demons, analogous to
-    # IRM's SetMovingInitialTransform. This keeps the returned field as the
-    # demons correction ONLY (residual), not the total displacement, so that
-    # alignment_pipeline can compose steps correctly without double-counting.
-    initial_tx = sitk.Transform(ndim, sitk.sitkIdentity)
-    if static_transform_list:
-        T = bst.transform_list_to_composite_transform(
-            static_transform_list,
-            static_transform_spacing,
-            static_transform_origin,
-        )
-        mov = sitk.Resample(mov, fix, T, sitk.sitkLinear, 0.0)
-        if mov_mask is not None:
-            mov_mask = sitk.Resample(mov_mask, fix, T, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8)
-
-    # optional histogram matching: match mov intensity distribution to fix
-    if histogram_match:
-        hm = sitk.HistogramMatchingImageFilter()
-        hm.SetNumberOfHistogramLevels(histogram_match_levels)
-        hm.SetNumberOfMatchPoints(histogram_match_points)
-        hm.SetThresholdAtMeanIntensity(histogram_match_threshold_at_mean)
-        mov = hm.Execute(mov, fix)
-
-    def _resample_mask_to_image(mask, image):
-        if mask is None:
-            return None
-        return sitk.Resample(
-            mask, image, initial_tx,
-            sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
-        )
-
-    def _zero_outside_mask(image, mask):
-        if mask is None:
-            return image
-        image_arr = sitk.GetArrayFromImage(image)
-        image_arr[sitk.GetArrayViewFromImage(mask) == 0] = 0.0
-        masked_image = sitk.GetImageFromArray(image_arr)
-        masked_image.CopyInformation(image)
-        return masked_image
-
-    # approximate masking: zero fix/mov outside masks before the pyramid.
-    # Demons has no metric-mask interface; zeroing biases forces toward zero in
-    # masked-out regions (not identical to IRM masking). Masks may have a
-    # different sampling from the images, so first resample them to image grids.
-    fix_mask = _resample_mask_to_image(fix_mask, fix)
-    mov_mask = _resample_mask_to_image(mov_mask, mov)
-    fix = _zero_outside_mask(fix, fix_mask)
-    mov = _zero_outside_mask(mov, mov_mask)
-
-    # zero initial displacement field; demons builds up from here
-    disp = sitk.TransformToDisplacementField(
-        initial_tx, sitk.sitkVectorFloat64,
-        fix.GetSize(), fix.GetOrigin(), fix.GetSpacing(), fix.GetDirection(),
-    )
-
-    # baseline metric (SSD) before any pyramid level, for final_metric_check
-    fix_np = sitk.GetArrayViewFromImage(fix).astype(np.float64)
-    mov_np = sitk.GetArrayViewFromImage(mov).astype(np.float64)
-    initial_metric_value = float(np.mean((fix_np - mov_np) ** 2))
-
-    # multi-resolution pyramid loop, coarse -> fine
-    demons_filter = None
-    last_level_initial_metric = initial_metric_value
-    for level, (shrink, sigma, n_iter) in enumerate(
-        zip(shrink_factors, smooth_sigmas, iterations)
-    ):
-        # smooth fix and mov (sigma in physical units)
-        if sigma > 0:
-            smoother = sitk.SmoothingRecursiveGaussianImageFilter()
-            smoother.SetSigma(float(sigma))
-            f_l = smoother.Execute(fix)
-            m_l = smoother.Execute(mov)
-        else:
-            f_l = fix
-            m_l = mov
-
-        # downsample to level resolution
-        if shrink > 1:
-            f_l = sitk.Shrink(f_l, [int(shrink)] * ndim)
-            m_l = sitk.Shrink(m_l, [int(shrink)] * ndim)
-
-        # resample current displacement field to level grid
-        disp_l = sitk.Resample(
-            disp, f_l, initial_tx, sitk.sitkLinear, 0.0, sitk.sitkVectorFloat64,
-        )
-
-        # record the metric just before the final level for metric check
-        is_final_level = (level == len(shrink_factors) - 1)
-        if final_metric_check and is_final_level:
-            disp_tx = sitk.DisplacementFieldTransform(
-                sitk.Cast(disp_l, sitk.sitkVectorFloat64)
-            )
-            warped = sitk.Resample(m_l, f_l, disp_tx, sitk.sitkLinear, 0.0)
-            f_arr = sitk.GetArrayViewFromImage(f_l).astype(np.float64)
-            w_arr = sitk.GetArrayViewFromImage(warped).astype(np.float64)
-            last_level_initial_metric = float(np.mean((f_arr - w_arr) ** 2))
-
-        # configure demons filter for this level
-        demons = _DEMONS_VARIANTS[variant]()
-        demons.SetNumberOfIterations(int(n_iter))
-        demons.SetStandardDeviations(float(field_smoothing_sigma))
-        demons.SetSmoothDisplacementField(smooth_displacement_field)
-        demons.SetSmoothUpdateField(smooth_update_field)
-        if update_smoothing_sigma > 0:
-            demons.SetUpdateFieldStandardDeviations(float(update_smoothing_sigma))
-        demons.SetMaximumRMSError(float(max_rms_error))
-
-        def _make_iter_callback(df, lv, ctx):
-            def _iter_callback():
-                iteration = df.GetElapsedIterations()
-                metric = df.GetMetric()
-                logger.debug((
-                    f'{ctx} LEVEL: {lv} '
-                    f'ITERATION: {iteration} '
-                    f'METRIC: {metric}'
-                ))
-            return _iter_callback
-
-        demons.AddCommand(sitk.sitkIterationEvent, _make_iter_callback(demons, level, context))
-
-        try:
-            disp = demons.Execute(f_l, m_l, disp_l)
-        except Exception as e:
-            logger.error(f'{context} Demons registration failed at level {level}: {e}')
-            logger.info(f'{context} Returning default')
-            return default
-
-        demons_filter = demons
-        logger.info(
-            f'{context} Demons level {level}: '
-            f'shrink={shrink}, sigma={sigma}, iters={n_iter}, '
-            f'metric={demons.GetMetric():.6f}'
-        )
-
-    # final metric check: SSD is lower-is-better; compare last level final vs initial
-    if final_metric_check and demons_filter is not None:
-        final_metric_value = demons_filter.GetMetric()
-        if final_metric_value > last_level_initial_metric:
-            logger.warning((
-                f'{context} Demons align optimization failed to improve metric: '
-                f'initial: {last_level_initial_metric}, '
-                f'final: {final_metric_value} '
-            ))
-            logger.info(f'{context} Demons align returning default')
-            return default
-
-    # resample displacement field back to the original (pre-alignment-spacing) fix grid.
-    # the alignment_spacing round-trip ensures the returned field always has shape
-    # fix.shape + (ndim,), consistent with deformable_align.
-    ref_origin = (
-        np.asarray(initial_fix_origin, dtype=np.float64)
-        if initial_fix_origin is not None
-        else np.zeros(ndim)
-    )
-    ref = ut.numpy_to_sitk(
-        np.zeros(initial_fix_shape, dtype=np.float32),
-        np.asarray(initial_fix_spacing, dtype=np.float64),
-        ref_origin,
-    )
-    disp_full = sitk.Resample(
-        disp, ref, initial_tx, sitk.sitkLinear, 0.0, sitk.sitkVectorFloat64,
-    )
-
-    # convert from SITK XYZ vector components to bigstream ZYX convention
-    field = sitk.GetArrayFromImage(disp_full).astype(np.float32)[..., ::-1]
-    params = field.ravel().astype(np.float32)
-
-    final_metric = demons_filter.GetMetric() if demons_filter is not None else float('nan')
-    logger.info((
-        f'{context} Demons align succeeded: '
-        f'(initial_metric={initial_metric_value:.6f}, '
-        f'final_metric={final_metric:.6f}) '
-    ))
-    return params, field
-
-
-def _robust_normalize(arr, stats=None, p_low=1.0, p_high=99.0):
-    """
-    Clip to the [p_low, p_high] percentile range and rescale to [0, 1].
-
-    Used to make an SSD-based comparison scale-invariant: a plain shared
-    rescale (e.g. dividing both images by the same constant) does NOT change
-    which of two SSD values is smaller, since SSD(fix/s, mov/s) = SSD(fix,
-    mov) / s**2 for any positive s -- the ordering is preserved. What DOES
-    change the comparison is normalizing fix and mov INDEPENDENTLY (each using
-    its own statistics) and clipping outliers, since that removes a difference
-    in absolute intensity scale/exposure between fix and mov and stops a
-    handful of very bright voxels from dominating the squared-error sum --
-    both are common with raw, wide-dynamic-range (e.g. uint16) fluorescence
-    data and can otherwise make a genuinely-improved MI-based registration
-    look worse under raw-intensity SSD.
-
-    Parameters
-    ----------
-    arr : ndarray
-        The array to normalize.
-
-    stats : tuple of (lo, hi) or None (default: None)
-        Percentile values to use instead of computing them from `arr`. Pass
-        the same `mov` image's stats when normalizing `warped` (a resample of
-        `mov`), so the "before" and "after" comparison uses one consistent
-        scale for that image rather than two independently (re)computed ones.
-
-    p_low, p_high : float (default: 1.0, 99.0)
-        Percentiles defining the clip range when `stats` is None.
-
-    Returns
-    -------
-    normalized : ndarray
-        `arr` clipped and rescaled to [0, 1].
-    """
-    if stats is None:
-        lo, hi = np.percentile(arr, [p_low, p_high])
-    else:
-        lo, hi = stats
-    denom = max(float(hi - lo), 1e-6)
-    return np.clip((arr - lo) / denom, 0.0, 1.0)
-
-
-def _read_elastix_log_tail(log_dir, n_lines=40):
-    """
-    Read the tail of elastix's own log file, if present.
-
-    elastix writes ``elastix.log`` into ``log_dir`` only when file logging was
-    enabled before the run; the real diagnostic message for a failure (elastix
-    exceptions are otherwise re-raised by the itk wrapper as a generic
-    "Internal elastix error") lives there, typically near the end of the file.
-    """
-    log_path = os.path.join(log_dir, 'elastix.log')
-    if not os.path.exists(log_path):
-        return ''
-    try:
-        with open(log_path) as f:
-            lines = f.readlines()
-        return ''.join(lines[-n_lines:])
-    except OSError:
-        return ''
-
-
-def elastix_deform_align(
-    fix,
-    mov,
-    fix_spacing,
-    mov_spacing,
-    parameter_map='bspline',
-    number_of_resolutions=4,
-    final_grid_spacing_physical=None,
-    maximum_iterations=256,
-    metric='MI',
-    number_of_spatial_samples=4096,
-    number_of_histogram_bins=32,
-    bending_energy_weight=1.0,
-    alignment_spacing=None,
-    fix_mask=None,
-    mov_mask=None,
-    fix_origin=None,
-    mov_origin=None,
-    static_transform_list=[],
-    default=None,
-    final_metric_check=True,
-    context='',
-    **extra_parameters,
-):
-    """
-    Register moving to fixed image with an elastix B-spline deformation, run
-    through the ``itk-elastix`` package, and return a dense displacement field.
-
-    This is a field-producing sibling of ``deformable_align`` (SimpleITK BSpline
-    + IRM) and ``demons_align`` (SimpleITK Demons). It uses elastix's
-    multi-resolution B-spline optimizer (adaptive stochastic gradient descent,
-    random sampling, bending-energy regularization). The return contract is
-    identical to ``demons_align``: a displacement field on the original fixed
-    grid, in the bigstream zyx convention, representing the elastix correction
-    ONLY (the moving image is pre-warped by ``static_transform_list`` first, so
-    the field composes correctly in ``alignment_pipeline`` without
-    double-counting).
-
-    Parameters
-    ----------
-    fix, mov : ndarray
-        Fixed and moving images (zyx).
-
-    fix_spacing, mov_spacing : 1d array
-        Physical voxel spacing (zyx).
-
-    parameter_map : str or itk.ParameterObject (default: 'bspline')
-        elastix parameter preset (see ``configure_elastix.ELASTIX_PRESETS``) or
-        a fully prebuilt ``itk.ParameterObject`` (in which case the numeric
-        arguments below are ignored).
-
-    number_of_resolutions : int (default: 4)
-        Multi-resolution pyramid levels.
-
-    final_grid_spacing_physical : float or 1d array (default: None)
-        B-spline control point grid spacing at the finest level, in physical
-        units, zyx order (the elastix analog of ``deformable_align``'s
-        ``control_point_spacing``). A scalar is broadcast; a short array is
-        extended by repeating its last element; a too-long array is truncated
-        to the leading elements. None uses the preset default.
-
-    maximum_iterations : int (default: 256)
-        Optimizer iterations per resolution.
-
-    metric : str (default: 'AdvancedMattesMutualInformation')
-        elastix metric name.
-
-    number_of_spatial_samples : int (default: 4096)
-        Random image sampler count per resolution.
-
-    number_of_histogram_bins : int (default: 32)
-        Histogram bins for mutual-information metrics.
-
-    bending_energy_weight : float (default: 1.0)
-        Weight of the transform bending-energy penalty (bspline preset only).
-
-    alignment_spacing : float (default: None)
-        Skip-sample fix and mov to approximately this spacing before
-        registration. The returned field is resampled back to the original fix
-        grid, so its shape is always ``fix.shape + (ndim,)``.
-
-    fix_mask, mov_mask : ndarray, tuple of floats, or function (default: None)
-        Masks limiting the metric region, same semantics as the other align
-        functions. Passed to elastix as fixed/moving masks.
-
-    fix_origin, mov_origin : 1d array (default: None)
-        Physical origins of the fixed and moving images.
-
-    static_transform_list : list of numpy arrays (default: [])
-        Transforms applied to the moving image before elastix runs. The
-        returned field is the residual correction only.
-
-    default : (params, field) tuple (default: None)
-        Returned on failure or if the metric did not improve. If None, the
-        identity (zero) field is used.
-
-    final_metric_check : bool (default: True)
-        If True, return ``default`` unless the post-registration SSD is lower
-        than the pre-registration SSD. Both images are independently, robustly
-        normalized (percentile clip + rescale to [0, 1]; see
-        ``_robust_normalize``) before computing SSD, so the comparison is not
-        dominated by a difference in absolute intensity scale between fix and
-        mov or by a handful of outlier/bright voxels -- both common with raw,
-        wide-dynamic-range data (e.g. uint16 fluorescence), where they can
-        otherwise make a genuinely-improved MI-based registration look worse
-        under raw-intensity SSD and get incorrectly rejected.
-
-    context : str (default: '')
-        Prefix for log messages.
-
-    **extra_parameters
-        Verbatim elastix parameter-map overrides (final say), passed as keyword
-        arguments, e.g. ``RandomSeed=42, ImageSampler='RandomCoordinate'``. In a
-        config file these are just extra keys under the ``elastix:`` step.
-
-    Returns
-    -------
-    params : 1d array
-        The flattened displacement field (matches ``demons_align``).
-
-    field : ndarray
-        The displacement field, shape ``fix.shape + (ndim,)``, zyx components.
-    """
-    # lazy imports so bigstream.align imports even without itk-elastix installed
-    import itk
-    from bigstream.configure_elastix import (
-        build_elastix_parameter_object, configure_elastix_threads,
-    )
-
-    # bound the itk thread count (elastix + densify filter); see configure_elastix
-    nthreads = configure_elastix_threads(context=context)
-
-    # store original fixed image grid; the returned field lives on this grid
-    initial_fix_shape = fix.shape
-    initial_fix_spacing = fix_spacing
-    initial_fix_origin = fix_origin
-
-    # format static transform data
-    a, b = format_static_transform_data(
-        static_transform_list, fix, fix_spacing, fix_origin,
-    )
-    static_transform_spacing = a
-    static_transform_origin = b
-
-    # realize masks
-    fix_mask = realize_mask(fix, fix_mask)
-    mov_mask = realize_mask(mov, mov_mask)
-
-    # skip-sample and convert to SITK images (images_to_sitk casts to float32)
-    X = apply_alignment_spacing(
-        fix, mov,
-        fix_mask, mov_mask,
-        fix_spacing, mov_spacing,
-        alignment_spacing,
-        context=context,
-    )
-    fix, mov, fix_mask, mov_mask = images_to_sitk(*X, fix_origin, mov_origin)
-
-    ndim = fix.GetDimension()
-
-    # default identity field
-    if default is None:
-        zero_field = np.zeros(initial_fix_shape + (ndim,), dtype=np.float32)
-        default = (zero_field.ravel(), zero_field)
-
-    # pre-warp mov (and its mask) by the static transforms so the returned field
-    # is the elastix correction ONLY (residual), consistent with demons_align.
-    initial_tx = sitk.Transform(ndim, sitk.sitkIdentity)
-    if static_transform_list:
-        T = bst.transform_list_to_composite_transform(
-            static_transform_list,
-            static_transform_spacing,
-            static_transform_origin,
-        )
-        mov = sitk.Resample(mov, fix, T, sitk.sitkLinear, 0.0)
-        if mov_mask is not None:
-            mov_mask = sitk.Resample(
-                mov_mask, fix, T, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
-            )
-
-    # resample masks onto their image grids (masks may be sampled differently)
-    if fix_mask is not None:
-        fix_mask = sitk.Resample(
-            fix_mask, fix, initial_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
-        )
-    if mov_mask is not None:
-        mov_mask = sitk.Resample(
-            mov_mask, mov, initial_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
-        )
-
-    # bridge SITK -> ITK (elastix uses native ITK images). Both libraries use
-    # xyz spacing/origin, so those transfer directly; numpy arrays are zyx.
-    def _sitk_to_itk(simg, as_uint8=False):
-        arr = sitk.GetArrayFromImage(simg)
-        arr = np.ascontiguousarray(arr.astype(np.uint8 if as_uint8 else np.float32))
-        iimg = itk.image_from_array(arr)
-        iimg.SetSpacing([float(s) for s in simg.GetSpacing()])
-        iimg.SetOrigin([float(o) for o in simg.GetOrigin()])
-        return iimg
-
-    fix_itk = _sitk_to_itk(fix)
-    mov_itk = _sitk_to_itk(mov)
-
-    # final grid spacing: zyx -> xyz, supporting scalar / short / long arrays
-    final_grid_xyz = None
-    if final_grid_spacing_physical is not None:
-        g = np.atleast_1d(np.asarray(final_grid_spacing_physical, dtype=float))
-        if g.size > ndim:
-            g = g[:ndim]
-        elif g.size < ndim:
-            g = np.concatenate([g, np.full(ndim - g.size, g[-1])])
-        final_grid_xyz = list(g[::-1])
-
-    parameter_object = build_elastix_parameter_object(
-        preset=parameter_map,
-        ndim=ndim,
-        number_of_resolutions=number_of_resolutions,
-        final_grid_spacing_xyz=final_grid_xyz,
-        metric=metric,
-        maximum_iterations=maximum_iterations,
-        number_of_spatial_samples=number_of_spatial_samples,
-        number_of_histogram_bins=number_of_histogram_bins,
-        bending_energy_weight=bending_energy_weight,
-        context=context,
-        **extra_parameters,
-    )
-    logger.debug((
-        f'{context} '
-        f'Elastix registration parameters {parameter_object}'
-    ))
-
-    # run elastix, then densify the result transform to a displacement field
-    # entirely in memory (TransformToDisplacementFieldFilter). Note: transformix
-    # would write a deformationField.nii to the cwd as a side effect, which under
-    # dask would have many workers colliding on the same file -- so avoid it.
-    #
-    # elastix's own log can only be captured if file logging is enabled BEFORE
-    # the run (there's no way to turn it on after an exception), so always
-    # write it to a private, per-call temp directory and remove it afterward.
-    # Without this, failures only surface ITK's generic wrapper message
-    # ("Internal elastix error: See elastix log"), which hides the real cause
-    # (e.g. a thin block with < 4 voxels along some axis).
-    log_dir = tempfile.mkdtemp(prefix='bigstream_elastix_')
-    elastix_log_tail = ''
-    try:
-        elastix = itk.ElastixRegistrationMethod.New(fix_itk, mov_itk)
-        elastix.SetParameterObject(parameter_object)
-        elastix.SetNumberOfWorkUnits(nthreads)
-        if fix_mask is not None:
-            elastix.SetFixedMask(_sitk_to_itk(fix_mask, as_uint8=True))
-        if mov_mask is not None:
-            elastix.SetMovingMask(_sitk_to_itk(mov_mask, as_uint8=True))
-        elastix.SetOutputDirectory(log_dir)
-        elastix.SetLogToFile(True)
-        elastix.SetLogToConsole(False)
-        elastix.UpdateLargestPossibleRegion()
-
-        # combination transform maps fixed -> moving; densify to a displacement
-        # field on the (skip-sampled) fixed grid. Matches transformix exactly.
-        result_transform = elastix.GetCombinationTransform()
-        field_type = itk.Image[itk.Vector[itk.F, ndim], ndim]
-        to_field = itk.TransformToDisplacementFieldFilter[field_type, itk.D].New()
-        to_field.SetTransform(result_transform)
-        to_field.SetUseReferenceImage(True)
-        to_field.SetReferenceImage(fix_itk)
-        to_field.Update()
-        dfield_itk = to_field.GetOutput()
-    except Exception as e:
-        elastix_log_tail = _read_elastix_log_tail(log_dir)
-        logger.error((
-            f'{context} Registration failed due to ITK/elastix exception: {e}'
-            + (f'\n{context} elastix log tail:\n{elastix_log_tail}' if elastix_log_tail else '')
-        ))
-        logger.info(f'{context} Returning default')
-        return default
-    finally:
-        # capture the log before removing its directory, regardless of outcome,
-        # so a final_metric_check rejection below can also report it (it can
-        # only be enabled before the run, not after the fact)
-        if not elastix_log_tail:
-            elastix_log_tail = _read_elastix_log_tail(log_dir)
-        shutil.rmtree(log_dir, ignore_errors=True)
-
-    # ITK displacement field (xyz vector components) on the skip-sampled fix grid
-    # -> SITK vector image with the same geometry
-    dfield_np = itk.array_from_image(dfield_itk).astype(np.float64)
-    disp = sitk.GetImageFromArray(dfield_np, isVector=True)
-    disp.SetSpacing(fix.GetSpacing())
-    disp.SetOrigin(fix.GetOrigin())
-    disp.SetDirection(fix.GetDirection())
-
-    # final metric check on the skip-sampled grid (SSD, lower is better).
-    # Images are independently, robustly normalized first: a plain shared
-    # rescale would NOT change the comparison (SSD/s**2 preserves ordering for
-    # any s), but raw wide-dynamic-range data (e.g. uint16 fluorescence) can
-    # make SSD dominated by a few bright/outlier voxels or by an absolute
-    # intensity-scale difference between fix and mov -- independent per-image
-    # percentile normalization removes both effects. mov and warped (a
-    # resample of mov) share mov's own stats so "before" and "after" use one
-    # consistent scale.
-    if final_metric_check:
-        fix_arr = sitk.GetArrayViewFromImage(fix).astype(np.float64)
-        mov_arr = sitk.GetArrayViewFromImage(mov).astype(np.float64)
-        fix_norm = _robust_normalize(fix_arr)
-        mov_stats = tuple(np.percentile(mov_arr, [1.0, 99.0]))
-        mov_norm = _robust_normalize(mov_arr, stats=mov_stats)
-        initial_metric_value = float(np.mean((fix_norm - mov_norm) ** 2))
-        disp_tx = sitk.DisplacementFieldTransform(
-            sitk.Cast(sitk.Image(disp), sitk.sitkVectorFloat64)
-        )
-        warped = sitk.Resample(mov, fix, disp_tx, sitk.sitkLinear, 0.0)
-        warped_arr = sitk.GetArrayViewFromImage(warped).astype(np.float64)
-        warped_norm = _robust_normalize(warped_arr, stats=mov_stats)
-        final_metric_value = float(np.mean((fix_norm - warped_norm) ** 2))
-        if final_metric_value > initial_metric_value:
-            logger.warning((
-                f'{context} Elastix deform optimization failed to improve metric '
-                f'(normalized SSD): initial: {initial_metric_value}, '
-                f'final: {final_metric_value} '
-                + (f'\n{context} elastix log tail:\n{elastix_log_tail}' if elastix_log_tail else '')
-            ))
-            logger.info(f'{context} Elastix deform align returning default')
-            return default
-
-    # resample field back to the original (pre-alignment-spacing) fix grid so
-    # the returned field always has shape initial_fix_shape + (ndim,)
-    ref_origin = (
-        np.asarray(initial_fix_origin, dtype=np.float64)
-        if initial_fix_origin is not None
-        else np.zeros(ndim)
-    )
-    ref = ut.numpy_to_sitk(
-        np.zeros(initial_fix_shape, dtype=np.float32),
-        np.asarray(initial_fix_spacing, dtype=np.float64),
-        ref_origin,
-    )
-    disp_full = sitk.Resample(
-        disp, ref, initial_tx, sitk.sitkLinear, 0.0, sitk.sitkVectorFloat64,
-    )
-
-    # convert from ITK/SITK xyz vector components to bigstream zyx convention
-    field = sitk.GetArrayFromImage(disp_full).astype(np.float32)[..., ::-1]
-    params = field.ravel().astype(np.float32)
-
-    # diagnostics: check the deformation field for folding and discontinuities
-    deform_field_diagnostics(field, initial_fix_spacing, context=context)
-
-    logger.info(f'{context} Elastix deform align succeeded')
-    return params, field
 
 
 def alignment_pipeline(
@@ -2333,7 +1550,7 @@ def alignment_pipeline(
         'affine' : run `affine_align`
         'deform' : run `deformable_align`
         'demons' : run `demons_align`
-        'elastix' : run `elastix_deform_align`
+        'elastix' : run `elastix_align`
         For each tuple, the dict specifies the arguments to that alignment function
         Arguments specified here override any global arguments given through kwargs
         for their specific step only.
@@ -2418,6 +1635,10 @@ def alignment_pipeline(
             # otherwise return the identity
             return np.eye(ndim + 1)
 
+    # lazy imports so bigstream.align has no hard dependency on bigstream.contrib
+    from bigstream.contrib.demons_align import demons_align
+    from bigstream.contrib.elastix_align import elastix_align
+
     # define how to run alignment functions
     a = (fix, mov, fix_spacing, mov_spacing)
     b = {'fix_mask':fix_mask, 'mov_mask':mov_mask,
@@ -2428,7 +1649,7 @@ def alignment_pipeline(
              'affine':lambda **c: affine_align(*a, **{**b, **c}),
              'deform':lambda **c: deformable_align(*a, **{**b, **c})[1],
              'demons':lambda **c: demons_align(*a, **{**b, **c})[1],
-             'elastix':lambda **c: elastix_deform_align(*a, **{**b, **c})[1],}
+             'elastix':lambda **c: elastix_align(*a, **{**b, **c})[1],}
 
     # loop over steps
     new_transforms = []
@@ -2438,7 +1659,8 @@ def alignment_pipeline(
         # append new transforms to the static transforms
         arguments['static_transform_list'] = static_transform_list + new_transforms
         logger.debug(f'Run {context} {alignment} {arguments}')
-        alignment_result = align[alignment](context=f'{alignment} {context}', **arguments)
+        alignment_function = alignment.split('-')[0]
+        alignment_result = align[alignment_function](context=f'{alignment} {context}', **arguments)
         logger.debug(f'Completed {context} {alignment} {arguments}')
         new_transforms.append(alignment_result)
 
@@ -2519,7 +1741,7 @@ def ransac_masks_meta_align(
         'affine' : run `affine_align`
         'deform' : run `deformable_align`
         'demons' : run `demons_align`
-        'elastix' : run `elastix_deform_align`
+        'elastix' : run `elastix_align`
         For each tuple, the dict specifies the arguments to that alignment function
         Arguments specified here override any global arguments given through kwargs
         for their specific step only.

@@ -1,7 +1,8 @@
 import numpy as np
 import SimpleITK as sitk
 
-from bigstream.align import demons_align, alignment_pipeline
+from bigstream.contrib.demons_align import demons_align
+from bigstream.align import alignment_pipeline
 import bigstream.utility as ut
 
 

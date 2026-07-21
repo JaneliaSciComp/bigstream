@@ -2,12 +2,13 @@ import numpy as np
 import pytest
 import SimpleITK as sitk
 
-# elastix is an optional dependency; skip the whole module if unavailable
-itk = pytest.importorskip("itk")
-if not hasattr(itk, "ElastixRegistrationMethod"):
-    pytest.skip("itk-elastix not installed", allow_module_level=True)
+# elastix is bundled with SimpleITK only in beta builds (>=3.0.0b1); skip the
+# whole module if the installed SimpleITK doesn't have it.
+if not hasattr(sitk, "ElastixImageFilter"):
+    pytest.skip("SimpleITK build without bundled elastix", allow_module_level=True)
 
-from bigstream.align import elastix_deform_align, alignment_pipeline, _robust_normalize
+from bigstream.contrib.elastix_align import elastix_align, _robust_normalize
+from bigstream.align import alignment_pipeline
 import bigstream.utility as ut
 import bigstream.transform as bst
 
@@ -60,11 +61,11 @@ SPACING = np.array([1.0, 1.0, 1.0])
 
 # fast, low-cost elastix settings shared across tests
 FAST_KWARGS = dict(
-    parameter_map='bspline',
-    number_of_resolutions=2,
-    maximum_iterations=48,
-    number_of_spatial_samples=1024,
-    final_grid_spacing_physical=8.0,
+    align_method='bspline',
+    NumberOfResolutions=2,
+    MaximumNumberOfIterations=48,
+    NumberOfSpatialSamples=1024,
+    control_point_spacing=8.0,
 )
 
 
@@ -76,7 +77,7 @@ def test_identity_returns_near_zero_field():
     """fix == mov: final_metric_check rejects any spurious warp, so the
     returned field is the (zero) default."""
     fix = _random_smooth_volume(SHAPE)
-    params, field = elastix_deform_align(
+    params, field = elastix_align(
         fix, fix.copy(), SPACING, SPACING, **FAST_KWARGS,
     )
     assert field.shape == SHAPE + (3,)
@@ -95,10 +96,10 @@ def test_shifted_volume_recovery():
     mov = _apply_translation_sitk(fix, SPACING, shift)
     initial_ssd = float(np.mean((fix - mov) ** 2))
 
-    params, field = elastix_deform_align(
+    params, field = elastix_align(
         fix, mov, SPACING, SPACING,
-        number_of_resolutions=3, maximum_iterations=128,
-        number_of_spatial_samples=2048, final_grid_spacing_physical=8.0,
+        NumberOfResolutions=3, MaximumNumberOfIterations=128,
+        NumberOfSpatialSamples=2048, control_point_spacing=8.0,
     )
     assert field.shape == SHAPE + (3,)
 
@@ -128,10 +129,10 @@ def test_bspline_distorted_recovery():
     initial_ssd = float(np.mean((fix - mov) ** 2))
     assert initial_ssd > 1e-4, "deformation too small to test recovery"
 
-    params, field = elastix_deform_align(
+    params, field = elastix_align(
         fix, mov, SPACING, SPACING,
-        number_of_resolutions=3, maximum_iterations=128,
-        number_of_spatial_samples=2048, final_grid_spacing_physical=8.0,
+        NumberOfResolutions=3, MaximumNumberOfIterations=128,
+        NumberOfSpatialSamples=2048, control_point_spacing=8.0,
     )
     assert field.shape == SHAPE + (3,)
 
@@ -153,7 +154,7 @@ def test_mask_runs_and_returns_correct_shape():
     mask = np.zeros(SHAPE, dtype=np.uint8)
     mask[:, :, SHAPE[2] // 2:] = 1  # right half foreground
 
-    params, field = elastix_deform_align(
+    params, field = elastix_align(
         fix, mov, SPACING, SPACING,
         fix_mask=mask, **FAST_KWARGS,
     )
@@ -175,11 +176,11 @@ def test_static_transform_list_pre_aligns():
     affine = np.eye(4)
     affine[:3, 3] = -shift[::-1] * 0.75  # XYZ, negative to map fixed->moving
 
-    params, field = elastix_deform_align(
+    params, field = elastix_align(
         fix, mov, SPACING, SPACING,
         static_transform_list=[affine],
-        number_of_resolutions=3, maximum_iterations=128,
-        number_of_spatial_samples=2048, final_grid_spacing_physical=8.0,
+        NumberOfResolutions=3, MaximumNumberOfIterations=128,
+        NumberOfSpatialSamples=2048, control_point_spacing=8.0,
     )
     assert field.shape == SHAPE + (3,)
 
@@ -199,7 +200,7 @@ def test_alignment_spacing_roundtrip():
     fix = _random_smooth_volume(SHAPE)
     mov = fix.copy()
     for spacing in [None, 2.0]:
-        params, field = elastix_deform_align(
+        params, field = elastix_align(
             fix, mov, SPACING, SPACING,
             alignment_spacing=spacing, **FAST_KWARGS,
         )
@@ -246,10 +247,10 @@ def test_wide_dynamic_range_metric_check_runs_cleanly():
     mov = np.roll(fix, (0, 2, 3), axis=(0, 1, 2)).astype(np.float32)
     spacing = np.array([1.0, 1.0, 1.0])
 
-    params, field = elastix_deform_align(
+    params, field = elastix_align(
         fix, mov, spacing, spacing,
-        number_of_resolutions=2, maximum_iterations=48,
-        number_of_spatial_samples=1024, final_grid_spacing_physical=8.0,
+        NumberOfResolutions=2, MaximumNumberOfIterations=48,
+        NumberOfSpatialSamples=1024, control_point_spacing=8.0,
     )
     assert field.shape == shape + (3,)
     assert np.all(np.isfinite(field))
@@ -271,10 +272,10 @@ def test_thin_axis_block_does_not_raise():
     mov = rng.uniform(0, 1, thin_shape).astype(np.float32)
     spacing = np.array([1.0, 1.0, 1.0])
 
-    params, field = elastix_deform_align(
+    params, field = elastix_align(
         fix, mov, spacing, spacing,
-        number_of_resolutions=4, maximum_iterations=16,
-        number_of_spatial_samples=256, final_grid_spacing_physical=8.0,
+        NumberOfResolutions=4, MaximumNumberOfIterations=16,
+        NumberOfSpatialSamples=256, control_point_spacing=8.0,
     )
     assert field.shape == thin_shape + (3,)
 
@@ -305,7 +306,7 @@ def test_pipeline_with_elastix_step():
 def test_constant_moving_returns_default():
     fix = _random_smooth_volume(SHAPE)
     mov = np.zeros(SHAPE, dtype=np.float32)  # zero variance -> MMI ill-defined
-    params, field = elastix_deform_align(
+    params, field = elastix_align(
         fix, mov, SPACING, SPACING, **FAST_KWARGS,
     )
     assert field.shape == SHAPE + (3,)
@@ -313,25 +314,24 @@ def test_constant_moving_returns_default():
 
 
 # ---------------------------------------------------------------------------
-# 9. final_grid_spacing_physical scalar vs per-axis list both accepted
+# 9. control_point_spacing scalar vs per-axis list both accepted
 # ---------------------------------------------------------------------------
 
 def test_extra_parameters_forwarded_as_kwargs():
     """Arbitrary elastix parameter-map keys pass through as **extra_parameters,
-    both into the builder and through elastix_deform_align."""
-    from bigstream.configure_elastix import build_elastix_parameter_object
+    both into the builder and through elastix_align."""
+    from bigstream.contrib.configure_elastix import build_elastix_parameter_object
 
-    po = build_elastix_parameter_object(
-        preset='bspline', ndim=3, number_of_resolutions=2,
+    pm = build_elastix_parameter_object(
+        align_method='bspline', NumberOfResolutions=2,
         RandomSeed=42, ImageSampler='RandomCoordinate',
     )
-    pm = po.GetParameterMap(0)
     assert pm['RandomSeed'] == ('42',)
     assert pm['ImageSampler'] == ('RandomCoordinate',)
 
     fix = _random_smooth_volume(SHAPE)
     mov = _apply_translation_sitk(fix, SPACING, np.array([2.0, 2.0, 2.0]))
-    params, field = elastix_deform_align(
+    params, field = elastix_align(
         fix, mov, SPACING, SPACING, RandomSeed=7, **FAST_KWARGS,
     )
     assert field.shape == SHAPE + (3,)
@@ -341,10 +341,10 @@ def test_final_grid_spacing_scalar_and_list():
     fix = _random_smooth_volume(SHAPE)
     mov = _apply_translation_sitk(fix, SPACING, np.array([2.0, 2.0, 2.0]))
     for grid in (8.0, [16.0, 8.0, 8.0], [16.0, 8.0]):
-        params, field = elastix_deform_align(
+        params, field = elastix_align(
             fix, mov, SPACING, SPACING,
-            parameter_map='bspline', number_of_resolutions=2,
-            maximum_iterations=32, number_of_spatial_samples=1024,
-            final_grid_spacing_physical=grid,
+            align_method='bspline', NumberOfResolutions=2,
+            MaximumNumberOfIterations=32, NumberOfSpatialSamples=1024,
+            control_point_spacing=grid,
         )
         assert field.shape == SHAPE + (3,), f"grid={grid}"

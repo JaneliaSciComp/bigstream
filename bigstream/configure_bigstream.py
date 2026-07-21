@@ -84,17 +84,12 @@ deform: &deform_args
   control_point_levels: [1]
 
 elastix: &elastix_args
-  parameter_map: bspline
-  number_of_resolutions: 4
-  final_grid_spacing_physical: 50  # zyx scalar or list (um); control_point_spacing analog
-  maximum_iterations: 256
-  metric: MI
-  number_of_spatial_samples: 4096
-  number_of_histogram_bins: 32
-  bending_energy_weight: 1.0
+  align_method: bspline
   alignment_spacing: 1.0
+  control_point_spacing: 50
+  NumberOfResolutions: 4
   # any additional keys here are forwarded verbatim as elastix parameter-map
-  # entries (**extra_parameters), e.g. RandomSeed: 42
+  # entries e.g. RandomSeed: 42
 
 rigid:
   <<: *affine_args

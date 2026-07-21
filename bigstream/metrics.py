@@ -1,8 +1,10 @@
 import numpy as np
-import os, tempfile
+import os
 import SimpleITK as sitk
-from bigstream.configure_irm import configure_irm
+import tempfile
 import bigstream.utility as ut
+
+from bigstream.configure_irm import configure_irm
 from itertools import product
 from ClusterWrap.decorator import cluster
 from scipy.spatial import cKDTree

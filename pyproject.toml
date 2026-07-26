@@ -28,7 +28,7 @@ dependencies = [
     "pyyaml==6.0.3",
     "scikit-image>=0.26.0",
     "scipy>=1.16.3",
-    "SimpleITK @ git+https://github.com/SimpleITK/SimpleITK@3.0.0b1",
+    "SimpleITK==3.0.0b1",
     "tensorstore==0.1.81",
     "tifffile[all]==2026.6.1",
     "toolz==1.1.0",

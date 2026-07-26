@@ -743,17 +743,22 @@ def distributed_alignment_pipeline(
 
 def _collect_results(futures):
     res = True
-
+    n_remaining_results = len(futures)
     for f, r in as_completed(futures, with_results=True):
         if f.cancelled():
             exc = f.exception()
             logger.error(f'Block exception: {exc}')
             tb = f.traceback()
             traceback.print_tb(tb)
+            n_remaining_results = n_remaining_results - 1
             res = False
         else:
             bi, bc = r
-            logger.debug(f'Finished computing deformation field for {bi} at {bc}')
+            n_remaining_results = n_remaining_results - 1
+            logger.debug((
+                f'Finished computing deformation field for {bi} at {bc} '
+                f'(remaining {n_remaining_results}) '
+            ))
         # Release the future to free worker memory
         f.release()
 

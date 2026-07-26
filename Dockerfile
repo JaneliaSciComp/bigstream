@@ -32,5 +32,7 @@ COPY *.py .
 COPY *.toml .
 COPY *.md .
 
+RUN pip install --pre "SimpleITK==3.0.0b1" --find-links https://github.com/SimpleITK/SimpleITK/releases/tag/v3.0.0b1
+
 RUN pip install -e . && \
     pip install "zarr-tools @ git+https://github.com/JaneliaSciComp/zarr-tools.git@525e55a"

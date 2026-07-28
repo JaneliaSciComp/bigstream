@@ -96,7 +96,7 @@ def configure_irm(
             'GDLS':     GradientDescentLineSearch
             'LBFGS2':   LimitedMemoryBroydenFletcherGoldfarbShannon w/o bounds
             'LBFGSB':   LimitedMemoryBroydenFletcherGoldfardShannon w/ simple bounds
-            'OPOE':     OnePlueOneEvolutionary
+            'OPOE':     OnePlusOneEvolutionary
             'P':        Powell
             'RSGD':     RegularStepGradientDescent
 

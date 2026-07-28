@@ -1,5 +1,6 @@
 import bigstream.transform as bst
 import cv2
+import itertools
 import numpy as np
 import os
 import SimpleITK as sitk
@@ -240,6 +241,112 @@ def images_to_sitk(
     return fix, mov, fix_mask, mov_mask
 
 
+def _physical_bounding_box(image):
+    """
+    Physical (min, max) bounding box corners of an sitk image, in the
+    image's own axis order (i.e. matching image.GetOrigin()/GetSpacing()).
+    """
+    origin = np.array(image.GetOrigin())
+    spacing = np.array(image.GetSpacing())
+    size = np.array(image.GetSize())
+    far_corner = origin + (size - 1) * spacing
+    return np.minimum(origin, far_corner), np.maximum(origin, far_corner)
+
+
+def _check_and_correct_overlap(
+    fix,
+    mov,
+    transform,
+    min_overlap_fraction,
+    context='',
+):
+    """
+    Diagnose the physical overlap between `fix` and `mov` as seen through
+    `transform` (the moving initial transform that will be handed to
+    `ImageRegistrationMethod.SetMovingInitialTransform`, or None for
+    identity), and log it. This overlap is what the registration metric
+    actually samples; when it collapses to (near) zero, ITK raises
+    "All samples map outside moving image buffer" and the caller falls
+    back to its identity default.
+
+    If the overlap fraction is at or below `min_overlap_fraction`, a
+    corrective translation that re-centers fix's (transformed) bounding
+    box on mov's bounding box is composed on top of `transform`, so
+    registration has a chance to run instead of failing outright. This
+    is a last-resort fallback, not a substitute for correct fix/mov
+    origins or a correct static_transform_list -- it only kicks in when
+    those would otherwise produce a hard failure.
+
+    Parameters
+    ----------
+    fix : sitk.Image
+        The fixed image, already at its final registration spacing/origin
+
+    mov : sitk.Image
+        The moving image, already at its final registration spacing/origin
+
+    transform : sitk.Transform or None
+        The moving initial transform that will be used, or None if none
+        is being used (identity)
+
+    min_overlap_fraction : float
+        If the computed overlap fraction is at or below this value, the
+        corrective translation fallback is applied
+
+    context : string (default: '')
+        Prefix for log messages
+
+    Returns
+    -------
+    transform : sitk.Transform or None
+        `transform` unchanged, or a new composite transform with a
+        corrective translation applied on top if a correction was made
+    """
+    ndim = fix.GetDimension()
+    fix_mins, fix_maxs = _physical_bounding_box(fix)
+    mov_mins, mov_maxs = _physical_bounding_box(mov)
+
+    corners = np.array(list(itertools.product(*zip(fix_mins, fix_maxs))))
+    if transform is not None:
+        mapped_corners = np.array(
+            [transform.TransformPoint(tuple(c)) for c in corners]
+        )
+    else:
+        mapped_corners = corners
+    mapped_mins = mapped_corners.min(axis=0)
+    mapped_maxs = mapped_corners.max(axis=0)
+
+    inter_extent = np.clip(
+        np.minimum(mapped_maxs, mov_maxs) - np.maximum(mapped_mins, mov_mins),
+        0, None,
+    )
+    fix_extent = np.clip(mapped_maxs - mapped_mins, 1e-9, None)
+    overlap_fraction = float(np.prod(inter_extent) / np.prod(fix_extent))
+
+    logger.info((
+        f'{context} overlap diagnostic: '
+        f'fix bbox in moving space [{mapped_mins}, {mapped_maxs}], '
+        f'mov bbox [{mov_mins}, {mov_maxs}], '
+        f'overlap fraction: {overlap_fraction:.4f} '
+    ))
+
+    if min_overlap_fraction <= 0 or overlap_fraction > min_overlap_fraction:
+        return transform
+
+    delta = (mapped_mins + mapped_maxs) / 2 - (mov_mins + mov_maxs) / 2
+    logger.warning((
+        f'{context} insufficient overlap ({overlap_fraction:.4f} <= '
+        f'{min_overlap_fraction}); applying fallback translation of '
+        f'{tuple(-delta)} to re-center fix and mov before registration '
+    ))
+    correction = sitk.TranslationTransform(ndim, tuple(-delta))
+    corrected = sitk.CompositeTransform(ndim)
+    corrected.AddTransform(correction)
+    if transform is not None:
+        corrected.AddTransform(transform)
+    return corrected
+
+
 def format_static_transform_data(
     transforms,
     fix,
@@ -282,6 +389,197 @@ def format_static_transform_data(
     spacings = tuple(spacings)
     origins = (fix_origin,)*len(transforms)
     return (spacings, origins)
+
+
+def _detect_and_match_feature_points(
+    fix, mov,
+    fix_spacing,
+    mov_spacing,
+    blob_sizes,
+    safeguard_exceptions,
+    alignment_spacing,
+    num_sigma_max,
+    cc_radius,
+    nspots,
+    match_threshold,
+    max_spot_match_distance,
+    point_matches_threshold,
+    fix_spot_detection_kwargs,
+    mov_spot_detection_kwargs,
+    fix_spots,
+    fix_spots_count_threshold,
+    mov_spots,
+    mov_spots_count_threshold,
+    fix_mask,
+    mov_mask,
+    fix_origin,
+    mov_origin,
+    static_transform_list,
+    context,
+):
+    """
+    Detect (or reuse user-supplied) feature point spots in fix and mov,
+    extract neighborhood contexts, and match corresponding points by
+    neighborhood correlation. Shared by `feature_point_ransac_affine_align`
+    and `feature_point_ransac_thinplate_align`.
+
+    Returns
+    -------
+    On success: (fix_spots, mov_spots, mov_landmark_origin)
+        fix_spots, mov_spots : Px3 arrays of matched point coordinates in
+            physical units (zyx order), relative to (but not offset by) each
+            image's own origin.
+        mov_landmark_origin : the origin that applies to mov_spots' physical
+            coordinate frame. This is `mov_origin` when no static transforms
+            were applied (mov_spots live in mov's own grid), or `fix_origin`
+            when static_transform_list is non-empty (mov was resampled onto
+            the fix grid via bst.apply_transform before spot detection, so
+            its coordinate frame is fix's, not mov's).
+
+    On safeguard failure: raises ValueError if safeguard_exceptions is True,
+    otherwise logs and returns None.
+    """
+    # realize masks
+    fix_mask = realize_mask(fix, fix_mask)
+    mov_mask = realize_mask(mov, mov_mask)
+
+    # apply static transforms
+    mov_landmark_origin = mov_origin
+    if static_transform_list:
+        mov = bst.apply_transform(
+            fix, mov, fix_spacing, mov_spacing,
+            transform_list=static_transform_list,
+            fix_origin=fix_origin,
+            mov_origin=mov_origin,
+        )
+        if mov_mask is not None:
+            mov_mask = bst.apply_transform(
+                fix.astype(mov_mask.dtype), mov_mask,
+                fix_spacing, mov_spacing,
+                transform_list=static_transform_list,
+                fix_origin=fix_origin,
+                mov_origin=mov_origin,
+                interpolator='0',
+            )
+        mov_spacing = fix_spacing
+        mov_landmark_origin = fix_origin
+
+    # skip sample and determine mask spacings
+    X = apply_alignment_spacing(
+        fix, mov,
+        fix_mask, mov_mask,
+        fix_spacing, mov_spacing,
+        alignment_spacing,
+        context=context,
+    )
+    fix = X[0]
+    mov = X[1]
+    fix_mask = X[2]
+    mov_mask = X[3]
+    fix_spacing = X[4]
+    mov_spacing = X[5]
+
+    # format inputs
+    if type(cc_radius) not in (tuple,):
+        cc_radius = (cc_radius,) * fix.ndim
+    A, B = blob_sizes[0], blob_sizes[1]
+    if not isinstance(A, (tuple, list, np.ndarray)):
+        A = (A,)*fix.ndim
+    if not isinstance(B, (tuple, list, np.ndarray)):
+        B = (B,)*fix.ndim
+    blob_sizes = (np.array(A), np.array(B))
+
+    # get fix spots
+    num_sigma = int(min(np.max(blob_sizes[1] - blob_sizes[0]), num_sigma_max))
+    assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
+
+    logger.info(f'{context} computing fixed spots')
+    if fix_spots is None:
+        fix_kwargs = {
+            'num_sigma':num_sigma,
+            'exclude_border':cc_radius,
+        }
+        fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
+        logger.debug(f'{context} fixed spots detection using {fix_kwargs}')
+        fix_spots = features.blob_detection(
+            fix, blob_sizes[0], blob_sizes[1],
+            mask=fix_mask,
+            **fix_kwargs,
+        )
+    elif fix_mask is not None:
+        fix_spots = apply_foreground_mask(fix_spots, fix_mask)
+    logger.info(f'{context} found {len(fix_spots)} fixed spots')
+    if len(fix_spots) < fix_spots_count_threshold:
+        logger.info(f'{context} insufficient fixed spots found ({len(fix_spots)}) expected {fix_spots_count_threshold}')
+        if safeguard_exceptions:
+            raise ValueError('fix spot detection safeguard failed')
+        else:
+            logger.info(f'{context} - feature point correspondence safeguard failed')
+            return None
+
+    # get mov spots
+    logger.info(f'{context} computing moving spots')
+    if mov_spots is None:
+        mov_kwargs = {
+            'num_sigma':num_sigma,
+            'exclude_border':cc_radius,
+        }
+        mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
+        logger.debug(f'{context} moving spots detection using {mov_kwargs}')
+        mov_spots = features.blob_detection(
+            mov, blob_sizes[0], blob_sizes[1],
+            mask=mov_mask,
+            **mov_kwargs,
+        )
+    elif mov_mask is not None:
+        mov_spots = apply_foreground_mask(mov_spots, mov_mask)
+    logger.info(f'{context} found {len(mov_spots)} moving spots')
+    if len(mov_spots) < mov_spots_count_threshold:
+        logger.info(f'{context} insufficient moving spots found ({len(mov_spots)}) expected {mov_spots_count_threshold}')
+        if safeguard_exceptions:
+            raise ValueError('mov spot detection safeguard failed')
+        else:
+            logger.info(f'{context} - feature point correspondence safeguard failed')
+            return None
+
+    # sort
+    logger.info(f'{context} sorting spots')
+    sort_idx = np.argsort(fix_spots[:, -1])[::-1]
+    fix_spots = fix_spots[sort_idx, :-1][:nspots]
+    sort_idx = np.argsort(mov_spots[:, -1])[::-1]
+    mov_spots = mov_spots[sort_idx, :-1][:nspots]
+
+    # get contexts
+    logger.info(f'{context} extracting contexts')
+    fix_spot_contexts = features.get_contexts(fix, fix_spots, cc_radius)
+    mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
+
+    # get pairwise correlations
+    logger.info(f'{context} computing pairwise correlations')
+    correlations = features.pairwise_correlation(
+        fix_spot_contexts, mov_spot_contexts,
+    )
+
+    # convert to physical units
+    fix_spots = fix_spots * fix_spacing
+    mov_spots = mov_spots * mov_spacing
+
+    # get matching points
+    fix_spots, mov_spots = features.match_points(
+        fix_spots, mov_spots,
+        correlations, match_threshold,
+        max_distance=max_spot_match_distance,
+    )
+    logger.info(f'{context} {len(fix_spots)} - {len(mov_spots)} matched spots')
+    if len(fix_spots) < point_matches_threshold or len(mov_spots) < point_matches_threshold:
+        logger.info(f'{context} - insufficient point matches found')
+        if safeguard_exceptions:
+            raise ValueError('point matches safeguard failed')
+        else:
+            logger.info(f'{context} - feature point correspondence safeguard failed')
+            return None
+
+    return fix_spots, mov_spots, mov_landmark_origin
 
 
 def feature_point_ransac_affine_align(
@@ -498,145 +796,21 @@ def feature_point_ransac_affine_align(
     # establish default
     if default is None: default = np.eye(fix.ndim + 1)
 
-    # realize masks
-    fix_mask = realize_mask(fix, fix_mask)
-    mov_mask = realize_mask(mov, mov_mask)
-
-    # apply static transforms
-    if static_transform_list:
-        mov = bst.apply_transform(
-            fix, mov, fix_spacing, mov_spacing,
-            transform_list=static_transform_list,
-            fix_origin=fix_origin,
-            mov_origin=mov_origin,
-        )
-        if mov_mask is not None:
-            mov_mask = bst.apply_transform(
-                fix.astype(mov_mask.dtype), mov_mask,
-                fix_spacing, mov_spacing,
-                transform_list=static_transform_list,
-                fix_origin=fix_origin, 
-                mov_origin=mov_origin,
-                interpolator='0',
-            )
-        mov_spacing = fix_spacing
-
-    # skip sample and determine mask spacings
-    X = apply_alignment_spacing(
-        fix, mov,
-        fix_mask, mov_mask,
-        fix_spacing, mov_spacing,
-        alignment_spacing,
-        context=context,
+    # find feature point correspondences
+    matched = _detect_and_match_feature_points(
+        fix, mov, fix_spacing, mov_spacing, blob_sizes,
+        safeguard_exceptions, alignment_spacing, num_sigma_max, cc_radius,
+        nspots, match_threshold, max_spot_match_distance, point_matches_threshold,
+        fix_spot_detection_kwargs, mov_spot_detection_kwargs,
+        fix_spots, fix_spots_count_threshold,
+        mov_spots, mov_spots_count_threshold,
+        fix_mask, mov_mask, fix_origin, mov_origin,
+        static_transform_list, context,
     )
-    fix = X[0]
-    mov = X[1]
-    fix_mask = X[2]
-    mov_mask = X[3]
-    fix_spacing = X[4]
-    mov_spacing = X[5]
-    fix_mask_spacing = X[6]
-    mov_mask_spacing = X[7]
-
-    # format inputs
-    if type(cc_radius) not in (tuple,):
-        cc_radius = (cc_radius,) * fix.ndim
-    A, B = blob_sizes[0], blob_sizes[1]
-    if not isinstance(A, (tuple, list, np.ndarray)):
-        A = (A,)*fix.ndim
-    if not isinstance(B, (tuple, list, np.ndarray)):
-        B = (B,)*fix.ndim
-    blob_sizes = (np.array(A), np.array(B))
-
-    # get fix spots
-    num_sigma = int(min(np.max(blob_sizes[1] - blob_sizes[0]), num_sigma_max))
-    assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
-
-    logger.info(f'{context} computing fixed spots')
-    if fix_spots is None:
-        fix_kwargs = {
-            'num_sigma':num_sigma,
-            'exclude_border':cc_radius,
-        }
-        fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
-        logger.debug(f'{context} fixed spots detection using {fix_kwargs}')
-        fix_spots = features.blob_detection(
-            fix, blob_sizes[0], blob_sizes[1],
-            mask=fix_mask,
-            **fix_kwargs,
-        )
-    elif fix_mask is not None:
-        fix_spots = apply_foreground_mask(fix_spots, fix_mask)
-    logger.info(f'{context} found {len(fix_spots)} fixed spots')
-    if len(fix_spots) < fix_spots_count_threshold:
-        logger.info(f'{context} insufficient fixed spots found ({len(fix_spots)}) expected {fix_spots_count_threshold}')
-        if safeguard_exceptions:
-            raise ValueError('fix spot detection safeguard failed')
-        else:
-            logger.info(f'{context} - RANSAC returning default affine')
-            return default
-
-    # get mov spots
-    logger.info(f'{context} computing moving spots')
-    if mov_spots is None:
-        mov_kwargs = {
-            'num_sigma':num_sigma,
-            'exclude_border':cc_radius,
-        }
-        mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
-        logger.debug(f'{context} moving spots detection using {mov_kwargs}')
-        mov_spots = features.blob_detection(
-            mov, blob_sizes[0], blob_sizes[1],
-            mask=mov_mask,
-            **mov_kwargs,
-        )
-    elif mov_mask is not None:
-        mov_spots = apply_foreground_mask(mov_spots, mov_mask)
-    logger.info(f'{context} found {len(mov_spots)} moving spots')
-    if len(mov_spots) < mov_spots_count_threshold:
-        logger.info(f'{context} insufficient moving spots found ({len(mov_spots)}) expected {mov_spots_count_threshold}')
-        if safeguard_exceptions:
-            raise ValueError('mov spot detection safeguard failed')
-        else:
-            logger.info(f'{context} - RANSAC returning default affine')
-            return default
-
-    # sort
-    logger.info(f'{context} sorting spots')
-    sort_idx = np.argsort(fix_spots[:, -1])[::-1]
-    fix_spots = fix_spots[sort_idx, :-1][:nspots]
-    sort_idx = np.argsort(mov_spots[:, -1])[::-1]
-    mov_spots = mov_spots[sort_idx, :-1][:nspots]
-
-    # get contexts
-    logger.info(f'{context} extracting contexts')
-    fix_spot_contexts = features.get_contexts(fix, fix_spots, cc_radius)
-    mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
-
-    # get pairwise correlations
-    logger.info(f'{context} computing pairwise correlations')
-    correlations = features.pairwise_correlation(
-        fix_spot_contexts, mov_spot_contexts,
-    )
-
-    # convert to physical units
-    fix_spots = fix_spots * fix_spacing
-    mov_spots = mov_spots * mov_spacing
-
-    # get matching points
-    fix_spots, mov_spots = features.match_points(
-        fix_spots, mov_spots,
-        correlations, match_threshold,
-        max_distance=max_spot_match_distance,
-    )
-    logger.info(f'{context} {len(fix_spots)} - {len(mov_spots)} matched spots')
-    if len(fix_spots) < point_matches_threshold or len(mov_spots) < point_matches_threshold:
-        logger.info(f'{context} - insufficient point matches found')
-        if safeguard_exceptions:
-            raise ValueError('point matches safeguard failed')
-        else:
-            logger.info(f'{context} - RANSAC returning default affine')
-            return default
+    if matched is None:
+        logger.info(f'{context} - RANSAC returning default affine')
+        return default
+    fix_spots, mov_spots, _ = matched
 
     # align
     logger.debug(f'{context} Found enough spots to estimate the affine ' +
@@ -663,6 +837,394 @@ def feature_point_ransac_affine_align(
     affine[:fix.ndim, :] = Aff
     logger.debug(f'{context} - RANSAC affine: {Aff}')
     return affine
+
+
+def feature_point_ransac_thinplate_align(
+    fix, mov,
+    fix_spacing,
+    mov_spacing,
+    blob_sizes,
+    control_point_spacing,
+    control_point_levels,
+    alignment_spacing=None,
+    num_sigma_max=15,
+    cc_radius=12,
+    nspots=5000,
+    match_threshold=0.7,
+    max_spot_match_distance=None,
+    point_matches_threshold=50,
+    align_threshold=2.0,
+    diagonal_constraint=0.25,
+    filter_landmarks_with_ransac=True,
+    fix_spot_detection_kwargs={},
+    mov_spot_detection_kwargs={},
+    fix_spots=None,
+    fix_spots_count_threshold=100,
+    mov_spots=None,
+    mov_spots_count_threshold=100,
+    confidence=0.999,
+    fix_mask=None,
+    mov_mask=None,
+    fix_origin=None,
+    mov_origin=None,
+    static_transform_list=[],
+    default=None,
+    context='',
+    **kwargs,
+):
+    """
+    Currently this function only works on 3D images.
+
+    Compute a thin-plate-style BSpline alignment from feature points and
+    ransac. A blob detector finds feature points in fix and mov.
+    Correspondence between the fix and mov point sets is estimated using
+    neighborhood correlation. Those correspondences (optionally RANSAC-
+    filtered to their affine-inlier subset) are used as landmarks to
+    initialize a BSpline transform via SimpleITK's
+    `LandmarkBasedTransformInitializerFilter` (a thin-plate-spline-style
+    solve constrained to the requested control point mesh). That landmark-
+    initialized transform is then refined with intensity-based BSpline
+    registration, using the same registration engine as `deformable_align`.
+
+    Several safeguards are implemented to ensure degenerate or poorly behaved
+    transforms won't be returned.
+    Parameters
+    ----------
+    fix : ndarray
+        the fixed image
+
+    mov : ndarray
+        the moving image; `fix.ndim` must equal `mov.ndim`
+
+    fix_spacing : 1d array
+        The spacing in physical units (e.g. mm or um) between voxels
+        of the fixed image.
+        Length must equal `fix.ndim`
+
+    mov_spacing : 1d array
+        The spacing in physical units (e.g. mm or um) between voxels
+        of the moving image.
+        Length must equal `mov.ndim`
+
+    blob_sizes : list of two floats
+        The [minimum, maximum] size of feature point objects in voxel units.
+        These are radii; so if your data contains features that are 10 voxels
+        diameter on average, a reasonable value for this parameter would be
+        [3, 7] (symmetric about a radius of 5).
+
+    control_point_spacing : float or 1d array
+        The spacing in physical units (e.g. mm or um) between control
+        points that parameterize the deformation, used both to size the
+        landmark-fit BSpline mesh and to drive the intensity refinement
+        stage. Same semantics as `deformable_align`'s parameter of the same
+        name: a scalar is broadcast to every spatial axis; an array shorter
+        than the image dimensionality is extended by repeating its last
+        element.
+
+    control_point_levels : list of type int
+        The optimization scales for control point spacing, for the intensity
+        refinement stage. Same semantics as `deformable_align`. Its first
+        element also determines the mesh resolution used for the landmark
+        fit (see control_point_spacing).
+
+    alignment_spacing : float (default: None)
+        Fixed and moving images are skip sampled to a voxel spacing
+        as close as possible to this value. Many alignments can be solved
+        at far lower resolution than the collected data. This parameter
+        can significantly speed up computation.
+
+    num_sigma_max : scalar int (default: 15)
+        The maximum number of laplacians to use in the feature point LoG detector
+
+    cc_radius : scalar int or tuple of int (default: 12)
+        The halfwidth of neighborhoods around feature points used to determine
+        correlation and correspondence. If an int, the same value is used for all
+        axes. If a tuple, the tuple length must equal the number of image axes.
+        Best practice is to use a tuple for anisotropic data.
+
+    nspots : scalar int (default: 5000)
+        The maximum number of feature point spots to use in each image
+        If more spots are found the brightest ones are used.
+
+    match_threshold : scalar float in range [0, 1] (default: 0.7)
+        The minimum correlation two feature point neighborhoods must have to
+        consider them corresponding points. This number can vary significantly
+        with input data quality. Consider lowering this before lowering
+        point_matches_threshold.
+
+    max_spot_match_distance : scalar float (default: None)
+        The maximum distance a fix and mov spot can be before alignment
+        to still be considered matching spots; in microns. This helps
+        prevent false positive correspondences.
+
+    point_matches_threshold : scalar int (default: 50)
+        Minimum number of matching points to proceed with alignment.
+        Also the minimum number of RANSAC inlier landmarks required, when
+        filter_landmarks_with_ransac is True.
+
+    align_threshold : scalar float (default: 2.0)
+        Only used when filter_landmarks_with_ransac is True. The maximum
+        distance two points can be to be considered inliers by the RANSAC
+        pre-fit affine (in microns). This affine is discarded; it is only
+        used to select which correspondences become landmarks.
+
+    diagonal_constraint : scalar float (default: 0.25)
+        Only used when filter_landmarks_with_ransac is True. Diagonal
+        entries of the RANSAC pre-fit affine matrix cannot be lower than
+        1 - diagonal_contraint or higher than 1 + diagonal_contraint, or the
+        pre-fit (and hence the landmark selection) is considered a safeguard
+        failure. This gates the throwaway pre-fit affine only -- it has no
+        bearing on the returned BSpline transform.
+
+    filter_landmarks_with_ransac : bool (default: True)
+        If True, fit a throwaway affine with `cv2.estimateAffine3D` over the
+        matched correspondences and keep only its inlier subset as landmarks
+        for the thin plate BSpline fit. The affine itself is never returned.
+        If False, every matched correspondence is used as a landmark.
+
+    fix_spot_detection_kwargs : dict (default {})
+        Arguments passed to bigstream.features.blob_detection for fixed image
+        See docstring for that function for valid arguments.
+        You may need to modify these in order to pass the spot count threshold
+        safeguards, consider doing that before lowering fix_spots_count_threshold.
+
+    mov_spot_detection_kwargs : dict (default {})
+        Arguments passed to bigstream.features.blob_detection for moving image
+        See docstring for that function for valid arguments.
+        You may need to modify these in order to pass the spot count threshold
+        safeguards, consider doing that before lowering mov_spots_count_threshold.
+
+    fix_spots : nd-array Nx3 (default: None)
+        Skip the spot detection for the fixed image and provide your own spot coordinate
+
+    fix_spots_count_threshold : scalar int (default: 100)
+        Minimum number of fixed spots that need to exist for a valid alignment.
+        Note that many times in order to have a better alignment it is better to tweak
+        threshold and/or threshold_rel in fix_spot_detection_kwargs then to lower this value
+
+    mov_spots : nd-array Nx3 (default: None)
+        Skip the spot detection for the moving image and provide your own spot coordinate
+
+    mov_spots_count_threshold : scalar int (default: 100)
+        Minimum number of fixed spots that need to exist for a valid alignment.
+        Note that many times in order to have a better alignment it is better to tweak
+        threshold and/or threshold_rel in mov_spot_detection_kwargs then to lower this value
+
+    fix_mask : nd-array, tuple of floats, or function (default: None)
+        Spots from fixed image can only be found in the foreground of this mask.
+        Also used as the intensity refinement stage's fixed metric mask.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+    mov_mask : nd-array (default: None)
+        Spots from moving image can only be found in the foreground of this mask.
+        Also used as the intensity refinement stage's moving metric mask.
+        If an nd-array, any non-zero value is considered foreground and any
+        zero value is considered background. If a tuple of floats, any voxel
+        with value in the tuple is considered background. If a function, it
+        must take a single nd-array argument as input and return an array
+        of the same shape as the input but with dtype bool.
+
+    fix_origin : 1d array (default: all zeros)
+        The origin of the fixed image in physical units
+
+    mov_origin : 1d array (default: all zeros)
+        The origin of the moving image in physical units
+
+    static_transform_list : list of numpy arrays (default: [])
+        Transforms applied to moving image before applying query transform
+        Assumed to have the same domain as the fixed image, though sampling
+        can be different. I.e. the origin and span are the same (in phyiscal
+        units) but the number of voxels can be different.
+
+    default : tuple of (1d array, nd-array) (default: identity bspline)
+        A default (params, field) result to return if the method fails to
+        find a valid transform. If None, the identity BSpline transform at
+        the requested control point resolution is used (matching
+        `deformable_align`'s default convention).
+
+    final_metric_check : bool (default: True)
+        The metric function is checked before and after the intensity
+        refinement stage. If this flag is True then the function will only
+        return the refined transform if the final metric value is better
+        than the initial (landmark-only) metric value. Otherwise it will
+        return the default.
+
+    context : string
+        Additional context information for logging purposes only
+        - for local alignment it contains the block index that is being processed
+
+    **kwargs : any additional keyword arguments
+        Passed to `configure_irm` for the intensity refinement stage.
+        This is where you would set things like:
+        metric, iterations, shrink_factors, and smooth_sigmas
+
+    Returns
+    -------
+    params : 1d array
+        The complete set of BSpline control point parameters concatenated
+        as a 1d array.
+
+    field : ndarray
+        The displacement field parameterized by the BSpline control points
+    """
+    ndim = fix.ndim
+    initial_fix_shape = fix.shape
+    initial_fix_spacing = np.array(fix_spacing)
+
+    fix_origin_arr = np.zeros(ndim) if fix_origin is None else np.asarray(fix_origin, dtype=float)
+
+    # format static transform data explicitly, for the intensity refinement stage
+    static_transform_spacing, static_transform_origin = format_static_transform_data(
+        static_transform_list, fix, fix_spacing, fix_origin,
+    )
+
+    # realize masks (used both for spot detection, via the helper below, and
+    # for the intensity refinement stage's metric masks)
+    fix_mask_r = realize_mask(fix, fix_mask)
+    mov_mask_r = realize_mask(mov, mov_mask)
+
+    # skip sample and convert to sitk images; this defines the domain used
+    # for the landmark reference image, the bspline mesh, and the intensity
+    # refinement stage
+    X = apply_alignment_spacing(
+        fix, mov,
+        fix_mask_r, mov_mask_r,
+        fix_spacing, mov_spacing,
+        alignment_spacing,
+        context=context,
+    )
+    fix_img, mov_img, fix_mask_img, mov_mask_img = images_to_sitk(
+        *X, fix_origin, mov_origin,
+    )
+
+    # bspline mesh sizing (identical convention to deformable_align)
+    cp_spacing = np.atleast_1d(control_point_spacing)
+    if cp_spacing.size < 1:
+        raise ValueError('control_point_spacing must not be empty')
+    if cp_spacing.size > ndim:
+        cp_spacing = cp_spacing[:ndim]
+    if cp_spacing.size < ndim:
+        cp_spacing = np.concatenate([
+            cp_spacing, np.full(ndim - cp_spacing.size, cp_spacing[-1]),
+        ])
+    cp_spacing_xyz = cp_spacing[::-1]
+    cp_divisor = cp_spacing_xyz * control_point_levels[0]
+    initial_cp_grid = [
+        max(1, int(x*y/d))
+        for x, y, d in zip(fix_img.GetSize(), fix_img.GetSpacing(), cp_divisor)
+    ]
+    identity_transform = sitk.BSplineTransformInitializer(
+        image1=fix_img, transformDomainMeshSize=initial_cp_grid, order=3,
+    )
+    logger.debug((
+        f'{context} '
+        'thin plate BSpline control point grid: '
+        f'{fix_img.GetSize()}*{fix_img.GetSpacing()}/'
+        f'({cp_spacing_xyz}*{control_point_levels[0]})={initial_cp_grid} '
+    ))
+
+    # establish default: identity bspline (params, field), same convention as
+    # deformable_align
+    if default is None:
+        params = np.concatenate((
+            identity_transform.GetFixedParameters(), identity_transform.GetParameters(),
+        ))
+        field = bst.bspline_to_displacement_field(
+            identity_transform, initial_fix_shape,
+            spacing=initial_fix_spacing, origin=fix_origin,
+            direction=np.eye(ndim),
+        )
+        default = (params, field)
+
+    # find feature point correspondences
+    matched = _detect_and_match_feature_points(
+        fix, mov, fix_spacing, mov_spacing, blob_sizes,
+        False, alignment_spacing, num_sigma_max, cc_radius,
+        nspots, match_threshold, max_spot_match_distance, point_matches_threshold,
+        fix_spot_detection_kwargs, mov_spot_detection_kwargs,
+        fix_spots, fix_spots_count_threshold,
+        mov_spots, mov_spots_count_threshold,
+        fix_mask, mov_mask, fix_origin, mov_origin,
+        static_transform_list, context,
+    )
+    if matched is None:
+        logger.info(f'{context} - thin plate align returning default')
+        return default
+    try:
+        landmark_fix, landmark_mov, mov_landmark_origin = matched
+        mov_landmark_origin = (
+            np.zeros(ndim) if mov_landmark_origin is None
+            else np.asarray(mov_landmark_origin, dtype=float)
+        )
+
+        # optionally RANSAC-filter the correspondences: fit a throwaway affine
+        # purely to obtain an inlier mask, then keep only inlier correspondences
+        # as landmarks. The affine itself is never returned.
+        if filter_landmarks_with_ransac:
+            logger.debug(f'{context} RANSAC pre-fit over {len(landmark_fix)} matched '
+                        'spots to select inlier landmarks')
+            success, Aff, inliers = cv2.estimateAffine3D(
+                landmark_fix, landmark_mov,
+                ransacThreshold=align_threshold,
+                confidence=confidence,
+            )
+            if not success or np.any(np.abs(np.diag(Aff) - 1) > diagonal_constraint):
+                logger.info((
+                    f'{context} RANSAC pre-fit produced a degenerate affine: {Aff} '
+                    '- thin plate align returning default'
+                ))
+                return default
+
+            inliers = inliers.astype(bool).reshape(-1)
+            n_matched = len(landmark_fix)
+            landmark_fix = landmark_fix[inliers]
+            landmark_mov = landmark_mov[inliers]
+            logger.info((
+                f'{context} {len(landmark_fix)} RANSAC inlier landmarks '
+                f'(of {n_matched} matched)'
+            ))
+            if len(landmark_fix) < point_matches_threshold:
+                logger.info((
+                    f'{context} insufficient RANSAC inlier landmarks found '
+                    f'({len(landmark_fix)}) expected {point_matches_threshold} '
+                    '- thin plate align returning default'
+                ))
+                return default
+
+        # landmark points are physical coordinates relative to (but not offset
+        # by) each image's own origin; add the appropriate origin, then reverse
+        # zyx -> xyz to match sitk's landmark/point ordering convention
+        landmark_fix_xyz = (landmark_fix + fix_origin_arr)[:, ::-1]
+        landmark_mov_xyz = (landmark_mov + mov_landmark_origin)[:, ::-1]
+
+        # landmark-initialize a bspline transform (thin-plate-style fit)
+        lm_initializer = sitk.LandmarkBasedTransformInitializerFilter()
+        lm_initializer.SetFixedLandmarks(landmark_fix_xyz.ravel().tolist())
+        lm_initializer.SetMovingLandmarks(landmark_mov_xyz.ravel().tolist())
+        lm_initializer.SetReferenceImage(fix_img)
+
+        transform = lm_initializer.Execute(identity_transform)
+        logger.debug(f'{context} landmark-initialized thin plate BSpline transform')
+
+        params = np.concatenate((transform.GetFixedParameters(), transform.GetParameters()))
+        field = bst.bspline_to_displacement_field(
+            transform, initial_fix_shape,
+            spacing=initial_fix_spacing, origin=fix_origin,
+            direction=np.eye(ndim),
+        )
+
+        # diagnostics: check the deformation field for folding and discontinuities
+        deform_field_diagnostics(field, initial_fix_spacing, context=context)
+
+        return params, field
+    except Exception as e:
+        logger.error(f'{context} Thin plate registration failed due to ITK exception: {e}')
+        logger.info(f'{context} Returning default')
+        return default
 
 
 def random_affine_search(
@@ -1198,6 +1760,7 @@ def deformable_align(
     static_transform_list=[],
     default=None,
     final_metric_check=True,
+    min_overlap_fraction=0.01,
     context='',
     **kwargs,
 ):
@@ -1299,6 +1862,16 @@ def deformable_align(
         value is better than the initial metric value. Otherwise it will return the default.
         If this flag is False, then the optimized transform is returned regardless.
 
+    min_overlap_fraction : float (default: 0.01)
+        Fix and mov's physical bounding box overlap (as seen through the
+        moving initial transform built from `static_transform_list`) is
+        logged before registration. If the overlap fraction is at or
+        below this value, a corrective translation is composed on top of
+        the moving initial transform to re-center the images, so the
+        metric has some chance to run instead of raising "All samples
+        map outside moving image buffer" and returning the default.
+        Set to 0 to disable this fallback (correction never triggers).
+
     **kwargs : any additional arguments
         Passed to `configure_irm`
         This is where you would set things like:
@@ -1369,7 +1942,7 @@ def deformable_align(
     control_point_spacing_xyz = control_point_spacing[::-1]
 
     # initial control point grid
-    cp_divisor = control_point_spacing_xyz * control_point_levels[0]
+    cp_divisor = control_point_spacing_xyz * control_point_levels[-1]
     initial_cp_grid = [
         max(1, int(x*y/d))
         for x, y, d in zip(fix.GetSize(), fix.GetSpacing(), cp_divisor)
@@ -1388,13 +1961,24 @@ def deformable_align(
     )
 
     # set initial static transforms
+    moving_initial_transform = None
     if static_transform_list:
-        T = bst.transform_list_to_composite_transform(
+        moving_initial_transform = bst.transform_list_to_composite_transform(
             static_transform_list,
             static_transform_spacing,
             static_transform_origin,
         )
-        irm.SetMovingInitialTransform(T)
+
+    # diagnose fix/mov physical overlap under the current moving initial
+    # transform, and fall back to a corrective translation if it's
+    # (near) zero -- otherwise the metric raises "All samples map outside
+    # moving image buffer" and this block returns the identity default.
+    moving_initial_transform = _check_and_correct_overlap(
+        fix, mov, moving_initial_transform, min_overlap_fraction, context=context,
+    )
+    if moving_initial_transform is not None:
+        irm.SetMovingInitialTransform(moving_initial_transform)
+
     # set masks
     if fix_mask is not None:
         irm.SetMetricFixedMask(fix_mask)
@@ -1551,6 +2135,7 @@ def alignment_pipeline(
         'deform' : run `deformable_align`
         'demons' : run `demons_align`
         'elastix' : run `elastix_align`
+        'thinplate' : run `feature_point_ransac_thinplate_align`
         For each tuple, the dict specifies the arguments to that alignment function
         Arguments specified here override any global arguments given through kwargs
         for their specific step only.
@@ -1626,7 +2211,7 @@ def alignment_pipeline(
     # check default case
     if fix is None or mov is None:
         ndim = len(fix_spacing)
-        field_steps = {'deform', 'demons', 'elastix'}
+        field_steps = {'deform', 'demons', 'elastix', 'thinplate'}
         if field_steps & {x[0] for x in steps}:
             # if a field-producing step is present, create a zero displacement field
             shape = fix.shape if fix is not None else mov.shape
@@ -1648,8 +2233,10 @@ def alignment_pipeline(
              'rigid': lambda **c: affine_align(*a, **{**b, **c}, rigid=True),
              'affine':lambda **c: affine_align(*a, **{**b, **c}),
              'deform':lambda **c: deformable_align(*a, **{**b, **c})[1],
+             'thinplate':lambda **c: feature_point_ransac_thinplate_align(*a, **{**b, **c})[1],
              'demons':lambda **c: demons_align(*a, **{**b, **c})[1],
-             'elastix':lambda **c: elastix_align(*a, **{**b, **c})[1],}
+             'elastix':lambda **c: elastix_align(*a, **{**b, **c})[1],
+             }
 
     # loop over steps
     new_transforms = []
@@ -1658,10 +2245,15 @@ def alignment_pipeline(
         arguments = {**kwargs, **arguments}
         # append new transforms to the static transforms
         arguments['static_transform_list'] = static_transform_list + new_transforms
-        logger.debug(f'Run {context} {alignment} {arguments}')
+        printable_args = { **arguments }
+        printable_args['static_transform_list'] = [
+            str(t) if t.ndim == 2 else f'{t.shape} deformfield'
+            for t in arguments['static_transform_list']
+        ]
+        logger.debug(f'Run {context} {alignment} {printable_args}')
         alignment_function = alignment.split('-')[0]
         alignment_result = align[alignment_function](context=f'{alignment} {context}', **arguments)
-        logger.debug(f'Completed {context} {alignment} {arguments}')
+        logger.debug(f'Completed {context} {alignment} {printable_args}')
         new_transforms.append(alignment_result)
 
     # return in the requested format
@@ -1742,6 +2334,7 @@ def ransac_masks_meta_align(
         'deform' : run `deformable_align`
         'demons' : run `demons_align`
         'elastix' : run `elastix_align`
+        'thinplate' : run `feature_point_ransac_thinplate_align`
         For each tuple, the dict specifies the arguments to that alignment function
         Arguments specified here override any global arguments given through kwargs
         for their specific step only.

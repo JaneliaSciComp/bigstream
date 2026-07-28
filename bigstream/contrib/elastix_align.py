@@ -99,13 +99,13 @@ def elastix_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask)
-    mov_mask = realize_mask(mov, mov_mask)
+    fix_mask_r = realize_mask(fix, fix_mask)
+    mov_mask_r = realize_mask(mov, mov_mask)
 
     # skip-sample and convert to SITK images (images_to_sitk casts to float32)
     X = apply_alignment_spacing(
         fix, mov,
-        fix_mask, mov_mask,
+        fix_mask_r, mov_mask_r,
         fix_spacing, mov_spacing,
         alignment_spacing,
         context=context,

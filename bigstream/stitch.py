@@ -1,12 +1,14 @@
 import numpy as np
 from ClusterWrap.decorator import cluster
 import bigstream.utility as ut
-from bigstream.align import affine_align
+from bigstream.align import affine_align, alignment_pipeline
 from bigstream.transform import apply_transform, generate_random_affine_transforms_3d
+from bigstream.metrics import local_correlation_coefficient
 from scipy.ndimage import zoom
 from scipy.linalg import logm, expm
-from scipy.sparse.linalg import lsqr
-from scipy.sparse import csr_array
+from scipy.sparse.linalg import lsqr, norm
+from scipy.sparse import csr_array, vstack
+from scipy.special import factorial
 import zarr
 from zarr import blosc
 from aicsimageio.readers import CziReader
@@ -45,12 +47,13 @@ def create_synthetic_tiles(
     tile_size_with_overlaps = tile_size + 2 * overlaps
 
     # generate random affines
-    centers = np.array(origins) + tile_size_with_overlaps / 2 * spacing
+    centers = (np.array(origins) + tile_size_with_overlaps / 2) * spacing
     affines = generate_random_affine_transforms_3d(
-        np.prod(ntiles)-1, max_translation, max_rotation, max_scale, max_shear, centers,
+        np.prod(ntiles)-1, max_translation, max_rotation, max_scale, max_shear, centers[1:],
     )
     affines = np.concatenate((np.eye(4)[None, ...], affines), axis=0)
     affines_inv = np.linalg.inv(affines)
+    os.makedirs(output_folder, exist_ok=True)
     np.save(output_folder + '/affines.npy', affines)
     np.save(output_folder + '/affines_inv.npy', affines_inv)
 
@@ -62,7 +65,9 @@ def create_synthetic_tiles(
             transform_list=[affines[iii],],
             fix_origin=origin * spacing,
         )
-        write_path = output_folder + f'/tile_{iii:03d}.nrrd'
+        prefix = output_folder + f'/tile_{iii:05d}_'
+        suffix = 'x'.join([str(x) for x in origin]) + '.nrrd'
+        write_path = prefix + suffix
         nrrd.write(write_path, tile.transpose(2,1,0), compression_level=2)
     tile_paths = glob.glob(output_folder + '/tile_*.nrrd')
 
@@ -71,7 +76,7 @@ def create_synthetic_tiles(
 
     # create the reconstruction
     reconstructed_image = reconstruct_from_synthetic_tiles(
-        image.shape, fix.dtype, affines_inv, origins, spacing, output_folder,
+        tile_paths, affines_inv, image.shape, tile.dtype, spacing,
     )
     write_path = output_folder + '/reconstructed_image.nrrd'
     nrrd.write(write_path, reconstructed_image.transpose(2,1,0), compression_level=2)
@@ -81,21 +86,25 @@ def create_synthetic_tiles(
 
 
 def reconstruct_from_synthetic_tiles(
+    tile_paths,
+    affines,
     shape,
     dtype,
-    affines,
-    origins,
     spacing,
-    tiles_folder,
 ):
 
+    # get origins, voxel units
+    F = lambda p: p.split('/')[-1].split('.')[0].split('_')[2].split('x')
+    origins = [[int(x) for x in F(p)] for p in tile_paths]
+    origins = np.array(origins)
+
     # apply inverse affines to reconstruct
-    reconstructed_image = np.zeros(shape)
-    for iii, origin in enumerate(origins):
+    reconstructed_image = np.zeros(shape, dtype=dtype)
+    for iii, tile_path in enumerate(tile_paths):
 
         # read and transform tile
-        read_path = tiles_folder + f'/tile_{iii:03d}.nrrd'
-        tile = nrrd.read(read_path)[0].transpose(2,1,0)
+        tile = nrrd.read(tile_path)[0].transpose(2,1,0)
+        origin = origins[iii]
         fix = tile.shape + (dtype,)
         tile = apply_transform(
             fix, tile, spacing, spacing,
@@ -120,20 +129,28 @@ def reconstruct_from_synthetic_tiles(
 def distributed_stitch_new(
     tile_paths,
     tile_grid_positions,
-    origins,
     spacing,
     overlap_factor,
-    affine_kwargs,
-    minimum_overlap_correlation=0.1,
+    steps,
+    max_iterations=100,
+    min_initial_correlation=0.3,
+    lcc_radius=8.,
     cluster=None,
     cluster_kwargs={},
 ):
     """
     """
 
+    # TODO: ensure all steps are affine
+
+    # get origins
+    F = lambda p: p.split('/')[-1].split('.')[0].split('_')[2].split('x')
+    origins = [[int(x) for x in F(p)] for p in tile_paths]
+    origins = np.array(origins) * spacing
+
     # fix/mov assignments are a checkerboard pattern
     tile_grid = np.max(tile_grid_positions, axis=0) + 1
-    fixed_flags = ~(np.mgrid[tuple(slice(x) for x in tile_grid)].sum(axis=0) % 2).astype(bool)
+    fixed_flags = ~(np.arange(np.prod(tile_grid)).reshape(tile_grid) % 2).astype(bool)
     fixed_flags = [fixed_flags[x] for x in tile_grid_positions]
 
     # neighbors share faces
@@ -168,7 +185,6 @@ def distributed_stitch_new(
                 alignments.append(alignment)
 
 
-
     # define how to align a single pair of neighbors
     def align_neighbors(alignment):
 
@@ -177,130 +193,241 @@ def distributed_stitch_new(
         axis = alignment[1]
         fixed_first = alignment[2]
         origin = alignment[3]  # should be origin of whichever tile is on the right
+        raster_indices = alignment[4]
+
+        # print alignment spec
+        print('ALIGNMENT SPEC')
+        print(paths[0], '\n', paths[1], '\n', axis, fixed_first, origin, raster_indices, flush=True)
 
         # read tile_A
         tile_A = nrrd.read(paths[0])[0].transpose(2,1,0)
         crop = [slice(None),] * tile_A.ndim
-        crop[axis] = slice(int(-overlap_factor * tile_A.shape[axis]), None)
+        crop[axis] = slice(int(-2 * overlap_factor[axis] * tile_A.shape[axis]), None)
         tile_A = tile_A[tuple(crop)]
 
         # read tile_B
         tile_B = nrrd.read(paths[1])[0].transpose(2,1,0)
         crop = [slice(None),] * tile_B.ndim
-        crop[axis] = slice(0, int(overlap_factor * tile_B.shape[axis]))
+        crop[axis] = slice(0, int(2 * overlap_factor[axis] * tile_B.shape[axis]))
         tile_B = tile_B[tuple(crop)]
-
-        # check if overlap has sufficient common foreground to try and register
-        corr = np.corrcoef(tile_A.flatten(), tile_B.flatten())[0, 1]
-        if corr < minimum_overlap_correlation:
-            print(f'Insufficient overlap correlation for tile pair {paths}.', flush=True)
-            return np.eye(4)  # None  TODO: HANDLE BAD LINKS BETTER
 
         # turn on logging
         from bigstream.configure_bigstream import configure_logging
         configure_logging(None, True)
 
-        # run the alignment
+        # establish fix and mov, and check initial correlation
         fix, mov = (tile_A, tile_B) if fixed_first else (tile_B, tile_A)
-        return affine_align(
-            fix, mov, spacing, spacing,
+        corr_mask = (fix > np.percentile(fix, 75))
+        initial_corr = np.corrcoef(fix[corr_mask].flatten(), mov[corr_mask].flatten())[0, 1]
+        if initial_corr < min_initial_correlation:
+            return np.eye(4), 0
+
+        # run the alignment
+        affine = alignment_pipeline(
+            fix, mov, spacing, spacing, steps,
             fix_origin=origin, mov_origin=origin,
-            **affine_kwargs,
         )
 
+        # score the result
+        aligned = apply_transform(
+            fix, mov, spacing, spacing,
+            fix_origin=origin, mov_origin=origin,
+            transform_list=[affine,],
+        )
+        _, corr_image = local_correlation_coefficient(
+            fix, aligned, spacing, lcc_radius, return_image=True,
+        )
+        corr_mask = (fix > np.percentile(fix, 75)) * (aligned > 0)
+        corr = max(0, np.nanmean(corr_image[corr_mask]))
+
+        # XXX TEMP TEMP DEBUG
+        import tifffile
+        bundle = np.stack((fix, aligned,), axis=1)
+        idx = raster_indices
+        tifffile.imwrite(
+            f'./tiles_1/bundle_{idx[0]}_{idx[1]}.tiff', bundle, imagej=True, metadata={'axes':'ZCYX'},
+        )
+        # XXX END DEBUG
+
+        return affine, corr
+
+
     # map align_neighbors to all neighbors
-    neighbor_transforms = cluster.client.map(align_neighbors, alignments)
-    neighbor_transforms = cluster.client.gather(neighbor_transforms)
-    neighbor_transforms = np.array(neighbor_transforms)
+#    affines_and_corrs = cluster.client.map(align_neighbors, alignments)
+#    affines_and_corrs = cluster.client.gather(affines_and_corrs)
 
+    # unpack transforms and correlations
+#    neighbor_transforms, neighbor_correlations = [], []
+#    for a, b in affines_and_corrs:
+#        neighbor_transforms.append(a)
+#        neighbor_correlations.append(b)
+#    neighbor_transforms = np.array(neighbor_transforms)
+#    neighbor_correlations = np.array(neighbor_correlations)
+#    neighbor_correlations = neighbor_correlations / np.max(neighbor_correlations)
 
+    # XXX TEMP TEMP DEBUG
+#    np.save('./tiles_1/neighbor_transforms.npy', neighbor_transforms)
+#    np.save('./tiles_1/neighbor_correlations.npy', neighbor_correlations)
+    neighbor_transforms = np.load('./tiles_1/neighbor_transforms.npy')
+#    neighbor_correlations = np.load('./tiles_1/neighbor_correlations.npy')
+    neighbor_correlations = np.ones(22)
+    for iii, alignment in enumerate(alignments):
+        print(alignment[-1], neighbor_correlations[iii])
 
-
-    ### INITIALIZE WITH ZEROTH ORDER BCH TRUNCATION ###
+    # INITIALIZE WITH ZEROTH ORDER BCH TRUNCATION
     # put observations in the Lie algebra
     neighbor_tangents = logm(neighbor_transforms)
 
     # define sparse constraints array
+    rows, cols, data = [], [], []
+    for iii, alignment in enumerate(alignments):
+        if alignment[-1][0] != 0:
+            rows.append(iii)
+            cols.append(alignment[-1][0]-1)
+            data.append(neighbor_correlations[iii])
+        if alignment[-1][1] != 0:
+            rows.append(iii)
+            cols.append(alignment[-1][1]-1)
+            data.append(neighbor_correlations[iii])
+    rows, cols = np.array(rows), np.array(cols)
     N, M = neighbor_transforms.shape[0], len(tile_paths)
-    data = np.ones(2 * N)
-    rows = np.empty(2 * N)
-    rows[0::2] = np.arange(N)
-    rows[1::2] = rows[0::2]
-    cols = np.empty(2 * N)
-    cols[0::2] = [x[-1][0] for x in alignments]
-    cols[1::2] = [x[-1][1] for x in alignments]
-    bch_constraints = csr_array((data, (rows, cols)), shape=(N, M))
+    bch_constraints = csr_array((data, (rows, cols)), shape=(N, M-1))
 
     # solve lsqr problem for each vector index to initialize tile tangents
     tile_tangents = np.zeros((M, 4, 4))
     for row in range(3):
         for col in range(4):
-            tile_tangents[:, row, col] = lsqr(
-                bch_constraints, neighbor_tangents[:, row, col],
+            tile_tangents[1:, row, col] = lsqr(
+                bch_constraints, neighbor_tangents[:, row, col] * neighbor_correlations,
+                atol=0, btol=1e-6, conlim=1e8,
             )[0]
 
     # put estimates in the Lie group
     tile_transforms = expm(tile_tangents)
 
-    return tile_transforms
 
+    # GAUSS-NEWTON ITERATIONS
+    # define operators
+    def lie_bracket(A, B, order):
+        if order > 1:
+            B = lie_bracket(A, B, order-1)
+        return np.matmul(A, B) - np.matmul(B, A)
 
-    ### GAUSS-NEWTON ITERATE IMPROVEMENTS IN TANGENT SPACE ###
-        
+    def dexp(A, B, order):
+        result = B
+        for iii in range(1, order+1):
+            result += lie_bracket(A, B, iii) / factorial(iii+1, exact=True)
+        return result
 
+    def Ad(A, B):
+        Ainv = np.linalg.inv(A)
+        return np.matmul(A, np.matmul(B, Ainv))
 
+    def Adinv(A, B):
+        Ainv = np.linalg.inv(A)
+        return np.matmul(Ainv, np.matmul(B, A))
 
+    # run least square optimization iterations with Jacobian
+    neighbor_transforms_inv = np.linalg.inv(neighbor_transforms)
+    for iteration in range(max_iterations):
 
-    # build transform composition matrix
-    A = np.zeros((len(tile_positions), len(tile_positions), len(neighbors_list)))
-    for iii, neighbors in enumerate(neighbors_list):
-        a, b = neighbors[0], neighbors[1]
-        fi, mi = (a, b) if fixed_image[a] else (b, a)
-        A[mi, fi, iii] = 1
+        # compute residuals on the manifold and algebra
+        residual_transforms_left = np.empty_like(neighbor_transforms)
+        for iii in range(N):
+            A = neighbor_transforms_inv[iii]
+            B = tile_transforms[int(alignments[iii][-1][0])]
+            C = tile_transforms[int(alignments[iii][-1][1])]
+            residual_transforms_left[iii] = np.matmul(C, np.matmul(B, A))
+        residual_tangents_left = logm(residual_transforms_left)
 
-    # initialize tile transforms as identity
-    tile_transforms = np.empty((len(tile_positions), 4, 4))
-    for iii in range(len(tile_positions)):
-        tile_transforms[iii] = np.eye(4)
+        residual_transforms_right = np.empty_like(neighbor_transforms)
+        fixed_transforms_in_order = np.empty_like(neighbor_transforms)
+        for iii in range(N):
+            C = neighbor_transforms_inv[iii]
+            B = tile_transforms[int(alignments[iii][-1][1])]
+            A = tile_transforms[int(alignments[iii][-1][0])]
+            residual_transforms_right[iii] = np.matmul(C, np.matmul(B, A))
+            fixed_transforms_in_order[iii] = A
+        residual_tangents_right = logm(residual_transforms_right)
 
-    # gradient descent loop
-    print('Starting global consistency optimization')
-    for iii in range(global_optimization_iterations):
+        # XXX TEMP TEMP DEBUG
+        xxx_l = np.sum( np.linalg.norm(residual_transforms_left, axis=(1, 2)), axis=0)
+        yyy_l = np.sum( np.linalg.norm(residual_tangents_left, axis=(1, 2)), axis=0)
+        xxx_r = np.sum( np.linalg.norm(residual_transforms_right, axis=(1, 2)), axis=0)
+        yyy_r = np.sum( np.linalg.norm(residual_tangents_right, axis=(1, 2)), axis=0)
+        print(np.round([xxx_l, yyy_l, xxx_r, yyy_r], decimals=3))
+        # XXX END DEBUG
 
-        # with respect to moving parameters
-        factor = np.einsum('mij,nmo', tile_transforms, A)
-        reconstruction = np.einsum('nij,jkno', tile_transforms, factor)
-        left = np.einsum('ijno,jko', factor, reconstruction)
-        right = np.einsum('ijno,ojk', factor, neighbor_transforms)
-        gradient = left - right
+        # apply jacobian terms and stack
+        residual_tangents_left = dexp(residual_transforms_left, residual_tangents_left, 2)
+        residual_tangents_left = -1 * Ad(residual_transforms_left, residual_tangents_left)
+        residual_tangents_right = dexp(residual_transforms_right, residual_tangents_right, 2)
+        residual_tangents_right = -1 * Ad(fixed_transforms_in_order, residual_tangents_right)
+#        residual_tangents = np.concatenate([residual_tangents_left, residual_tangents_right])
+        residual_tangents = residual_tangents_left * neighbor_correlations[:, None, None]
 
-        # with respect to fixed parameters
-        factor = np.einsum('nij,nmo', tile_transforms, A)
-        reconstruction = np.einsum('nij,jkno', tile_transforms, factor)
-        left = np.einsum('ijno,jko', factor, reconstruction)
-        right = np.einsum('ijno,ojk', factor, neighbor_transforms)
-        gradient = (gradient + left - right).transpose(2, 0, 1)
+        # define least squares constraints left
+        gn_constraints_left = csr_array((12*N, 12*(M-1)))
+        for iii in range(N):
+            row_start = iii * 12
+            row_stop = row_start + 12
+            if alignments[iii][-1][0] != 0:
+                col_start = 12 * int(alignments[iii][-1][0] - 1)  # conj == conjugation matrix
+                col_stop = col_start + 12
+                conj = tile_transforms[int(alignments[iii][-1][1])]  # no decrement, not a constraint matrix index
+                conj_inv = np.linalg.inv(conj)
+                kron_matrix = np.kron(conj, conj_inv.T)[:12, :12] * neighbor_correlations[iii]
+                gn_constraints_left[row_start:row_stop, col_start:col_stop] = kron_matrix
+            if alignments[iii][-1][1] != 0:
+                col_start = 12 * int(alignments[iii][-1][1] - 1)
+                col_stop = col_start + 12
+                eye_matrix = np.eye(12) * neighbor_correlations[iii]
+                gn_constraints_left[row_start:row_stop, col_start:col_stop] = eye_matrix
 
-        # print feedback
-        objective = np.sum( (neighbor_transforms - reconstruction.transpose(2, 0, 1))**2 )
-        print(f'ITERATION: {iii}  OBJECTIVE VALUE: {objective}')
+        # define least squares constraints right
+        gn_constraints_right = csr_array((12*N, 12*(M-1)))
+        for iii in range(N):
+            row_start = iii * 12
+            row_stop = row_start + 12
+            if alignments[iii][-1][0] != 0:
+                col_start = 12 * int(alignments[iii][-1][0] - 1)
+                col_stop = col_start + 12
+                eye_matrix = np.eye(12) * neighbor_correlations[iii]
+                gn_constraints_right[row_start:row_stop, col_start:col_stop] = eye_matrix
+            if alignments[iii][-1][1] != 0:
+                col_start = 12 * int(alignments[iii][-1][1] - 1)  # conj == conjugation matrix
+                col_stop = col_start + 12
+                conj = tile_transforms[int(alignments[iii][-1][1])]  # no decrement, not a constraint matrix index
+                conj_inv = np.linalg.inv(conj)
+                kron_matrix = np.kron(conj_inv, conj.T)[:12, :12] * neighbor_correlations[iii]
+                gn_constraints_right[row_start:row_stop, col_start:col_stop] = kron_matrix
 
-        # take a step
-        tile_transforms = tile_transforms - global_optimization_learning_rate * gradient
+        # stack the left and right sides and normalize
+#        gn_constraints = vstack([gn_constraints_left, gn_constraints_right])
+        gn_constraints = gn_constraints_left
+        col_norms = norm(gn_constraints, axis=0)
+        col_norms[col_norms == 0] = 1
+        gn_constraints = gn_constraints.multiply(1. / col_norms)
+
+        # solve the model
+        perturbation_tangents = np.zeros_like(tile_transforms)
+        lsqr_solution = lsqr(
+            gn_constraints, residual_tangents[:, :3, :].ravel(),
+            atol=1e-6, btol=1e-6, conlim=1e8,
+        )[0] / col_norms
+        for iii in range(perturbation_tangents.shape[0]-1):
+            perturbation_tangents[iii+1, :3, :] = lsqr_solution[12*iii:12*iii+12].reshape((3, 4))
+        perturbation_transforms = expm(perturbation_tangents)
+
+        # update the tile transforms
+        tile_transforms = np.matmul(perturbation_transforms, tile_transforms)
 
     # invert all fixed transforms
     for iii in range(len(tile_transforms)):
-        if fixed_image[iii]:
+        if fixed_flags[iii]:
             tile_transforms[iii] = np.linalg.inv(tile_transforms[iii])
 
-    # TODO: consider fixing one tile
-    #       i.e. find inverse of one transform and compose that with
-    #       all other transforms
-
-    # all done!
     return tile_transforms
-
-
 
 
 

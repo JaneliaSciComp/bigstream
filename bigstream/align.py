@@ -1451,6 +1451,7 @@ def alignment_pipeline(
              'random':lambda **c: random_affine_search(*a, **{**b, **c})[0],
              'rigid': lambda **c: affine_align(*a, **{**b, **c}, rigid=True),
              'affine':lambda **c: affine_align(*a, **{**b, **c}),
+             'ransac_masks': lambda **c: ransac_masks_meta_align(*a, **{**b, **c})[0][0],
              'deform':lambda **c: deformable_align(*a, **{**b, **c})[1],}
 
     # loop over steps

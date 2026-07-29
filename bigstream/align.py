@@ -1370,7 +1370,8 @@ def deformable_align(
     control_point_spacing_xyz = control_point_spacing[::-1]
 
     # initial control point grid
-    cp_divisor = control_point_spacing_xyz * control_point_levels[-1]
+    bspline_control_point_levels = control_point_levels[::-1]
+    cp_divisor = control_point_spacing_xyz * control_point_levels[0]
     initial_cp_grid = [
         max(1, int(x*y/d))
         for x, y, d in zip(fix.GetSize(), fix.GetSpacing(), cp_divisor)
@@ -1380,12 +1381,12 @@ def deformable_align(
     )
     logger.debug((
         f'{context} '
-        'BSpline control point grid: '
-        f'{fix.GetSize()}*{fix.GetSpacing()}/({control_point_spacing_xyz}*{control_point_levels[0]})={initial_cp_grid}, '
+        f'BSpline control point levels: {bspline_control_point_levels}, '
+        f'mesh size: {fix.GetSize()}*{fix.GetSpacing()}/({control_point_spacing_xyz}*{control_point_levels[0]})={initial_cp_grid}, '
         f'BSpline transform {transform} '
     ))
     irm.SetInitialTransformAsBSpline(
-        transform, inPlace=True, scaleFactors=control_point_levels[::-1],
+        transform, inPlace=True, scaleFactors=bspline_control_point_levels,
     )
 
     # set initial static transforms

@@ -1370,7 +1370,6 @@ def deformable_align(
     control_point_spacing_xyz = control_point_spacing[::-1]
 
     # initial control point grid
-    bspline_control_point_levels = control_point_levels[::-1]
     cp_divisor = control_point_spacing_xyz * control_point_levels[0]
     initial_cp_grid = [
         max(1, int(x*y/d))
@@ -1379,6 +1378,7 @@ def deformable_align(
     transform = sitk.BSplineTransformInitializer(
         image1=fix, transformDomainMeshSize=initial_cp_grid, order=3,
     )
+    bspline_control_point_levels = control_point_levels[::-1]
     logger.debug((
         f'{context} '
         f'BSpline control point levels: {bspline_control_point_levels}, '

@@ -232,11 +232,14 @@ def configure_irm(
     irm.SetSmoothingSigmasPerLevel(smooth_sigmas)
     irm.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
 
-    logger.debug(f'Configure {context} IRM' +
-                 f'Metric: {metric} -> {metric_args}' +
-                 f'Optimizer: {optimizer} -> {optimizer_args}' +
-                 f'Shrink factors: {shrink_factors}' +
-                 f'Smooth sigmas: {smooth_sigmas}')
+    logger.debug((
+        f'Configure {context} IRM, '
+        f'Sampling {sampling} '
+        f'Metric: {metric} -> {metric_args} '
+        f'Optimizer: {optimizer} -> {optimizer_args} '
+        f'Shrink factors: {shrink_factors} '
+        f'Smooth sigmas: {smooth_sigmas} '
+    ))
 
     # set callback function
     def default_callback(irm):
@@ -246,7 +249,7 @@ def configure_irm(
         logger.debug((
             f'{context} LEVEL: {level} '
             f'ITERATION: {iteration} '
-            f'METRIC: {metric}'
+            f'METRIC: {metric} '
         ))
 
     if callback is None:

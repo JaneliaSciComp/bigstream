@@ -18,7 +18,7 @@ from fishspot.filter import apply_foreground_mask
 logger = logging.getLogger(__name__)
 
 
-def realize_mask(image, mask):
+def realize_mask(image, mask, mask_percentile=()):
     """
     Ensure that mask is an ndarray
 
@@ -39,8 +39,13 @@ def realize_mask(image, mask):
     dtype is always uint8
     """
 
-    if mask is None:
+    if mask is None and not mask_percentile:
         return None
+    if mask_percentile:
+        if len(mask_percentile) != 2:
+            raise ValueError(f'Invalid mask percentile {mask_percentile} - must be a tuple (low,high)')
+        low_thresh, high_thresh = np.percentile(image, tuple(mask_percentile))
+        return (image > low_thresh) * (image < high_thresh)
     if isinstance(mask, np.ndarray):
         return (mask > 0).astype(np.uint8)
     if isinstance(mask, (tuple, list)):
@@ -309,6 +314,8 @@ def feature_point_ransac_affine_align(
     confidence=0.999,
     fix_mask=None,
     mov_mask=None,
+    fix_mask_percentile=None,
+    mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -500,8 +507,8 @@ def feature_point_ransac_affine_align(
     if default is None: default = np.eye(fix.ndim + 1)
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask)
-    mov_mask = realize_mask(mov, mov_mask)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
 
     # apply static transforms
     if static_transform_list:

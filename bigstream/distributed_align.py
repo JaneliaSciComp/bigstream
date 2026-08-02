@@ -445,6 +445,7 @@ def distributed_alignment_pipeline(
     overlap_factor=0.5,
     fix_mask=None,
     mov_mask=None,
+    roi=None,
     foreground_percentage=0.,
     mov_origin_transform:np.ndarray|None=None,
     static_transform_list=[],
@@ -493,12 +494,9 @@ def distributed_alignment_pipeline(
     overlap_factor : float in range [0, 1] (default: 0.5)
         Block overlap size as a percentage of block size
 
-    fix_mask : ImageData, tuple/list of physical coordinates, or function (default: None)
+    fix_mask : ImageData or function (default: None)
         A mask limiting metric evaluation region of the fixed image.
         If an ImageData, any non-zero value is considered foreground.
-        If a tuple or list, it is treated as an ROI bounding box in physical
-        coordinates with the form (xmin, ymin, zmin[, xmax, ymax, zmax]).
-        Only blocks that intersect the bounding box are processed.
         If a function, it must take a single nd-array argument and return an
         array of the same shape with dtype bool.
 
@@ -507,11 +505,9 @@ def distributed_alignment_pipeline(
         are the same (in physical units) but the number of voxels can
         be different.
 
-    mov_mask : ImageData, tuple/list of physical coordinates, or function (default: None)
+    mov_mask : ImageData or function (default: None)
         A mask limiting metric evaluation region of the moving image.
         If an ImageData, any non-zero value is considered foreground.
-        If a tuple or list, it is treated as an ROI bounding box in physical
-        coordinates with the form (xmin, ymin, zmin[, xmax, ymax, zmax]).
         If a function, it must take a single nd-array argument and return an
         array of the same shape with dtype bool.
 
@@ -519,6 +515,12 @@ def distributed_alignment_pipeline(
         image, though sampling can be different. I.e. the origin and span
         are the same (in phyiscal units) but the number of voxels can
         be different.
+
+    roi : tuple of float (default: None)
+        A registration ROI on the fixed image, given as a physical-coordinate
+        bounding box (zmin, ymin, xmin[, zmax, ymax, xmax]) in zyx order. Only
+        blocks that intersect the box are processed; selected blocks are not
+        cropped (so each block's transform keeps its full block shape).
 
     static_transform_list : list of numpy arrays (default: [])
         Transforms applied to moving image before applying query transform
@@ -550,48 +552,32 @@ def distributed_alignment_pipeline(
     # to partition the work
     fix_spatial_dims = fix_image.spatial_dims
     mov_spatial_dims = mov_image.spatial_dims
+    # masks are binary foreground images only (the ROI is a separate parameter)
     if fix_mask is not None:
-        if isinstance(fix_mask, (tuple, list)):
-            fix_mask_image = None
-            fix_mask_min_zyx = tuple(reversed(fix_mask[:3]))
-            if len(fix_mask) >= 6:
-                fix_mask_max_zyx = tuple(reversed(fix_mask[3:6]))
-            else:
-                fix_mask_max_zyx = fix_spatial_dims
-            fix_mask_spatial_dims = np.array(fix_mask_max_zyx) - np.array(fix_mask_min_zyx)
-        else:
-            fix_mask_image = as_image_data(fix_mask)
-            fix_mask_spatial_dims = fix_mask_image.spatial_dims
+        fix_mask_image = as_image_data(fix_mask)
+        fix_mask_spatial_dims = fix_mask_image.spatial_dims
     else:
         fix_mask_image = None
         fix_mask_spatial_dims = None
 
     if mov_mask is not None:
-        if isinstance(mov_mask, (tuple, list)):
-            mov_mask_image = None
-            mov_mask_min_zyx = tuple(reversed(mov_mask[:3]))
-            if len(mov_mask) >= 6:
-                mov_mask_max_zyx = tuple(reversed(mov_mask[3:6]))
-            else:
-                mov_mask_max_zyx = mov_spatial_dims
-            mov_mask_spatial_dims = np.array(mov_mask_max_zyx) - np.array(mov_mask_min_zyx)
-        else:
-            mov_mask_image = as_image_data(mov_mask)
-            mov_mask_spatial_dims = mov_mask_image.spatial_dims
+        mov_mask_image = as_image_data(mov_mask)
+        mov_mask_spatial_dims = mov_mask_image.spatial_dims
     else:
         mov_mask_image = None
         mov_mask_spatial_dims = None
 
-    # Pre-convert ROI masks from physical to voxel coordinates so the per-block
-    # intersection check below can compare against voxel block slices directly.
-    if isinstance(fix_mask, (tuple, list)):
-        fix_mask_roi_min_voxel = np.array(tuple(reversed(fix_mask[:3]))) / fix_spatial_spacing
-        if len(fix_mask) >= 6:
-            fix_mask_roi_max_voxel = np.array(tuple(reversed(fix_mask[3:6]))) / fix_spatial_spacing
+    # Pre-convert the ROI box (already zyx physical coords) to voxel coordinates
+    # so the per-block intersection check below can compare against voxel block
+    # slices directly. The ROI selects which blocks run; blocks are not cropped.
+    if roi is not None:
+        roi_min_voxel = np.array(roi[:3], dtype=float) / fix_spatial_spacing
+        if len(roi) >= 6:
+            roi_max_voxel = np.array(roi[3:6], dtype=float) / fix_spatial_spacing
         else:
-            fix_mask_roi_max_voxel = np.array(fix_spatial_dims, dtype=float)
+            roi_max_voxel = np.array(fix_spatial_dims, dtype=float)
     else:
-        fix_mask_roi_min_voxel = fix_mask_roi_max_voxel = None
+        roi_min_voxel = roi_max_voxel = None
 
     block_partition_size = np.array(get_spatial_values(blocksize))
 
@@ -634,12 +620,13 @@ def distributed_alignment_pipeline(
             if foreground_ratio < foreground_percentage:
                 logger.debug(f'Ignore masked block {bi} - foreground ratio: {foreground_ratio} < {foreground_percentage}')
                 foreground = False
-        elif fix_mask is not None:
-            # mask is an ROI; bounds already converted to voxel coords above
+
+        if foreground and roi is not None:
+            # ROI block selection; bounds already converted to voxel coords above
             block_min = np.array([s.start for s in block_slice])
             block_max = np.array([s.stop for s in block_slice])
-            if np.any(block_max <= fix_mask_roi_min_voxel) or np.any(block_min >= fix_mask_roi_max_voxel):
-                logger.debug(f'Block {bi} outside mask bbox {fix_mask}, skipping')
+            if np.any(block_max <= roi_min_voxel) or np.any(block_min >= roi_max_voxel):
+                logger.debug(f'Block {bi} outside ROI bbox {roi}, skipping')
                 foreground = False
 
         if foreground:

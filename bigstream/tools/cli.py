@@ -6,6 +6,8 @@ import pydantic.v1.utils as pu
 import yaml
 
 from pathlib import Path
+from typing import Optional, Tuple
+
 from bigstream.configure_bigstream import default_bigstream_config_str
 from bigstream.image_data import ImageData
 
@@ -162,11 +164,13 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('fix-mask-subpath'),
                       dest=args_descriptor.argdest('fix_mask_subpath'),
                       help='Fixed volume mask subpath')
-    args.add_argument(args_descriptor.argflag('fix-roi'),
-                      dest=args_descriptor.argdest('fix_roi'),
-                      type=inttuple,
+    args.add_argument(args_descriptor.argflag('roi'),
+                      dest=args_descriptor.argdest('roi'),
+                      type=floattuple,
                       metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
-                      help='Fixed volume ROI a tuple of 6 values representing min and max physical coordinates')
+                      help='Registration ROI on the fixed image, a tuple of 6 values '
+                           'representing min and max physical coordinates (xyz). '
+                           'Restricts the region that is actually registered.')
 
     args.add_argument(args_descriptor.argflag('mov'),
                       dest=args_descriptor.argdest('mov'),
@@ -200,11 +204,6 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
     args.add_argument(args_descriptor.argflag('mov-mask-subpath'),
                       dest=args_descriptor.argdest('mov_mask_subpath'),
                       help='Moving volume mask subpath')
-    args.add_argument(args_descriptor.argflag('mov-roi'),
-                      dest=args_descriptor.argdest('mov_roi'),
-                      type=inttuple,
-                      metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
-                      help='Moving volume ROI a tuple of 6 values representing min and max physical coordinates')
 
     args.add_argument(args_descriptor.argflag('mov-origin-transform'),
                       dest=args_descriptor.argdest('mov_origin_transform'),
@@ -326,7 +325,7 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'fix_expansion_factor', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask_subpath', registration_args)
-    _extract_arg(args, args_descriptor, 'fix_roi', registration_args)
+    _extract_arg(args, args_descriptor, 'roi', registration_args)
     _extract_arg(args, args_descriptor, 'mov', registration_args)
     _extract_arg(args, args_descriptor, 'mov_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'mov_timeindex', registration_args)
@@ -335,7 +334,6 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'mov_expansion_factor', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask_subpath', registration_args)
-    _extract_arg(args, args_descriptor, 'mov_roi', registration_args)
     _extract_arg(args, args_descriptor, 'default_output_dir', registration_args)
     _extract_arg(args, args_descriptor, 'output_blocksize', registration_args)
     _extract_arg(args, args_descriptor, 'transform_dir', registration_args)
@@ -365,7 +363,22 @@ def _extract_arg(args: RegistrationInputs, args_descriptor: CliArgsHelper,
     args_dict[argname] = getattr(args, args_descriptor.argdest(argname))
 
 
-def get_input_images(args: RegistrationInputs) -> tuple[ImageData, ImageData|None, ImageData, ImageData|None]:
+def _roi_to_zyx(roi):
+    """
+    Reverse a user-provided ROI box from xyz to zyx order.
+
+    The min triple and the max triple are reversed independently - this is not
+    a plain roi[::-1], which would also swap min and max.
+
+    roi : (xmin, ymin, zmin[, xmax, ymax, zmax]) or None/empty
+    Returns a 3- or 6-tuple in zyx order, or None if roi is falsy.
+    """
+    mn = tuple(reversed(roi[:3]))                    # (zmin, ymin, xmin)
+    mx = tuple(reversed(roi[3:6])) if len(roi) >= 6 else None
+    return mn + mx if mx is not None else mn
+
+
+def get_input_images(args: RegistrationInputs) -> Tuple[ImageData, Optional[ImageData], ImageData, Optional[ImageData], Optional[Tuple[float]]]:
     # Read the global inputs
     fix = ImageData(
         args.fix, args.fix_subpath,
@@ -399,21 +412,22 @@ def get_input_images(args: RegistrationInputs) -> tuple[ImageData, ImageData|Non
     if args.fix_mask and Path(args.fix_mask).exists():
         fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath, open_image=True)
         logger.info(f'Using fix mask {fix_mask}')
-    elif args.fix_roi:
-        fix_mask = args.fix_roi
-        logger.info(f'Using fix mask ROI {fix_mask}')
     else:
         fix_mask = None
         logger.info('No fix mask was provided')
 
     if args.mov_mask and Path(args.mov_mask).exists():
         mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath, open_image=True)
-        logger.info(f'Using mov mask {fix_mask}')
-    elif args.mov_roi:
-        mov_mask = args.mov_roi
-        logger.info(f'Using mov mask ROI {fix_mask}')
+        logger.info(f'Using mov mask {mov_mask}')
     else:
         mov_mask = None
         logger.info('No mov mask was provided')
 
-    return fix, fix_mask, mov, mov_mask
+    if args.roi is not None:
+        # reverse the user ROI (xyz) to zyx so downstream code consumes it directly
+        roi = _roi_to_zyx(args.roi)
+        logger.info(f'Using registration ROI {args.roi} (xyz) -> {roi} (zyx)')
+    else:
+        roi = None
+
+    return fix, fix_mask, mov, mov_mask, roi

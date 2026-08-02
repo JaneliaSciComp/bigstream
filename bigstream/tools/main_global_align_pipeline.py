@@ -95,7 +95,7 @@ def _run_global_align(reg_args:RegistrationInputs,
         logger.info('Skip global alignment because no global steps were specified.')
         return None
 
-    fix, fix_mask, mov, mov_mask = get_input_images(reg_args)
+    fix, fix_mask, mov, mov_mask, roi = get_input_images(reg_args)
     if fix.has_data() and mov.has_data():
         # compose mov origin transform from user affine + OME translations
         mov_origin_transform = compose_origin_transform(
@@ -103,7 +103,9 @@ def _run_global_align(reg_args:RegistrationInputs,
             mov.get_attr('globalCoordinateTransformations'),
         )
         # calculate and apply the global transform
-        affine, aligned = _align_global_data(fix, fix_mask, mov, mov_mask,
+        affine, aligned = _align_global_data(fix, fix_mask,
+                                             mov, mov_mask,
+                                             roi,
                                              global_steps,
                                              mov_origin_transform,
                                              reg_args.get_static_transforms())
@@ -131,6 +133,7 @@ def _run_global_align(reg_args:RegistrationInputs,
 
 def _align_global_data(fix_image, fix_mask,
                        mov_image, mov_mask,
+                       roi,
                        steps,
                        mov_origin_transform,
                        static_transforms):
@@ -178,6 +181,7 @@ def _align_global_data(fix_image, fix_mask,
                                 steps,
                                 fix_mask=fix_mask,
                                 mov_mask=mov_mask,
+                                roi=roi,
                                 fix_origin=None,
                                 mov_origin=mov_origin,
                                 static_transform_list=static_transforms)
@@ -197,7 +201,7 @@ def _apply_global_transform(reg_args:RegistrationInputs,
                             compressor_opts,
                             zarr_format,
                             sharding_factor=None):
-    (fix_image, _, mov_image, _) = get_input_images(reg_args)
+    (fix_image, _, mov_image, _, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
         full_image_coords = tuple(slice(None) for _ in range(fix_image.spatial_ndim))
         fix_image_array = read_block(

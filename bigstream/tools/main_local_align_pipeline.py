@@ -214,7 +214,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
 
     logger.info(f'Run local registration with: {reg_args}, {local_steps}')
 
-    (fix_image, fix_mask, mov_image, mov_mask) = get_input_images(reg_args)
+    (fix_image, fix_mask, mov_image, mov_mask, roi) = get_input_images(reg_args)
     if mov_image.ndim != fix_image.ndim:
         # only check for ndim and not shape because as it happens 
         # the test data has different shape for fix.highres and mov.highres
@@ -334,6 +334,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             fix_mask,
             mov_image,
             mov_mask,
+            roi,
             local_steps,
             local_processing_size,
             local_processing_overlap_factor,
@@ -379,6 +380,7 @@ def _align_local_data(fix_image: ImageData,
                       fix_mask: ImageData|None,
                       mov_image: ImageData,
                       mov_mask: ImageData|None,
+                      roi,
                       steps,
                       processing_size,
                       processing_overlap_factor,
@@ -502,6 +504,7 @@ def _align_local_data(fix_image: ImageData,
             overlap_factor=processing_overlap_factor,
             fix_mask=fix_mask,
             mov_mask=mov_mask,
+            roi=roi,
             mov_origin_transform=mov_origin_transform,
             static_transform_list=static_transforms,
             output_transform=deformfield,

@@ -1053,29 +1053,32 @@ def affine_align(
         )
         irm.SetMovingInitialTransform(T)
 
-    # distinguish between 2D and 3D for rigid transforms
-    ndims = fix.GetDimension()
-    rigid_transform_constructor = sitk.Euler2DTransform if ndims == 2 else sitk.Euler3DTransform
+    # convert initial transform to sitk transform object
+    if initial_transform_given:
+        if rigid:
+            transform = bst.matrix_to_euler_transform(initial_condition)
+        else:
+            transform = bst.matrix_to_affine_transform(initial_condition)
 
-    # set transform to optimize
-    # TODO: enable initialization with second moment as well
+    # or, initialize with the correct empty transform type
+    else:
+        ndims = fix.GetDimension()
+        if rigid and ndims == 2:
+            transform = sitk.Euler2DTransform()
+        if rigid and ndims == 3:
+            transform = sitk.Euler3DTransform()
+        if not rigid:
+            transform = sitk.AffineTransform(ndims)
+
+    # apply center of mass initialization
     if isinstance(initial_condition, str) and initial_condition == "CENTER":
-        a, b = fix, mov
-        x = sitk.CenteredTransformInitializer(a, b, rigid_transform_constructor())
-        x = rigid_transform_constructor(x).GetTranslation()[::-1]
-        initial_condition = np.eye(ndims+1)
-        initial_condition[:ndims, -1] = x
-        initial_transform_given = True
-    if rigid and not initial_transform_given:
-        transform = rigid_transform_constructor()
-    elif rigid and initial_transform_given:
-        transform = bst.matrix_to_euler_transform(initial_condition)
-    elif not rigid and not initial_transform_given:
-        transform = sitk.AffineTransform(fix.GetDimension())
-    elif not rigid and initial_transform_given:
-        transform = bst.matrix_to_affine_transform(initial_condition)
+        transform = sitk.CenteredTransformInitializer(
+            fix, mov, transform,
+            sitk.CenteredTransformInitializerFilter.MOMENTS,
+        )
+
+    # and finally set the initial transform, and masks
     irm.SetInitialTransform(transform, inPlace=True)
-    # set masks
     if fix_mask is not None: irm.SetMetricFixedMask(fix_mask)
     if mov_mask is not None: irm.SetMetricMovingMask(mov_mask)
 

@@ -927,6 +927,8 @@ def affine_transform_to_matrix(transform):
     matrix = np.eye(ndims+1)
     matrix[:ndims, :ndims] = np.array(transform.GetMatrix()).reshape((ndims,ndims))
     matrix[:ndims, -1] = np.array(transform.GetTranslation())
+    origin = np.array(transform.GetCenter())
+    matrix = change_affine_matrix_origin(matrix, -origin)
     return invert_matrix_axes(matrix)
 
 

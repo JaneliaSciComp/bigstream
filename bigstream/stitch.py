@@ -34,6 +34,7 @@ def create_synthetic_tiles(
     max_rotation,
     max_scale,
     max_shear,
+    transforms_only=False,
     reconstruct=False,
 ):
     """
@@ -56,6 +57,10 @@ def create_synthetic_tiles(
     os.makedirs(output_folder, exist_ok=True)
     np.save(output_folder + '/affines.npy', affines)
     np.save(output_folder + '/affines_inv.npy', affines_inv)
+
+    # if we only want the transforms
+    if transforms_only:
+        return affines, affines_inv
 
     # apply affines to virtual tiles
     fix = tuple(int(x) for x in tile_size_with_overlaps) + (image.dtype,)
@@ -125,14 +130,78 @@ def reconstruct_from_synthetic_tiles(
     return reconstructed_image
 
 
-@cluster
+def create_neighbor_transforms_from_tile_transforms(
+    affines,
+    tile_grid_positions,
+):
+
+    # fix/mov assignments are a checkerboard pattern
+    tile_grid = np.max(tile_grid_positions, axis=0) + 1
+    fixed_flags = ~(np.arange(np.prod(tile_grid)).reshape(tile_grid) % 2).astype(bool)
+    fixed_flags = [fixed_flags[x] for x in tile_grid_positions]
+
+    # neighbors share faces
+    ndim = len(tile_grid)
+    neighbor_deltas = np.concatenate((np.eye(ndim), -np.eye(ndim)), axis=0).astype(int)
+
+    # get all alignment index pairs
+    alignments = []
+    for iii, fixed_flag in enumerate(fixed_flags):
+        if not fixed_flag: continue
+        position = tile_grid_positions[iii]
+        for neighbor_delta in neighbor_deltas:
+            neighbor_position = position + neighbor_delta
+            if np.all(neighbor_position >= 0) and np.all(neighbor_position < tile_grid):
+                raster_index = int(np.ravel_multi_index(neighbor_position, tile_grid))
+                alignments.append( ((iii, raster_index),) )
+
+    # create neighbor transforms: T_ij = t_j @ t_i^-1
+    neighbor_transforms = np.empty((len(alignments), 4, 4))
+    for iii, alignment in enumerate(alignments):
+        fix = affines[alignment[-1][0]]
+        mov = affines[alignment[-1][1]]
+        neighbor_transforms[iii] = np.matmul(mov, np.linalg.inv(fix))
+    return neighbor_transforms, alignments
+
+
 def distributed_stitch_new(
     tile_paths,
     tile_grid_positions,
     spacing,
     overlap_factor,
     steps,
-    max_iterations=100,
+    max_iterations=10,
+    min_initial_correlation=0.3,
+    lcc_radius=8.,
+    cluster=None,
+    cluster_kwargs={},
+):
+    """
+    """
+
+    neighbor_transforms, neighbor_correlations, alignments = align_all_neighbors(
+        tile_paths, tile_grid_positions, spacing, overlap_factor, steps,
+        min_initial_correlation=min_initial_correlation,
+        lcc_radius=lcc_radius,
+        cluster=cluster,
+        cluster_kwargs=cluster_kwargs,
+    )
+
+    tile_transforms = find_tile_transforms(
+        neighbor_transforms, neighbor_correlations, alignments,
+        tile_paths, max_iterations,
+    )
+
+    return tile_transforms
+
+
+@cluster
+def align_all_neighbors(
+    tile_paths,
+    tile_grid_positions,
+    spacing,
+    overlap_factor,
+    steps,
     min_initial_correlation=0.3,
     lcc_radius=8.,
     cluster=None,
@@ -237,7 +306,8 @@ def distributed_stitch_new(
         _, corr_image = local_correlation_coefficient(
             fix, aligned, spacing, lcc_radius, return_image=True,
         )
-        corr_mask = (fix > np.percentile(fix, 75)) * (aligned > 0)
+        corr_mask = ~(np.isnan(corr_image) + np.isinf(corr_image))
+        corr_mask = corr_mask * (aligned > 0)
         corr = max(0, np.nanmean(corr_image[corr_mask]))
 
         # XXX TEMP TEMP DEBUG
@@ -245,34 +315,50 @@ def distributed_stitch_new(
         bundle = np.stack((fix, aligned,), axis=1)
         idx = raster_indices
         tifffile.imwrite(
-            f'./tiles_1/bundle_{idx[0]}_{idx[1]}.tiff', bundle, imagej=True, metadata={'axes':'ZCYX'},
+            f'./tiles_21/bundle_{idx[0]}_{idx[1]}.tiff', bundle, imagej=True, metadata={'axes':'ZCYX'},
         )
         # XXX END DEBUG
 
         return affine, corr
 
-
     # map align_neighbors to all neighbors
-#    affines_and_corrs = cluster.client.map(align_neighbors, alignments)
-#    affines_and_corrs = cluster.client.gather(affines_and_corrs)
+    affines_and_corrs = cluster.client.map(align_neighbors, alignments)
+    affines_and_corrs = cluster.client.gather(affines_and_corrs)
 
-    # unpack transforms and correlations
-#    neighbor_transforms, neighbor_correlations = [], []
-#    for a, b in affines_and_corrs:
-#        neighbor_transforms.append(a)
-#        neighbor_correlations.append(b)
-#    neighbor_transforms = np.array(neighbor_transforms)
-#    neighbor_correlations = np.array(neighbor_correlations)
-#    neighbor_correlations = neighbor_correlations / np.max(neighbor_correlations)
+   # unpack transforms and correlations
+    neighbor_transforms, neighbor_correlations = [], []
+    for a, b in affines_and_corrs:
+        neighbor_transforms.append(a)
+        neighbor_correlations.append(b)
+    neighbor_transforms = np.array(neighbor_transforms)
+    neighbor_correlations = np.array(neighbor_correlations)
+    neighbor_correlations = neighbor_correlations / np.max(neighbor_correlations)
 
-    # XXX TEMP TEMP DEBUG
-#    np.save('./tiles_1/neighbor_transforms.npy', neighbor_transforms)
-#    np.save('./tiles_1/neighbor_correlations.npy', neighbor_correlations)
-    neighbor_transforms = np.load('./tiles_1/neighbor_transforms.npy')
-#    neighbor_correlations = np.load('./tiles_1/neighbor_correlations.npy')
-    neighbor_correlations = np.ones(22)
-    for iii, alignment in enumerate(alignments):
-        print(alignment[-1], neighbor_correlations[iii])
+   # XXX TEMP TEMP DEBUG
+    np.save('./tiles_21/neighbor_transforms.npy', neighbor_transforms)
+    np.save('./tiles_21/neighbor_correlations.npy', neighbor_correlations)
+    neighbor_transforms = np.load('./tiles_21/neighbor_transforms.npy')
+    neighbor_correlations = np.load('./tiles_21/neighbor_correlations.npy')
+
+    for iii in range(len(alignments)):
+        print(alignments[iii][-1], neighbor_correlations[iii])
+
+
+    return neighbor_transforms, neighbor_correlations, alignments
+
+
+
+def find_tile_transforms(
+    neighbor_transforms,
+    neighbor_correlations,
+    alignments,
+    tile_paths,
+    max_iterations=10,
+    verbose=True,
+    return_residuals=False,
+):
+    """
+    """
 
     # INITIALIZE WITH ZEROTH ORDER BCH TRUNCATION
     # put observations in the Lie algebra
@@ -328,6 +414,7 @@ def distributed_stitch_new(
         return np.matmul(Ainv, np.matmul(B, A))
 
     # run least square optimization iterations with Jacobian
+    residuals = []
     neighbor_transforms_inv = np.linalg.inv(neighbor_transforms)
     for iteration in range(max_iterations):
 
@@ -355,7 +442,9 @@ def distributed_stitch_new(
         yyy_l = np.sum( np.linalg.norm(residual_tangents_left, axis=(1, 2)), axis=0)
         xxx_r = np.sum( np.linalg.norm(residual_transforms_right, axis=(1, 2)), axis=0)
         yyy_r = np.sum( np.linalg.norm(residual_tangents_right, axis=(1, 2)), axis=0)
-        print(np.round([xxx_l, yyy_l, xxx_r, yyy_r], decimals=3))
+        residuals.append((xxx_l, yyy_l, xxx_r, yyy_r))
+        if verbose:
+            print(np.round([xxx_l, yyy_l, xxx_r, yyy_r], decimals=3))
         # XXX END DEBUG
 
         # apply jacobian terms and stack
@@ -364,7 +453,7 @@ def distributed_stitch_new(
         residual_tangents_right = dexp(residual_transforms_right, residual_tangents_right, 2)
         residual_tangents_right = -1 * Ad(fixed_transforms_in_order, residual_tangents_right)
 #        residual_tangents = np.concatenate([residual_tangents_left, residual_tangents_right])
-        residual_tangents = residual_tangents_left * neighbor_correlations[:, None, None]
+        residual_tangents = residual_tangents_right * neighbor_correlations[:, None, None]
 
         # define least squares constraints left
         gn_constraints_left = csr_array((12*N, 12*(M-1)))
@@ -404,7 +493,7 @@ def distributed_stitch_new(
 
         # stack the left and right sides and normalize
 #        gn_constraints = vstack([gn_constraints_left, gn_constraints_right])
-        gn_constraints = gn_constraints_left
+        gn_constraints = gn_constraints_right
         col_norms = norm(gn_constraints, axis=0)
         col_norms[col_norms == 0] = 1
         gn_constraints = gn_constraints.multiply(1. / col_norms)
@@ -423,11 +512,14 @@ def distributed_stitch_new(
         tile_transforms = np.matmul(perturbation_transforms, tile_transforms)
 
     # invert all fixed transforms
-    for iii in range(len(tile_transforms)):
-        if fixed_flags[iii]:
-            tile_transforms[iii] = np.linalg.inv(tile_transforms[iii])
+    fixed_indices = set([x[-1][0] for x in alignments])
+    for iii in fixed_indices:
+        tile_transforms[iii] = np.linalg.inv(tile_transforms[iii])
 
-    return tile_transforms
+    if not return_residuals:
+        return tile_transforms
+    else:
+        return tile_transforms, residuals
 
 
 

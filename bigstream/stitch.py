@@ -107,6 +107,10 @@ def reconstruct_from_synthetic_tiles(
     reconstructed_image = np.zeros(shape, dtype=dtype)
     for iii, tile_path in enumerate(tile_paths):
 
+        # check if transform is all zeros, if so skip
+        if np.all( affines[iii] == np.zeros_like(affines[iii]) ):
+            continue
+
         # read and transform tile
         tile = nrrd.read(tile_path)[0].transpose(2,1,0)
         origin = origins[iii]
@@ -484,7 +488,7 @@ def find_tile_transforms(
         tile_transforms[iii] = np.linalg.inv(tile_transforms[iii])
 
     # remove unconstrained tiles from the result by marking them with the zero matrix
-    neighbor_correlations_per_tile = [[],] * len(tile_transforms)
+    neighbor_correlations_per_tile = [[] for x in range(len(tile_transforms))]
     for iii, alignment in enumerate(alignments):
         fix_idx = alignment[-1][0]
         mov_idx = alignment[-1][1]

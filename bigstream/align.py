@@ -1682,7 +1682,8 @@ def alignment_pipeline(
         fix, roi_start, roi_stop = crop_array_to_roi(fix, roi, fix_spacing, fix_origin)
         logger.info((
             f'{context} ROI {roi} crops fixed image {full_fix_shape} to '
-            f'{fix.shape} at voxel bounds {roi_start}:{roi_stop}'
+            f'{fix.shape} at voxel bounds {roi_start}:{roi_stop} '
+            f'using {fix_spacing} spacing '
         ))
         # crop a realized ndarray mask by the same physical box (its own sampling)
         if isinstance(fix_mask, np.ndarray):

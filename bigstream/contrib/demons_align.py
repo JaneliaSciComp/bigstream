@@ -35,6 +35,7 @@ def demons_align(
     alignment_spacing=None,
     fix_mask=None,
     mov_mask=None,
+    fix_roi=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -187,7 +188,7 @@ def demons_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask)
+    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
     mov_mask = realize_mask(mov, mov_mask)
 
     # skip-sample and convert to SITK images (images_to_sitk casts to float32)

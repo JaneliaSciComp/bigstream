@@ -18,9 +18,9 @@ from fishspot.filter import apply_foreground_mask
 logger = logging.getLogger(__name__)
 
 
-def realize_mask(image, mask, mask_percentile=()):
+def realize_mask(image, mask, mask_percentile=(), roi=None):
     """
-    Ensure that mask is an ndarray
+    Ensure that mask is an ndarray, optionally restricted to an ROI box
 
     Parameters
     ----------
@@ -28,99 +28,95 @@ def realize_mask(image, mask, mask_percentile=()):
         The image from which mask is derived
 
     mask : None, nd-array, tuple of floats, or function
-        The mask data. If None, return None.
+        The mask data. If None (and no mask_percentile/roi), return None.
         If an nd-array, threshold at zero.
         If a tuple of floats, mask specified values.
         If a function, apply it.
 
+    mask_percentile : tuple of two floats (default: ())
+        If given, foreground is the intensity band between the low and high
+        percentiles of `image`.
+
+    roi : tuple of slices (default: None)
+        A voxel-space ROI on the image grid (already converted from physical
+        coordinates by the caller). If given, the returned mask is restricted
+        to this box (foreground only inside the ROI). May be combined with any
+        of the mask forms above; the effective foreground is their intersection.
+
     Returns
     -------
-    A mask for image, which is either None or a binary nd-array
-    dtype is always uint8
+    A mask for image, which is either None or a binary nd-array with dtype uint8
     """
 
-    if mask is None and not mask_percentile:
+    if mask is None and not mask_percentile and roi is None:
         return None
+
+    # realize the base mask (None if only an roi was provided)
     if mask_percentile:
         if len(mask_percentile) != 2:
             raise ValueError(f'Invalid mask percentile {mask_percentile} - must be a tuple (low,high)')
         low_thresh, high_thresh = np.percentile(image, tuple(mask_percentile))
-        return (image > low_thresh) * (image < high_thresh)
-    if isinstance(mask, np.ndarray):
-        return (mask > 0).astype(np.uint8)
-    if isinstance(mask, (tuple, list)):
-        return np.isin(image, mask, invert=True).astype(np.uint8)
-    if callable(mask):
-        return mask(image).astype(np.uint8)
+        result = ((image > low_thresh) * (image < high_thresh)).astype(np.uint8)
+    elif isinstance(mask, np.ndarray):
+        result = (mask > 0).astype(np.uint8)
+    elif isinstance(mask, (tuple, list)):
+        result = np.isin(image, mask, invert=True).astype(np.uint8)
+    elif callable(mask):
+        result = mask(image).astype(np.uint8)
+    else:
+        result = None
+
+    # restrict the foreground to the ROI box
+    if roi is not None:
+        roi_mask = np.zeros(image.shape, dtype=np.uint8)
+        roi_mask[roi] = 1
+        if result is None:
+            result = roi_mask
+        elif result.shape == roi_mask.shape:
+            result = result * roi_mask
+        else:
+            # the mask is sampled on a different grid than the image/ROI;
+            # intersecting would require resampling - keep the mask as-is and warn
+            logger.warning(
+                f'realize_mask: mask shape {result.shape} differs from image '
+                f'shape {image.shape}; ROI restriction skipped for this mask'
+            )
+
+    return result
 
 
-def crop_array_to_roi(array, roi, spacing, origin=None):
+def _phys_roi_to_voxel(roi, full_vol_shape, spacing):
     """
-    Crop an nd-array to a physical-coordinate ROI box.
+    Convert physical roi coordinates to voxel coordinates.
 
     Parameters
     ----------
-    array : nd-array
-        The array to crop (zyx order)
-
     roi : tuple of floats
         The ROI box in physical units, zyx order:
         (zmin, ymin, xmin[, zmax, ymax, xmax]). If the max triple is omitted
         the box extends to the array bounds.
 
+    full_vol_shape : tuple of int
+        Full volume shape
+
     spacing : 1d-array
         The voxel spacing of the array (zyx)
 
-    origin : 1d-array (default: None)
-        The physical coordinate of voxel (0, ...). Defaults to zeros. Needed so
-        an array whose origin is not zero (e.g. an ROI-cropped image) maps the
-        physical box to the correct voxels.
-
     Returns
     -------
-    (cropped, start, stop) : the cropped view and the inclusive-start /
-    exclusive-stop voxel bounds used, each clipped to [0, shape].
+    (start, stop) : the ROI voxel bounds
     """
-    shape = np.asarray(array.shape)
+    shape = np.asarray(full_vol_shape)
     ndim = len(shape)
     spacing = np.asarray(spacing, dtype=np.float64)
-    origin = np.zeros(ndim) if origin is None else np.asarray(origin, dtype=np.float64)
     mn = np.asarray(roi[:ndim], dtype=np.float64)
-    start = np.clip(np.floor((mn - origin) / spacing).astype(int), 0, shape)
+    start = np.clip(np.floor(mn / spacing).astype(int), 0, shape)
     if len(roi) >= 2 * ndim:
         mx = np.asarray(roi[ndim:2 * ndim], dtype=np.float64)
-        stop = np.clip(np.ceil((mx - origin) / spacing).astype(int), 0, shape)
+        stop = np.clip(np.ceil(mx / spacing).astype(int), 0, shape)
     else:
         stop = shape.copy()
-    crop = tuple(slice(a, b) for a, b in zip(start, stop))
-    return array[crop], start, stop
-
-
-def embed_field_in_full_domain(field, full_shape, start):
-    """
-    Embed a displacement field computed on an ROI crop back into a field over the
-    full fixed domain, leaving identity (zero) displacement outside the ROI.
-
-    Parameters
-    ----------
-    field : nd-array
-        A displacement field with shape crop_shape + (ndim,)
-
-    full_shape : tuple of int
-        The full (uncropped) fixed image shape (zyx)
-
-    start : 1d-array of int
-        The voxel offset of the crop within the full domain
-
-    Returns
-    -------
-    A displacement field with shape full_shape + (ndim,)
-    """
-    ndim = field.shape[-1]
-    full = np.zeros(tuple(full_shape) + (ndim,), dtype=field.dtype)
-    crop = tuple(slice(int(s), int(s) + n) for s, n in zip(start, field.shape[:-1]))
-    full[crop] = field
-    return full
+    return start, stop
 
 
 def apply_alignment_spacing(
@@ -383,6 +379,7 @@ def feature_point_ransac_affine_align(
     confidence=0.999,
     fix_mask=None,
     mov_mask=None,
+    fix_roi=None,
     fix_mask_percentile=None,
     mov_mask_percentile=None,
     fix_origin=None,
@@ -576,7 +573,7 @@ def feature_point_ransac_affine_align(
     if default is None: default = np.eye(fix.ndim + 1)
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
     mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
 
     # apply static transforms
@@ -756,6 +753,7 @@ def random_affine_search(
     alignment_spacing=None,
     fix_mask=None,
     mov_mask=None,
+    fix_roi=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -915,7 +913,7 @@ def random_affine_search(
     static_transform_origin = b
 
     # realize masks as arrays
-    fix_mask = realize_mask(fix, fix_mask)
+    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
     mov_mask = realize_mask(mov, mov_mask)
 
     # skip sample and determine mask spacings
@@ -1029,6 +1027,7 @@ def affine_align(
     alignment_spacing=None,
     fix_mask=None,
     mov_mask=None,
+    fix_roi=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -1151,7 +1150,7 @@ def affine_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask)
+    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
     mov_mask = realize_mask(mov, mov_mask)
 
     # skip sample and convert inputs to sitk images
@@ -1270,6 +1269,7 @@ def deformable_align(
     alignment_spacing=None,
     fix_mask=None,
     mov_mask=None,
+    fix_roi=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -1403,7 +1403,7 @@ def deformable_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask)
+    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
     mov_mask = realize_mask(mov, mov_mask)
 
     # skip sample and convert inputs to sitk images
@@ -1671,42 +1671,23 @@ def alignment_pipeline(
     from bigstream.contrib.demons_align import demons_align
     from bigstream.contrib.elastix_align import elastix_align
 
-    # apply the ROI by cropping the fixed image (and everything on the fixed grid)
-    # to the ROI box. The moving image is left full so the optimizer can still
-    # sample it anywhere. Field results are lifted back to the full fixed domain
-    # after the steps run (see roi_start use below).
-    fix_spacing = np.asarray(fix_spacing, dtype=np.float64)
-    roi_start = None
     full_fix_shape = fix.shape
+    fix_spacing = np.asarray(fix_spacing, dtype=np.float64)
     if roi is not None:
-        fix, roi_start, roi_stop = crop_array_to_roi(fix, roi, fix_spacing, fix_origin)
+        roi_start, roi_stop = _phys_roi_to_voxel(roi, full_fix_shape, fix_spacing)
         logger.info((
-            f'{context} ROI {roi} crops fixed image {full_fix_shape} to '
-            f'{fix.shape} at voxel bounds {roi_start}:{roi_stop} '
+            f'{context} ROI {roi} crops fixed image {full_fix_shape} '
+            f'at voxel bounds {roi_start}:{roi_stop} '
             f'using {fix_spacing} spacing '
         ))
-        # crop a realized ndarray mask by the same physical box (its own sampling)
-        if isinstance(fix_mask, np.ndarray):
-            fix_mask_spacing = ut.relative_spacing(fix_mask.shape, full_fix_shape, fix_spacing)
-            fix_mask, _, _ = crop_array_to_roi(fix_mask, roi, fix_mask_spacing, fix_origin)
-        # crop field-type static transforms by the same physical box; matrices are
-        # coordinate-free and left unchanged
-        cropped_static = []
-        for t in static_transform_list:
-            if isinstance(t, np.ndarray) and t.ndim > 2:
-                t_spacing = ut.relative_spacing(t.shape[:-1], full_fix_shape, fix_spacing)
-                t, _, _ = crop_array_to_roi(t, roi, t_spacing, fix_origin)
-            cropped_static.append(t)
-        static_transform_list = cropped_static
-        # shift the fixed origin to the crop's first-voxel physical coordinate so
-        # the computed transform stays in the global physical frame
-        base_origin = (np.zeros(fix.ndim) if fix_origin is None
-                       else np.asarray(fix_origin, dtype=np.float64))
-        fix_origin = base_origin + roi_start * fix_spacing
+        roi_voxel_coords = tuple(slice(a, b) for a, b in zip(roi_start, roi_stop))
+    else:
+        roi_voxel_coords = None
 
     # define how to run alignment functions
     a = (fix, mov, fix_spacing, mov_spacing)
     b = {'fix_mask':fix_mask, 'mov_mask':mov_mask,
+         'fix_roi': roi_voxel_coords, 
          'fix_origin':fix_origin, 'mov_origin':mov_origin,}
     align = {'ransac':lambda **c: feature_point_ransac_affine_align(*a, **{**b, **c}),
              'random':lambda **c: random_affine_search(*a, **{**b, **c})[0],
@@ -1735,24 +1716,13 @@ def alignment_pipeline(
         logger.debug(f'Completed {context} {alignment} {printable_args}')
         new_transforms.append(alignment_result)
 
-    # when the fixed image was cropped to an ROI, lift any displacement field back
-    # to the full fixed domain (identity outside the ROI); affine matrices are
-    # coordinate-free and already global
-    def _lift(transform):
-        if (roi_start is not None and isinstance(transform, np.ndarray)
-                and transform.ndim > 2):
-            return embed_field_in_full_domain(transform, full_fix_shape, roi_start)
-        return transform
-
     # return in the requested format
     if return_format == 'independent':
-        return [_lift(t) for t in new_transforms]
+        return new_transforms
     elif return_format == 'compressed':
-        compressed = bst.compress_transform_list(
-            new_transforms, [fix_spacing,]*len(new_transforms))[0]
-        return [_lift(t) for t in compressed]
+        return bst.compress_transform_list(new_transforms, [fix_spacing,]*len(new_transforms))[0]
     elif return_format == 'flatten':
-        return _lift(bst.compose_transform_list(new_transforms, fix_spacing))
+        return bst.compose_transform_list(new_transforms, fix_spacing)
 
 
 def ransac_masks_meta_align(
@@ -1769,6 +1739,7 @@ def ransac_masks_meta_align(
     number_of_transforms_to_return=None,
     fix_mask=None,
     mov_mask=None,
+    fix_roi=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -1918,7 +1889,7 @@ def ransac_masks_meta_align(
     """
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask)
+    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
     mov_mask = realize_mask(mov, mov_mask)
 
     # determine skip sampling

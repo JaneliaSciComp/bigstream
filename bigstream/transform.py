@@ -236,7 +236,12 @@ def apply_transform_to_coordinates(
             ndims = transform.shape[-1]
             if 'mode' not in kwargs.keys(): kwargs['mode'] = 'nearest'
             interp = lambda x: map_coordinates(x, coordinates, **kwargs)
-            dX = np.array([interp(transform[..., i]) for i in range(ndims)]).transpose()
+            dX = []
+            for i in range(ndims):
+                if transform[..., i]:
+                    dX.append(interp(transform[..., i]))
+                else:
+                    dX.append(interp([0])
             coordinates = coordinates.transpose() * spacing + dX
             if origin is not None: coordinates += origin
 

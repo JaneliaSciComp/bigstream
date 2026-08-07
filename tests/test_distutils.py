@@ -23,3 +23,9 @@ def test_processing_block_is_chunksize():
     output = _FakeOutputArray(chunks=(64, 64, 64), shards=(256, 256, 256))
     with pytest.raises(ValueError, match='shard size'):
         validate_processing_block_size(output, np.array([64, 64, 64]))
+
+
+def test_processing_block_is_shardsize():
+    """Shard-sized block on a sharded array is fine: each block owns a whole shard."""
+    output = _FakeOutputArray(chunks=(64, 64, 64), shards=(256, 256, 256))
+    validate_processing_block_size(output, np.array([256, 256, 256]))

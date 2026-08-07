@@ -113,12 +113,13 @@ def apply_transform(
         nthreads = 2*ncores
     sitk.ProcessObject.SetGlobalDefaultNumberOfThreads(nthreads)
 
-    # format transform spacing
+    # prepare all transform spacings
+    fix_spatial_dims = fix.shape # should I consider the case when fix is a tuple?
     fix_spacing = np.array(fix_spacing)
-    if transform_spacing is None:
-        transform_spacing = fix_spacing
-    if not isinstance(transform_spacing, tuple):
-        transform_spacing = (transform_spacing,) * len(transform_list)
+    transform_spacing = prepare_all_transforms_spacings(transform_list,
+                                                        transform_spacing,
+                                                        fix_spatial_dims,
+                                                        fix_spacing)
 
     # construct transform
     if compress_transforms:
@@ -258,7 +259,57 @@ def apply_transform_to_coordinates(
     return coordinates
 
 
+def prepare_all_transforms_spacings(transform_list:list,
+                                    transforms_spacings,
+                                    fix_spatial_dims,
+                                    fix_spatial_spacing) -> tuple:
+    # ensure there's a 1:1 correspondence between
+    # transform spacing and transform list
+    if transforms_spacings is None:
+        final_transforms_spacings = tuple(prepare_transform_spacing(t, None, fix_spatial_dims, fix_spatial_spacing)
+                                          for t in transform_list)
+    elif isinstance(transforms_spacings, (np.ndarray, list)):
+        # if the transform_spacing is a list or ndarray
+        # consider it as a single spacing value ,e.g., [0.48, 0.24, 0.24]
+        # and all transforms will use the same spacing
+        ts = np.array(transforms_spacings)
+        final_transforms_spacings = tuple(ts for _ in transform_list)
+    else:
+        # check that transform_list and transform_spacing have the same number of elements
+        if len(transforms_spacings) != len(transform_list):
+            raise ValueError(
+                f'transform_spacing must match transform_list length '
+                f'({len(transforms_spacings)} != {len(transform_list)})'
+            )
+        final_transforms_spacings = tuple(
+            prepare_transform_spacing(t, spacing, fix_spatial_dims, fix_spatial_spacing)
+            for t, spacing in zip(transform_list, transforms_spacings)
+        )
+
+    logger.info(f'Final transform spacings {transforms_spacings} -> {final_transforms_spacings}')
+    return final_transforms_spacings
+
+
+def prepare_transform_spacing(transform:np.ndarray,
+                              transform_spacing:tuple|list|np.ndarray|None,
+                              fix_spatial_dims:tuple,
+                              fix_spatial_spacing:tuple|list|np.ndarray):
+    if transform is None:
+        # this is a degenerate case but let's say it may happen
+        return None
+    elif len(transform.shape) == 2 or transform_spacing is None:
+        # this should not be needed for affines but set it to fix spacing to be safe
+        return fix_spatial_spacing
+    elif isinstance(transform_spacing, (tuple, list, np.ndarray)):
+        return np.array(transform_spacing[:len(fix_spatial_dims)])
+    else:
+        # derive the spacing from the fix spacing
+        tshape_arr = np.array(transform.shape[:len(fix_spatial_dims)])
+        return np.array(fix_spatial_spacing) * fix_spatial_dims / tshape_arr
+
+
 ######################## Composing transforms #################################
+
 
 def compose_displacement_vector_fields(
     first_field,

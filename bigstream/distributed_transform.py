@@ -96,34 +96,13 @@ def distributed_apply_transform(
     # verify output zarr chunk size <= block size to prevent race conditions
     validate_processing_block_size(aligned_data, process_block_partition_size)
 
-    # ensure there's a 1:1 correspondence between transform spacing 
-    # and transform list
-    if transform_spacing is None:
-        transform_spacings = []
-        for t in transform_list:
-            if t is None or len(t.shape) == 2:
-                transform_spacings.append(None)
-            else:
-                tshape_arr = np.array(get_spatial_values(t, True))
-                tspacing = fix_spatial_spacing * fix_spatial_dims / tshape_arr
-                transform_spacings.append(tspacing)
-        transform_spacing_list= tuple(transform_spacings)
-    elif not isinstance(transform_spacing, tuple):
-        # create a corresponding transform spacing for each transform
-        transform_spacing_list = tuple(np.array(transform_spacing) for _ in transform_list)
-    else:
-        if len(transform_spacing) != len(transform_list):
-            raise ValueError(
-                f'transform_spacing must match transform_list length '
-                f'({len(transform_spacing)} != {len(transform_list)})'
-            )
-        transform_spacing_list = tuple(
-            None if spacing is None else np.array(spacing)
-            for spacing in transform_spacing
-        )
-        logger.info(f'Derive all transform spacings from tuple {transform_spacing} -> {transform_spacing_list}')
-
     # prepare block coordinates
+    transform_spacing_list = bs_transform.prepare_all_transforms_spacings(
+        transform_list,
+        transform_spacing,
+        fix_spatial_dims,
+        fix_spatial_spacing,
+    )
     logger.info((
         f'Apply distributed transform to {fix_image.shape} '
         f'partitioned in {nblocks} blocks using {process_block_partition_size} '
@@ -174,6 +153,7 @@ def distributed_apply_transform(
                                          image_subpath=mov_image.image_subpath,
                                          image_timeindex=mov_image.image_timeindex,
                                          image_channel=mov_image.image_channel)
+
     transform_block = functools.partial(
         _transform_single_block,
         fix_block_reader,

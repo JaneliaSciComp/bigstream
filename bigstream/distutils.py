@@ -55,6 +55,20 @@ class ThrottledArraySliceReader:
             self.semaphore.release()
 
 
+def _check_storage_unit_size(label, unit_shape, processing_block_size, reverse_output_axes):
+    unit = np.array(get_spatial_values(unit_shape, reverse_axes=reverse_output_axes))
+    if np.any(unit > processing_block_size):
+        logger.error((
+            f'Output zarr {label} size {unit} exceeds '
+            f'block partition size {processing_block_size}. '
+            f'This may cause race conditions during write.'
+        ))
+        raise ValueError(
+            f'Processing block size {processing_block_size} is too small '
+            f'compared to {label} size: {unit_shape}'
+        )
+
+
 def validate_processing_block_size(output_array, processing_block_size, reverse_output_axes=False):
     """
     Verify that the output zarr chunk size does not exceed the processing

@@ -1007,6 +1007,11 @@ def random_affine_search(
     scores = np.empty(random_iterations + 1, dtype=np.float64)
     for iii, ppp in enumerate(params):
         scores[iii] = score_affine(bst.physical_parameters_to_affine_matrix_3d(ppp, center))
+        logger.debug((
+            f'{context} ITERATION: {iii} '
+            f'PARAMS: {ppp} '
+            f'METRIC: {scores[iii]} '
+        ))
         if scores[iii] < current_best_score:
             current_best_score = scores[iii]
             logger.debug(f'{context} - best score found {iii} : {current_best_score}')

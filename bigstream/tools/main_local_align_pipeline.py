@@ -21,7 +21,7 @@ from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, get_algorithm_parameters,
                   extract_registration_input_args, get_input_images,
-                  dictfromjson, inttuple, floattuple)
+                  get_transform, dictfromjson, inttuple, floattuple)
 
 from .utils import derive_shard_shape, get_processing_size, get_zarr_format
 
@@ -41,9 +41,12 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--align-config',
                              dest='align_config',
                              help='Align config file that contains registration algorithm parameters for fine tune up')
-    args_parser.add_argument('--global-affine-transform',
-                             dest='global_affine',
-                             help='Global affine transform path')
+    args_parser.add_argument('--global-transform','--global_transform',
+                             dest='global_transform',
+                             help='Global transform path')
+    args_parser.add_argument('--global-transform-subpath','--global_transform_subpath',
+                             dest='global_transform_subpath',
+                             help='Global transform subpath')
     args_parser.add_argument('--local-processing-size',
                              dest='local_processing_size',
                              type=inttuple,
@@ -177,7 +180,8 @@ def _define_args(local_descriptor):
 
 def _run_local_alignment(reg_args: RegistrationInputs,
                          align_config,
-                         global_affine,
+                         global_transform,
+                         global_transform_spacing=None,
                          processing_size=None,
                          processing_overlap=None,
                          alter_existing_deform=False,
@@ -320,10 +324,11 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                                           worker_cpus=worker_cpus)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
     try:
-        if global_affine is not None:
-            static_transforms = reg_args.get_static_transforms() + [ global_affine, ]
-        else:
-            static_transforms = reg_args.get_static_transforms()
+        static_transforms, static_transforms_spacings = reg_args.get_static_transforms()
+        if global_transform is not None:
+            # append the global transform and its (possibly different-scale) spacing
+            static_transforms = static_transforms + [ global_transform, ]
+            static_transforms_spacings = static_transforms_spacings + (global_transform_spacing,)
         # compose mov origin transform from user affine + OME translations
         mov_origin_transform = compose_origin_transform(
             reg_args.get_mov_origin_transform(),
@@ -340,6 +345,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             local_processing_overlap_factor,
             mov_origin_transform,
             static_transforms,
+            static_transforms_spacings,
             reg_args.persist_mov_origin_transform,
             reg_args.transform_path(),
             deformfield_subpath,
@@ -386,6 +392,7 @@ def _align_local_data(fix_image: ImageData,
                       processing_overlap_factor,
                       mov_origin_transform,
                       static_transforms,
+                      static_transforms_spacings,
                       persist_mov_origin_transform,
                       deformfield_path,
                       deformfield_subpath,
@@ -661,8 +668,14 @@ def _align_local_data(fix_image: ImageData,
             deform_transforms = [deformfield]
         else:
             deform_transforms = []
-        affine_spacings = [None for i in range(len(static_transforms))]
-        transforms_spacings = tuple(affine_spacings + [get_spatial_values(fix_image.voxel_spacing) / fix_image.expansion_factor])
+        transform_list = static_transforms + deform_transforms
+        fix_deform_spacing = get_spatial_values(fix_image.voxel_spacing) / fix_image.expansion_factor
+        # the static transforms carry their own spacings (from get_transforms - a
+        # global deform may have been generated at a different scale); the local
+        # deform is on the current fixed grid. Affine transforms have None spacing.
+        transforms_spacings = tuple(static_transforms_spacings) + tuple(
+            fix_deform_spacing for _ in deform_transforms
+        )
         logger.info(f'Transforms spacings: {transforms_spacings}, transform map coordinates args: {transform_coords_args}')
 
         distributed_apply_transform(
@@ -671,7 +684,7 @@ def _align_local_data(fix_image: ImageData,
             mov_image,
             np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor,
             align_chunksize, # use block chunk size for distributing work
-            static_transforms + deform_transforms, # transform_list
+            transform_list,
             cluster_client,
             overlap_factor=transform_overlap_factor,
             aligned_data=align,
@@ -698,12 +711,14 @@ def main():
 
     logger.info(f'Local registration: {args}')
 
-    global_affine = None
-    if args.global_affine and os.path.exists(args.global_affine):
-        logger.info(f'Read global affine from {args.global_affine}')
-        global_affine = np.loadtxt(args.global_affine)
-
     reg_inputs = extract_registration_input_args(args, local_descriptor)
+
+    # read the global transform (affine matrix or deformation field) together with
+    # its spacing; get_transform returns (None, None) when no path is given
+    global_transform, global_transform_spacing = get_transform(
+        args.global_transform, args.global_transform_subpath,
+        expansion_factor=reg_inputs.fix_expansion_factor,
+    )
 
     inv_shrink_spacings = (args.inv_shrink_spacings 
                             if (args.inv_shrink_spacings is not None and
@@ -714,7 +729,8 @@ def main():
     _run_local_alignment(
         reg_inputs,
         args.align_config,
-        global_affine,
+        global_transform,
+        global_transform_spacing=global_transform_spacing,
         processing_size=args.local_processing_size,
         processing_overlap=args.local_processing_overlap_factor,
         alter_existing_deform=args.alter_existing_deform,

@@ -1,7 +1,6 @@
 import argparse
 import logging
 import numpy as np
-import os
 
 import bigstream.io_utility as io_utility
 
@@ -17,7 +16,7 @@ from bigstream.image_data import (ImageData,
 from bigstream.ome_utils import get_spatial_values
 
 from .cli import (dictfromjson, inttuple, floattuple,
-                  stringlist, get_algorithm_parameters)
+                  get_algorithm_parameters, get_transforms)
 
 from .utils import derive_shard_shape, get_zarr_format
 
@@ -81,28 +80,30 @@ def _define_args():
 
     args_parser.add_argument('--static-transforms',
                              dest='static_transforms',
-                             type=stringlist,
-                             help='Static transformations')
-
-    args_parser.add_argument('--affine-transform', '--affine-transformations',
-                             dest='affine_transformations',
-                             type=stringlist,
-                             help='Affine transformations')
-
-    args_parser.add_argument('--local-transform', dest='local_transform',
-                             help='Local (vector field) transformation')
-    args_parser.add_argument('--local-transform-subpath',
-                             dest='local_transform_subpath',
-                             help='Local transformation dataset to be applied')
-    args_parser.add_argument('--local-transform-spacing', '--transform-spacing',
-                             dest='local_transform_spacing',
-                             type=floattuple,
-                             help='Local transform spacing')
-    args_parser.add_argument('--local-transform-expansion', '--transform-expansion',
-                             dest='local_transform_expansion',
+                             type=str,
+                             help='Static transforms applied before the query transforms. '
+                                  'A comma separated list of path[~subpath] entries; each entry '
+                                  'may be an affine matrix file or a deformation field (zarr).')
+    args_parser.add_argument('--static-transforms-expansion',
+                             dest='static_transforms_expansion',
                              type=float,
                              default=1.0,
-                             help='Local transform expansion factor')
+                             help='Expansion factor applied to static deformation field spacings')
+
+    args_parser.add_argument('--transforms',
+                             '--affine-transform', '--affine-transformations',
+                             '--local-transform',
+                             dest='transforms',
+                             type=str,
+                             help='All transforms to apply, in order. A comma separated list of '
+                                  'path[~subpath] entries; each entry may be an affine matrix file '
+                                  'or a deformation field (zarr).')
+    args_parser.add_argument('--transforms-expansion',
+                             '--transform-expansion', '--local-transform-expansion',
+                             dest='transforms_expansion',
+                             type=float,
+                             default=1.0,
+                             help='Expansion factor applied to deformation field spacings')
 
     args_parser.add_argument('--transform-config',
                              dest='transform_config',
@@ -232,8 +233,6 @@ def _run_apply_transform(args):
     logger.info(f'Fixed volume: {fix_data}')
     logger.info(f'Moving volume: {mov_data}')
 
-    local_deform_field = ImageData(args.local_transform, args.local_transform_subpath)
-
     if (args.output_blocksize is not None and
         len(args.output_blocksize) > 0):
         output_blocks = args.output_blocksize[::-1] # make it zyx
@@ -317,60 +316,23 @@ def _run_apply_transform(args):
             shard_shape=output_shard_size,
         )
 
-        applied_affines = []
-        affine_transforms_list = []
+        # read the static transforms (applied first) and the query transforms.
+        # both lists can mix affine matrices and deformation fields; get_transforms
+        # returns None spacing for affines and the field spacing for deformations
+        static_transforms, static_transforms_spacings = get_transforms(
+            args.static_transforms, expansion_factor=args.static_transforms_expansion)
+        transforms, transforms_spacings = get_transforms(
+            args.transforms, expansion_factor=args.transforms_expansion)
 
-        # read static transformations
-        if args.static_transforms:
-            logger.info(f'Static transformations arg: {args.static_transforms}')
-            applied_affines.append(args.static_transforms)
-            affine_transforms_list.extend([np.loadtxt(tfile) for tfile in args.static_transforms
-                                                             if os.path.exists(tfile)])
+        all_transforms = static_transforms + transforms
+        transforms_spacings = static_transforms_spacings + transforms_spacings
 
-        # read affine transformations
-        if args.affine_transformations:
-            logger.info(f'Affine transformations arg: {args.affine_transformations}')
-            applied_affines = [args.affine_transformations]
-            affine_transforms_list.extend([np.loadtxt(tfile) for tfile in args.affine_transformations
-                                                             if os.path.exists(tfile)])
-
-        if len(affine_transforms_list) > 0:
-            # affines should already be in physical space of the fixed image
-            affine_spacing = None
-            transforms_spacings = (affine_spacing,) * len(affine_transforms_list)
-        else:
-            transforms_spacings = ()
-
-        logger.info(f'Check if {local_deform_field} has data')
-        if local_deform_field.has_data():
-            logger.info(f'Read image for {local_deform_field}')
-            local_deform_field.read_image(convert_to_little_endian=False)
-
-            if args.local_transform_spacing:
-                # in case the transform spacing arg has the channel dimension - truncate it
-                local_deform_spacing = np.array(args.local_transform_spacing[::-1][:fix_data.spatial_ndim])  # xyz -> zyx
-            else:
-                local_deform_spacing = local_deform_field.voxel_spacing[:fix_data.spatial_ndim]
-
-            all_transforms = affine_transforms_list + [local_deform_field.image_array]
-            applied_transforms = applied_affines + [f'{local_deform_field}']
-            transforms_spacings = transforms_spacings + (local_deform_spacing / args.local_transform_expansion,)
-
-            logger.info((
-                f'Apply {applied_transforms} to '
-                f'{mov_data} -> {args.output}:{output_subpath}, '
-                f'deform spacing {local_deform_spacing} deform expansion factor {args.local_transform_expansion} '
-                f'transform spacing: {transforms_spacings} '
-            ))
-        else:
-            all_transforms = affine_transforms_list
-            applied_transforms = applied_affines
-
-            logger.info((
-                f'Apply {applied_transforms} to '
-                f'{mov_data} -> {args.output}:{output_subpath}, '
-                f'transform spacing: {transforms_spacings} '
-            ))
+        logger.info((
+            f'Apply {len(all_transforms)} transforms '
+            f'(static: {args.static_transforms}, transforms: {args.transforms}) to '
+            f'{mov_data} -> {args.output}:{output_subpath}, '
+            f'transform spacing: {transforms_spacings} '
+        ))
 
         apply_deform_steps, _ = get_algorithm_parameters(args.transform_config,
                                                          'apply_deform',

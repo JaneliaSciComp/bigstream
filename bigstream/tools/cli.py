@@ -10,6 +10,8 @@ from typing import Optional, Tuple
 
 from bigstream.configure_bigstream import default_bigstream_config_str
 from bigstream.image_data import ImageData
+from bigstream.io_utility import get_voxel_spacing
+from bigstream.ome_utils import get_spatial_values
 
 
 logger = logging.getLogger(__name__)
@@ -77,16 +79,7 @@ class RegistrationInputs:
         return None
 
     def get_static_transforms(self):
-        if not self.static_transforms:
-            return []
-        transforms = []
-        for transform_path in self.static_transforms:
-            if transform_path and os.path.exists(transform_path):
-                logger.info(f'Read static transform from {transform_path}')
-                transforms.append(np.loadtxt(transform_path))
-            elif transform_path:
-                logger.warning(f'Static transform file not found: {transform_path}')
-        return transforms
+        return get_transforms(self.static_transforms, expansion_factor=self.fix_expansion_factor)
 
     def transform_path(self):
         output_dir = (self.transform_dir if self.transform_dir
@@ -378,56 +371,122 @@ def _roi_to_zyx(roi):
     return mn + mx if mx is not None else mn
 
 
-def get_input_images(args: RegistrationInputs) -> Tuple[ImageData, Optional[ImageData], ImageData, Optional[ImageData], Optional[Tuple[float]]]:
+def get_input_images(reg_args: RegistrationInputs) -> Tuple[ImageData, Optional[ImageData], ImageData, Optional[ImageData], Optional[Tuple[float]]]:
     # Read the global inputs
     fix = ImageData(
-        args.fix, args.fix_subpath,
-        image_timeindex=args.fix_timeindex,
-        image_channel=args.fix_channel,
-        expansion_factor=args.fix_expansion_factor,
+        reg_args.fix, reg_args.fix_subpath,
+        image_timeindex=reg_args.fix_timeindex,
+        image_channel=reg_args.fix_channel,
+        expansion_factor=reg_args.fix_expansion_factor,
         open_image=True,
     )
     logger.info(f'Open fix vol {fix} for registration')
     mov = ImageData(
-        args.mov, args.mov_subpath,
-        image_timeindex=args.mov_timeindex,
-        image_channel=args.mov_channel,
-        expansion_factor=args.mov_expansion_factor,
+        reg_args.mov, reg_args.mov_subpath,
+        image_timeindex=reg_args.mov_timeindex,
+        image_channel=reg_args.mov_channel,
+        expansion_factor=reg_args.mov_expansion_factor,
         open_image=True,
     )
     logger.info(f'Open moving vol {mov} for registration')
     # get voxel spacing for fix and moving volume
-    if args.fix_spacing:
-        fix.voxel_spacing = args.fix_spacing[::-1] # xyz -> zyx
+    if reg_args.fix_spacing:
+        fix.voxel_spacing = reg_args.fix_spacing[::-1] # xyz -> zyx
     logger.info(f'Fix volume attributes: {fix.shape} {fix.attrs} {fix.voxel_spacing}')
 
-    if args.mov_spacing:
-        mov.voxel_spacing = args.mov_spacing[::-1] # xyz -> zyx
-    elif args.fix_spacing: # fix voxel spacing were specified - use the same for moving vol
+    if reg_args.mov_spacing:
+        mov.voxel_spacing = reg_args.mov_spacing[::-1] # xyz -> zyx
+    elif reg_args.fix_spacing: # fix voxel spacing were specified - use the same for moving vol
         mov.voxel_spacing = fix.voxel_spacing
     logger.info(f'Mov volume attributes: {mov.shape} {mov.attrs} {mov.voxel_spacing}')
 
     # masks are not mandatory so check if the file exists first
     # but if the container exists then the subpath must be valid
-    if args.fix_mask and Path(args.fix_mask).exists():
-        fix_mask = ImageData(args.fix_mask, args.fix_mask_subpath, open_image=True)
+    if reg_args.fix_mask and Path(reg_args.fix_mask).exists():
+        fix_mask = ImageData(reg_args.fix_mask, reg_args.fix_mask_subpath, open_image=True)
         logger.info(f'Using fix mask {fix_mask}')
     else:
         fix_mask = None
         logger.info('No fix mask was provided')
 
-    if args.mov_mask and Path(args.mov_mask).exists():
-        mov_mask = ImageData(args.mov_mask, args.mov_mask_subpath, open_image=True)
+    if reg_args.mov_mask and Path(reg_args.mov_mask).exists():
+        mov_mask = ImageData(reg_args.mov_mask, reg_args.mov_mask_subpath, open_image=True)
         logger.info(f'Using mov mask {mov_mask}')
     else:
         mov_mask = None
         logger.info('No mov mask was provided')
 
-    if args.roi is not None:
+    if reg_args.roi is not None:
         # reverse the user ROI (xyz) to zyx so downstream code consumes it directly
-        roi = _roi_to_zyx(args.roi)
-        logger.info(f'Using registration ROI {args.roi} (xyz) -> {roi} (zyx)')
+        roi = _roi_to_zyx(reg_args.roi)
+        logger.info(f'Using registration ROI {reg_args.roi} (xyz) -> {roi} (zyx)')
     else:
         roi = None
 
     return fix, fix_mask, mov, mov_mask, roi
+
+
+def get_transforms(transforms_locations, expansion_factor=1):
+    """
+    Parse transforms_locations which is a comma separated list of path, subpath pairs.
+    The path and subpath are separated by a '~' and the subpath is optional if the path is non empty.
+    To read the transformation check the path if it exists first.
+    If it exists and is a file read it as an affine transform
+    otherwise if it's a directory assume it's zarr and read it as a deformation field
+
+    For each transform a matching entry is appended to transforms_spacings:
+    - an affine transform gets None (spacing is irrelevant for an affine matrix)
+    - a deformation field gets the spatial voxel spacing read from the OME-ZARR
+      metadata (scaled by the expansion factor). If the container is a plain zarr
+      without OME spacing metadata, None is appended.
+    """
+    transforms = []
+    transforms_spacings = []
+    if not transforms_locations:
+        return transforms, tuple(transforms_spacings)
+
+    for location in transforms_locations.split(','):
+        location = location.strip()
+        if not location:
+            continue
+        # split the optional subpath
+        path, _, subpath = location.partition('~')
+        path = path.strip()
+        subpath = subpath.strip() or None
+        transform, transform_spacing = get_transform(path, subpath, expansion_factor=expansion_factor)
+
+        if transform is None:
+            continue
+
+        transforms.append(transform)
+        transforms_spacings.append(transform_spacing)
+
+    return transforms, tuple(transforms_spacings)
+
+
+def get_transform(transform_path, transform_subpath, expansion_factor=1):
+    if not transform_path or not os.path.exists(transform_path):
+        logger.warning(f'Transform location {transform_path} does not exist - skipping')
+        return None, None
+
+    if os.path.isfile(transform_path):
+        # a plain file holds an affine transform matrix - transform_subpath is ignored
+        logger.info(f'Read affine transform from {transform_path}')
+        return np.loadtxt(transform_path), None
+    else:
+        # a directory is typically a zarr container holding a deformation field
+        logger.info(f'Read deformation field from {transform_path}:{transform_subpath}')
+        deformfield = ImageData(transform_path, transform_subpath,
+                                open_image=True,
+                                expansion_factor=expansion_factor)
+        # spacing is only meaningful if the container carries OME/N5 metadata;
+        # a plain zarr without spacing metadata yields None
+        raw_spacing = get_voxel_spacing(deformfield.attrs) if deformfield.attrs else None
+        if raw_spacing is not None:
+            # a deformation field stores its spatial axes first (z, y, x) followed
+            # by the displacement/vector axis, so take the leading spatial values
+            deform_spacing = get_spatial_values(raw_spacing, reverse_axes=True) / expansion_factor
+        else:
+            deform_spacing = None
+        logger.info(f'Deformation field {transform_path} spacing: {deform_spacing}')
+        return deformfield, deform_spacing

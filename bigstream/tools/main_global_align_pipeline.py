@@ -18,7 +18,7 @@ from bigstream.transform import (apply_transform,
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args, get_algorithm_parameters,
                   extract_registration_input_args, get_input_images,
-                  dictfromjson, get_transform, inttuple)
+                  dictfromjson, get_transform, inttuple, floattuple)
 
 from .utils import derive_shard_shape, get_zarr_format
 
@@ -81,6 +81,44 @@ def _define_args(args_descriptor):
                              action='store_true',
                              help='Set logging level to verbose')
 
+    # inverse deformation field generation parameters (used when the global
+    # transform is a deformation field and an inverse output is requested)
+    args_parser.add_argument('--inv-step',
+                             dest='inv_step',
+                             type=float,
+                             default=1.0,
+                             help="Inverse transformation step")
+    args_parser.add_argument('--inv-iterations',
+                             dest='inv_iterations',
+                             type=inttuple,
+                             default=(10,),
+                             help="Number of iterations for the inverse transformation")
+    args_parser.add_argument('--inv-shrink-spacings',
+                             dest='inv_shrink_spacings',
+                             type=floattuple,
+                             default=None,
+                             help="Inverse shrink spacings")
+    args_parser.add_argument('--inv-smooth-sigmas',
+                             dest='inv_smooth_sigmas',
+                             type=floattuple,
+                             default=(0.,),
+                             help="Inverse smooth sigmas")
+    args_parser.add_argument('--inv-step-cut-factor',
+                             dest='inv_step_cut_factor',
+                             type=float,
+                             default=0.5,
+                             help="Inverse step cut factor")
+    args_parser.add_argument('--inv-pad',
+                             dest='inv_pad',
+                             type=float,
+                             default=0.1,
+                             help="Inverse pad value")
+    args_parser.add_argument('--inv-use-root',
+                             dest='inv_use_root',
+                             action='store_true',
+                             default=False,
+                             help="Use root for inverse displacement")
+
     return args_parser
 
 
@@ -89,7 +127,8 @@ def _run_global_align(reg_args:RegistrationInputs,
                       compressor,
                       compressor_opts,
                       zarr_format,
-                      sharding_factor=None):
+                      sharding_factor=None,
+                      inv_transform_args=None):
     global_steps, _ = get_algorithm_parameters(align_config,
                                                'global_align',
                                                reg_args.registration_steps)
@@ -106,17 +145,17 @@ def _run_global_align(reg_args:RegistrationInputs,
         )
         # calculate and apply the global transform
         static_transforms, static_transforms_spacings = reg_args.get_static_transforms()
-        global_transform, aligned = _align_global_data(fix, fix_mask,
-                                                       mov, mov_mask,
-                                                       roi,
-                                                       global_steps,
-                                                       mov_origin_transform,
-                                                       static_transforms,
-                                                       static_transforms_spacings)
-        if len(global_transform.shape) == 2:
-            logger.info(f'Global affine transform: {global_transform}')
+        transform, aligned = _align_global_data(fix, fix_mask,
+                                                mov, mov_mask,
+                                                roi,
+                                                global_steps,
+                                                mov_origin_transform,
+                                                static_transforms,
+                                                static_transforms_spacings)
+        if len(transform.shape) == 2:
+            logger.info(f'Global affine transform: {transform}')
         else:
-            logger.info(f'Global deform transform: {global_transform.shape}')
+            logger.info(f'Global deform transform: {transform.shape}')
         # save global aligned volume
         _save_aligned_volume(
             reg_args,
@@ -131,13 +170,42 @@ def _run_global_align(reg_args:RegistrationInputs,
             zarr_format,
             sharding_factor,
         )
-        # save the global transform 
-        _save_global_transform(reg_args, global_transform,
-                               fix_image=fix,
-                               compressor=compressor,
-                               compressor_opts=compressor_opts,
-                               zarr_format=zarr_format,
-                               sharding_factor=sharding_factor)
+        # save the transform
+        transform_subpath = reg_args.transform_subpath or reg_args.mov_subpath
+        if reg_args.transform_blocksize:
+            # block chunks are defined as x,y,z so reverse them to z,y,x
+            transform_blocksize = reg_args.transform_blocksize[::-1]
+        else:
+            transform_blocksize = reg_args.output_blocksize[::-1]
+
+        _save_transform(transform,
+                        reg_args.transform_path(),
+                        transform_subpath,
+                        fix_image=fix,
+                        compressor=compressor,
+                        compressor_opts=compressor_opts,
+                        zarr_format=zarr_format,
+                        transform_blocksize=transform_blocksize,
+                        sharding_factor=sharding_factor)
+        # generate and save the global inverse transform
+        inv_transform_path = reg_args.inv_transform_path()
+        if inv_transform_path:
+            inverse_transform = _generate_inverse_transform(transform, fix,
+                                                            **(inv_transform_args or {}))
+            if inverse_transform is not None:
+                inv_transform_subpath = reg_args.inv_transform_subpath or transform_subpath
+                _save_transform(inverse_transform,
+                                inv_transform_path,
+                                inv_transform_subpath,
+                                fix_image=fix,
+                                compressor=compressor,
+                                compressor_opts=compressor_opts,
+                                zarr_format=zarr_format,
+                                transform_blocksize=transform_blocksize,
+                                sharding_factor=sharding_factor)
+        else:
+            logger.info('Skip saving global inverse transformation')
+
     else:
         logger.info('Skip global alignment - both fix and moving image are needed')
 
@@ -271,97 +339,85 @@ def _apply_global_transform(reg_args:RegistrationInputs,
         return None
 
 
-def _save_global_transform(args, transform, fix_image=None,
-                           compressor=None, compressor_opts=None,
-                           zarr_format=None, sharding_factor=None,
-                           inv_step=1,
-                           inv_iterations=(100,),
-                           inv_shrink_spacings=(None,),
-                           inv_smooth_sigmas=(0.,),
-                           inv_step_cut_factor=0.5,
-                           inv_pad=0.1,
-                           inv_use_root=True,
-                           ):
-    transform_file = args.transform_path()
-    if transform_file:
-        if len(transform.shape) == 2:
-            transform_location = os.path.dirname(transform_file)
-            os.makedirs(transform_location, exist_ok=True)
-            logger.info(f'Save global affine transformation to {transform_file}')
-            np.savetxt(transform_file, transform)
-        else:
-            # global transform is a deformation field - save it as an OME-ZARR
-            deformfield_subpath = args.transform_subpath or args.mov_subpath
-            logger.info((
-                f'Save global deform transformation to '
-                f'{transform_file}:{deformfield_subpath}'
-            ))
-            _save_global_deform_field(
-                args, transform, transform_file, deformfield_subpath,
-                args.transform_blocksize, fix_image,
-                compressor, compressor_opts, zarr_format, sharding_factor,
-            )
-
-    else:
+def _save_transform(transform, transform_path, transform_subpath,
+                    fix_image=None,
+                    compressor=None, compressor_opts=None,
+                    zarr_format=None,
+                    transform_blocksize=None, sharding_factor=None):
+    if not transform_path:
         logger.info('Skip saving global transformation')
+        return
 
-    inv_transform_file = args.inv_transform_path()
-    if inv_transform_file:
-        if len(transform.shape) == 2:
-            try:
-                inv_transform = np.linalg.inv(transform)
-            except np.linalg.LinAlgError:
-                logger.error(f'Global affine {transform} is not invertible')
-            else:
-                inv_transform_location = os.path.dirname(inv_transform_file)
-                os.makedirs(inv_transform_location, exist_ok=True)
-                logger.info(f'Save global inverse affine transformation to {inv_transform_file}')
-                np.savetxt(inv_transform_file, inv_transform)
-        elif fix_image is None:
-            logger.warning(
-                'Cannot compute global inverse deform field without the fixed image; skipping'
-            )
-        else:
-            # numerically invert the deformation field and save it as an OME-ZARR
-            inv_deformfield_subpath = (args.inv_transform_subpath or
-                                       args.transform_subpath or
-                                       args.mov_subpath)
-            inv_deformfield_blocksize = (args.inv_transform_blocksize or
-                                         args.transform_blocksize)
-            # the field displacements are in the same physical frame the alignment
-            # used, i.e. fix spacing scaled by the expansion factor
-            field_spacing = (np.asarray(get_spatial_values(fix_image.voxel_spacing),
-                                        dtype=np.float64) / fix_image.expansion_factor)
-            logger.info((
-                f'Compute global inverse deform field from {transform.shape} '
-                f'using spacing {field_spacing} '
-            ))
-            inv_transform = invert_displacement_vector_field(
-                transform,
-                field_spacing,
-                step=inv_step,
-                iterations=inv_iterations,
-                shrink_spacings=inv_shrink_spacings,
-                smooth_sigmas=inv_smooth_sigmas,
-                step_cut_factor=inv_step_cut_factor,
-                pad=inv_pad,
-                use_root=inv_use_root,
-                verbose=True,
-            )
-            logger.info((
-                f'Save global inverse deform transformation to '
-                f'{inv_transform_file}:{inv_deformfield_subpath}'
-            ))
-            _save_global_deform_field(
-                args, inv_transform, inv_transform_file, inv_deformfield_subpath,
-                inv_deformfield_blocksize, fix_image,
-                compressor, compressor_opts, zarr_format, sharding_factor,
-            )
+    if len(transform.shape) == 2:
+        transform_location = os.path.dirname(transform_path)
+        os.makedirs(transform_location, exist_ok=True)
+        logger.info(f'Save global affine transformation to {transform_path}')
+        np.savetxt(transform_path, transform)
     else:
-        logger.info('Skip saving global inverse transformation')
+        # global transform is a deformation field - save it as an OME-ZARR
+        logger.info((
+            f'Save global deform transformation to '
+            f'{transform_path}:{transform_subpath}'
+        ))
+        _save_global_deform_field(
+            transform, transform_path, transform_subpath,
+            transform_blocksize, fix_image,
+            compressor, compressor_opts, zarr_format, sharding_factor,
+        )
 
 
-def _save_global_deform_field(args, deformfield_array,
+def _generate_inverse_transform(transform, fix_image,
+                                inv_step=1,
+                                inv_iterations=(100,),
+                                inv_shrink_spacings=(None,),
+                                inv_smooth_sigmas=(0.,),
+                                inv_step_cut_factor=0.5,
+                                inv_pad=0.1,
+                                inv_use_root=True,
+                                ):
+    """
+    Generate (but do not save) the inverse of a global transform.
+
+    Returns the inverse affine matrix or the inverted deformation field, or None
+    if the transform cannot be inverted (singular affine, or a deformation field
+    without the fixed image needed to determine its physical spacing).
+    """
+    if len(transform.shape) == 2:
+        try:
+            return np.linalg.inv(transform)
+        except np.linalg.LinAlgError:
+            logger.error(f'Global affine {transform} is not invertible')
+            return None
+
+    if fix_image is None:
+        logger.warning(
+            'Cannot compute global inverse deform field without the fixed image; skipping'
+        )
+        return None
+
+    # the field displacements are in the same physical frame the alignment
+    # used, i.e. fix spacing scaled by the expansion factor
+    field_spacing = (np.asarray(get_spatial_values(fix_image.voxel_spacing),
+                                dtype=np.float64) / fix_image.expansion_factor)
+    logger.info((
+        f'Compute global inverse deform field from {transform.shape} '
+        f'using spacing {field_spacing} '
+    ))
+    return invert_displacement_vector_field(
+        transform,
+        field_spacing,
+        step=inv_step,
+        iterations=inv_iterations,
+        shrink_spacings=inv_shrink_spacings,
+        smooth_sigmas=inv_smooth_sigmas,
+        step_cut_factor=inv_step_cut_factor,
+        pad=inv_pad,
+        use_root=inv_use_root,
+        verbose=True,
+    )
+
+
+def _save_global_deform_field(deformfield_array,
                               deformfield_path, deformfield_subpath,
                               deformfield_blocksize, fix_image,
                               compressor, compressor_opts,
@@ -418,12 +474,7 @@ def _save_global_deform_field(args, deformfield_array,
         zarr_format=zarr_format,
     )
 
-    if deformfield_blocksize:
-        # block chunks are defined as x,y,z so reverse them to z,y,x
-        deformfield_chunksize = deformfield_blocksize[::-1]
-    else:
-        deformfield_chunksize = args.output_blocksize[::-1]
-    deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
+    deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_blocksize))
     deformfield_output_chunksize = deformfield_spatial_chunksize + (vector_ndim,)
 
     # factor applies to spatial axes only; the vector axis is never sharded
@@ -589,6 +640,22 @@ def main():
 
     output_zarr_format = get_zarr_format(reg_inputs.align_path(), args.output_zarr_format)
 
+    # inverse deform field generation parameters. shrink spacings default to one
+    # None per iteration level when not provided
+    inv_shrink_spacings = (args.inv_shrink_spacings
+                           if (args.inv_shrink_spacings is not None and
+                               len(args.inv_shrink_spacings) > 0)
+                           else (None,) * len(args.inv_iterations))
+    inv_transform_args = dict(
+        inv_step=args.inv_step,
+        inv_iterations=args.inv_iterations,
+        inv_shrink_spacings=inv_shrink_spacings,
+        inv_smooth_sigmas=args.inv_smooth_sigmas,
+        inv_step_cut_factor=args.inv_step_cut_factor,
+        inv_pad=args.inv_pad,
+        inv_use_root=args.inv_use_root,
+    )
+
     if global_transform is None:
         # no global transform found -> calculate it and then apply it
         _run_global_align(reg_inputs,
@@ -596,7 +663,8 @@ def main():
                           args.compressor,
                           args.compressor_opts,
                           output_zarr_format,
-                          sharding_factor=args.output_sharding_factor)
+                          sharding_factor=args.output_sharding_factor,
+                          inv_transform_args=inv_transform_args)
     else:
         # global transform found -> just apply it
         _apply_global_transform(reg_inputs,

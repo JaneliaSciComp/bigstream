@@ -119,7 +119,7 @@ def _define_args(local_descriptor):
                              type=int,
                              help='Number of workers when using a local cluster')
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
-                             type=int, default=0,
+                             type=int, default=1,
                              help='Number of cpus allocated to a dask worker')
     args_parser.add_argument('--max-cluster-jobs', '--max_cluster_jobs',
                              dest='max_cluster_jobs',
@@ -197,7 +197,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          dask_scheduler_address:str|None=None,
                          dask_config_file:str|None=None,
                          dask_workers:int|None=None,
-                         worker_cpus=0,
+                         worker_cpus=1,
                          logging_config:str|None=None,
                          compressor:str|None=None,
                          compressor_opts:dict={},

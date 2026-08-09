@@ -3,6 +3,7 @@ import logging
 import numpy as np
 import os
 import pydantic.v1.utils as pu
+import re
 import yaml
 
 from pathlib import Path
@@ -450,9 +451,14 @@ def get_transforms(transforms_locations, expansion_factor=1):
         if not location:
             continue
         # split the optional subpath
-        path, _, subpath = location.partition('~')
-        path = path.strip()
-        subpath = subpath.strip() or None
+        location_parts = re.split(r'(~|\^)', location)
+        if len(location_parts) > 1:
+            path = location_parts[0].strip()
+            subpath = location_parts[2].strip()
+        else:
+            path = location_parts[0].strip()
+            subpath = None
+
         transform, transform_spacing = get_transform(path, subpath, expansion_factor=expansion_factor)
 
         if transform is None:

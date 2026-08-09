@@ -108,7 +108,7 @@ def _define_args():
                              type=int,
                              help='Number of workers when using a local cluster')
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
-                             type=int, default=0,
+                             type=int, default=1,
                              help='Number of cpus allocated to a dask worker')
 
     args_parser.add_argument('--max-concurrent-zarr-reads',

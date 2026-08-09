@@ -91,7 +91,8 @@ def _define_args():
                              help='Expansion factor applied to static deformation field spacings')
 
     args_parser.add_argument('--transforms',
-                             '--affine-transform', '--affine-transformations',
+                             '--affine-transform',
+                             '--affine-transformations',
                              '--local-transform',
                              dest='transforms',
                              type=str,
@@ -99,7 +100,8 @@ def _define_args():
                                   'path[~subpath] entries; each entry may be an affine matrix file '
                                   'or a deformation field (zarr).')
     args_parser.add_argument('--transforms-expansion',
-                             '--transform-expansion', '--local-transform-expansion',
+                             '--transform-expansion',
+                             '--local-transform-expansion',
                              dest='transforms_expansion',
                              type=float,
                              default=1.0,
@@ -153,7 +155,7 @@ def _define_args():
                              type=int,
                              help='Number of workers when using a local cluster')
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
-                             type=int, default=0,
+                             type=int, default=1,
                              help='Number of cpus allocated to a dask worker')
 
     args_parser.add_argument('--max-concurrent-zarr-reads',

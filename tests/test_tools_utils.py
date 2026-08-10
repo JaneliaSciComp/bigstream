@@ -51,3 +51,10 @@ def test_shard_shape_wins_over_blocksize():
         shard_shape=(256, 256, 256),
         blocksize=(64, 64, 64),
     ) == (256, 256, 256)
+
+
+def test_anisotropic_shard():
+    assert get_processing_size(
+        input_processing_size=(64, 64, 64),
+        shard_shape=(128, 256, 64),
+    ) == (128, 256, 64)

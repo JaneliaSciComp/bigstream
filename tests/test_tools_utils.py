@@ -24,3 +24,12 @@ def test_unsharded_rounds_up_to_block_multiple():
         input_processing_size=(100, 100, 100),
         blocksize=(64, 64, 64),
     ) == (128, 128, 128)
+
+
+def test_sharded_chunk_sized_input_becomes_shard_sized():
+    """A chunk-sized processing size on a sharded array must grow to the
+    shard size so each worker owns a whole shard."""
+    assert get_processing_size(
+        input_processing_size=(64, 64, 64),
+        shard_shape=(256, 256, 256),
+    ) == (256, 256, 256)

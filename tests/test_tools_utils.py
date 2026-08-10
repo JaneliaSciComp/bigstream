@@ -42,3 +42,12 @@ def test_sharded_rounds_up_to_shard_multiple():
         input_processing_size=(300, 300, 300),
         shard_shape=(256, 256, 256),
     ) == (512, 512, 512)
+
+
+def test_shard_shape_wins_over_blocksize():
+    """When both are given the shard is the storage unit that matters."""
+    assert get_processing_size(
+        input_processing_size=(64, 64, 64),
+        shard_shape=(256, 256, 256),
+        blocksize=(64, 64, 64),
+    ) == (256, 256, 256)

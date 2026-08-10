@@ -569,6 +569,13 @@ def _align_local_data(fix_image: ImageData,
 
         deform_field_spacing = get_spatial_values(fix_image.voxel_spacing)
 
+        # each worker must own a whole shard, not just a chunk
+        inv_processing_size = get_processing_size(
+            inv_deformfield_chunksize,
+            shard_shape=inv_deformfield_spatial_shard,
+            blocksize=inv_deformfield_chunksize if inv_deformfield_spatial_shard is None else None,
+        )
+
         logger.info((
             'Calculate inverse transformation '
             f'{inv_deformfield_path}:{inv_deformfield_subpath} '
@@ -580,7 +587,7 @@ def _align_local_data(fix_image: ImageData,
         distributed_invert_displacement_vector_field(
             deformfield,
             deform_field_spacing / fix_image.expansion_factor,
-            inv_deformfield_chunksize, # use blocksize for partitioning the work
+            inv_processing_size, # shard-sized block for partitioning the work
             inv_deformfield,
             cluster_client,
             overlap_factor=transform_overlap_factor,

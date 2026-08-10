@@ -33,3 +33,12 @@ def test_sharded_chunk_sized_input_becomes_shard_sized():
         input_processing_size=(64, 64, 64),
         shard_shape=(256, 256, 256),
     ) == (256, 256, 256)
+
+
+def test_sharded_rounds_up_to_shard_multiple():
+    """A processing size above one shard is rounded up to a whole number of
+    shards so no shard is split between workers."""
+    assert get_processing_size(
+        input_processing_size=(300, 300, 300),
+        shard_shape=(256, 256, 256),
+    ) == (512, 512, 512)

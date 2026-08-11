@@ -55,21 +55,7 @@ class ThrottledArraySliceReader:
             self.semaphore.release()
 
 
-def _check_storage_unit_size(label, unit_shape, processing_block_size, reverse_output_axes):
-    unit = np.array(get_spatial_values(unit_shape, reverse_axes=reverse_output_axes))
-    if np.any(unit > processing_block_size):
-        logger.error((
-            f'Output zarr {label} size {unit} exceeds '
-            f'block partition size {processing_block_size}. '
-            f'This may cause race conditions during write.'
-        ))
-        raise ValueError(
-            f'Processing block size {processing_block_size} is too small '
-            f'compared to {label} size: {unit_shape}'
-        )
-
-
-def validate_processing_block_size(output_array, processing_block_size, reverse_output_axes=False):
+def validate_processing_block_size(output_array, processing_size, reverse_output_axes=False):
     """
     Verify that the output zarr chunk size, and shard size when sharded,
     does not exceed the processing block size. If chunks/shards are larger
@@ -81,7 +67,7 @@ def validate_processing_block_size(output_array, processing_block_size, reverse_
     output_array : zarr array or None
         The output array to validate. If None or not chunked, no check is performed.
 
-    processing_block_size : 1d array
+    processing_size : 1d array
         The spatial block partition size used for distributing work.
 
     Raises
@@ -92,8 +78,26 @@ def validate_processing_block_size(output_array, processing_block_size, reverse_
     if output_array is None or not hasattr(output_array, 'chunks'):
         return
 
-    _check_storage_unit_size('chunk', output_array.chunks, processing_block_size, reverse_output_axes)
+    _check_storage_unit_size(output_array.chunks, 'chunk', processing_size, reverse_output_axes)
 
     output_shards = getattr(output_array, 'shards', None)
     if output_shards is not None:
-        _check_storage_unit_size('shard', output_shards, processing_block_size, reverse_output_axes)
+        _check_storage_unit_size(output_shards, 'shard', processing_size, reverse_output_axes)
+
+
+def _check_storage_unit_size(unit_shape, unit_label, processing_size, reverse_output_axes):
+    if unit_shape is None:
+        # if everything is processed in memory for a numpy array for example there's no restriction
+        return
+
+    unit = np.array(get_spatial_values(unit_shape, reverse_axes=reverse_output_axes))
+    if np.any(unit > processing_size):
+        logger.error((
+            f'Output zarr {unit_label} size {unit} exceeds '
+            f'block partition size {processing_size}. '
+            f'This may cause race conditions during write.'
+        ))
+        raise ValueError(
+            f'Processing block size {processing_size} is too small '
+            f'compared to {unit_label} size: {unit_shape}'
+        )

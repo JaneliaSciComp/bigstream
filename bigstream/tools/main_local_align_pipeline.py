@@ -47,20 +47,6 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--global-transform-subpath','--global_transform_subpath',
                              dest='global_transform_subpath',
                              help='Global transform subpath')
-    args_parser.add_argument('--local-processing-size',
-                             dest='local_processing_size',
-                             type=inttuple,
-                             help='partition size for splitting the work')
-    args_parser.add_argument('--local-processing-overlap-factor',
-                             dest='local_processing_overlap_factor',
-                             type=float,
-                             help='partition overlap when splitting the work - a fractional number between 0 - 1')
-    args_parser.add_argument('--local-alter-existing-deform',
-                             dest='alter_existing_deform',
-                             action='store_true',
-                             default=False,
-                             help='If this is set it will not overwrite existing deform field.')
-
     args_parser.add_argument('--local-transform-overlap-factor',
                              dest='local_transform_overlap_factor',
                              type=float,
@@ -184,7 +170,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          global_transform_spacing=None,
                          processing_size=None,
                          processing_overlap=None,
-                         alter_existing_deform=False,
                          transform_overlap=0.1,
                          default_overlap=0.5,
                          inv_step=1.0,
@@ -350,7 +335,6 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             reg_args.transform_path(),
             deformfield_subpath,
             deformfield_chunksize,
-            alter_existing_deform,
             reg_args.inv_transform_path(),
             inv_deformfield_subpath,
             inv_deformfield_chunksize,
@@ -397,7 +381,6 @@ def _align_local_data(fix_image: ImageData,
                       deformfield_path,
                       deformfield_subpath,
                       deformfield_chunksize,
-                      alter_existing_deform,
                       inv_deformfield_path,
                       inv_deformfield_subpath,
                       inv_deformfield_chunksize,
@@ -431,7 +414,7 @@ def _align_local_data(fix_image: ImageData,
     logger.info(f'Transform downsampling: {transform_downsampling}')
     transform_voxel_spacing = tuple(get_spatial_values(fix_image.voxel_spacing)) + (1,)
     logger.info(f'Transform voxel spacing: {transform_voxel_spacing}')
-    deformfield_shape = tuple(fix_image.spatial_dims) + (3,)
+    deformfield_shape = tuple(fix_image.spatial_dims) + (len(fix_image.spatial_dims),)
     logger.info(f'Transform shape: {fix_image.spatial_dims} => {deformfield_shape}')
 
     if deformfield_path:
@@ -480,7 +463,7 @@ def _align_local_data(fix_image: ImageData,
             deformfield_shape,
             deformfield_output_chunksize,
             np.float32,
-            overwrite=not alter_existing_deform,
+            overwrite=True,
             compressor=compressor,
             compression_opts=compressor_opts,
             parent_attrs=deformfield_attrs,
@@ -741,9 +724,8 @@ def main():
         args.align_config,
         global_transform,
         global_transform_spacing=global_transform_spacing,
-        processing_size=args.local_processing_size,
-        processing_overlap=args.local_processing_overlap_factor,
-        alter_existing_deform=args.alter_existing_deform,
+        processing_size=reg_inputs.processing_size,
+        processing_overlap=reg_inputs.processing_overlap_factor,
         transform_overlap=args.local_transform_overlap_factor,
         inv_step=args.inv_step,
         inv_iterations=args.inv_iterations,

@@ -5,9 +5,12 @@ import os
 import bigstream.io_utility as io_utility
 import bigstream.utility as ut
 
+from dask.distributed import (Client, LocalCluster)
+
 from bigstream.align import alignment_pipeline
 from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
+from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.io_utility import read_block
 from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr, calc_downsampling_attr)
@@ -149,6 +152,8 @@ def _run_global_align(reg_args:RegistrationInputs,
                                                 mov, mov_mask,
                                                 roi,
                                                 global_steps,
+                                                reg_args.processing_size,
+                                                reg_args.processing_overlap_factor,
                                                 mov_origin_transform,
                                                 static_transforms,
                                                 static_transforms_spacings)
@@ -214,6 +219,8 @@ def _align_global_data(fix_image, fix_mask,
                        mov_image, mov_mask,
                        roi,
                        steps,
+                       processing_size,
+                       processing_overlap_factor,
                        mov_origin_transform,
                        static_transforms,
                        static_transforms_spacings=()):
@@ -233,10 +240,6 @@ def _align_global_data(fix_image, fix_mask,
     mov_spacing = get_spatial_values(mov_image.voxel_spacing)
     logger.info(f'Moving image voxel spacing: {mov_spacing}')
 
-    if mov_origin_transform is not None:
-        mov_origin = mov_origin_transform[:3, 3]
-    else:
-        mov_origin = None
     full_image_coords = tuple(slice(None) for _ in range(fix_image.spatial_ndim))
     fix_image_array = read_block(
         full_image_coords,
@@ -254,17 +257,57 @@ def _align_global_data(fix_image, fix_mask,
         image_timeindex=mov_image.image_timeindex,
         image_channel=mov_image.image_channel,
     )
-    transform = alignment_pipeline(fix_image_array,
-                                   mov_image_array,
-                                   fix_spacing / fix_image.expansion_factor,
-                                   mov_spacing / fix_image.expansion_factor,
-                                   steps,
-                                   fix_mask=fix_mask,
-                                   mov_mask=mov_mask,
-                                   roi=roi,
-                                   fix_origin=None,
-                                   mov_origin=mov_origin,
-                                   static_transform_list=static_transforms)
+    if processing_size is None:
+        if mov_origin_transform is not None:
+            mov_origin = mov_origin_transform[:3, 3]
+        else:
+            mov_origin = None
+        transform = alignment_pipeline(fix_image_array,
+                                       mov_image_array,
+                                       fix_spacing / fix_image.expansion_factor,
+                                       mov_spacing / fix_image.expansion_factor,
+                                       steps,
+                                       fix_mask=fix_mask,
+                                       mov_mask=mov_mask,
+                                       roi=roi,
+                                       fix_origin=None,
+                                       mov_origin=mov_origin,
+                                       static_transform_list=static_transforms)
+    else:
+        # if the processing_size is specified run a blockwise alignment using a local dask scheduler
+
+        # create the output numpy array
+        transform = np.zeros(tuple(fix_image.spatial_dims) + (fix_image.spatial_ndim,), dtype=np.float32)
+        logger.info((
+            f'Run a blockwise alignment with {processing_size} processing size and {processing_overlap_factor} overlap '
+            f'to align a {mov_image.spatial_dims} moving image to a {fix_image.spatial_dims} fixed image '
+            f'and generate a {transform.shape} deformation field '
+        ))
+
+        # create a local dask scheduler
+        cluster_client = Client(LocalCluster())
+
+        deform_ok = distributed_alignment_pipeline(
+            fix_image,
+            fix_spacing / fix_image.expansion_factor,
+            mov_image,
+            mov_spacing / fix_image.expansion_factor,
+            steps,
+            processing_size,
+            cluster_client,
+            overlap_factor=processing_overlap_factor,
+            fix_mask=fix_mask,
+            mov_mask=mov_mask,
+            roi=roi,
+            mov_origin_transform=mov_origin_transform,
+            static_transform_list=static_transforms,
+            output_transform=transform,
+        )
+        logger.info((
+            f'Finished computing the {transform.shape} deformation field '
+            f'for the alignment of {mov_image} to {fix_image} -> {deform_ok} '
+        ))
+
     if len(transform.shape) == 2:
         logger.info(f'Apply affine transform: {transform}')
     else:

@@ -372,8 +372,8 @@ def _compute_block_transform(compute_transform_params,
         logger.debug(f'Block {block_index} lock {lock_strs}')
         try:
             # write result to disk
-            logger.info(f'Writing block {block_index} at {block_coords}')
             output_block = output_transform[block_coords] + transform
+            logger.info(f'Writing {output_block.shape} block {block_index} at {block_coords}')
             output_transform[block_coords] = output_block
             logger.info(f'Finished writing block {block_index} at {block_coords}')
         finally:

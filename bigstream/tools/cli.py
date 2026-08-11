@@ -250,6 +250,16 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       default=None,
                       help='Aligned volume channel')
 
+    args.add_argument(args_descriptor.argflag('processing-size'),
+                      dest=args_descriptor.argdest('processing_size'),
+                      type=inttuple,
+                      help='Output blocksize')
+    args.add_argument(args_descriptor.argflag('processing-overlap-factor'),
+                      dest=args_descriptor.argdest('processing_overlap_factor'),
+                      type=float,
+                      default=0.,
+                      help='Processing overlap factor - a fractional number between 0 and 1 that specifies the percentage overlap')
+
     args.add_argument(args_descriptor.argflag('output-blocksize'),
                       dest=args_descriptor.argdest('output_blocksize'),
                       type=inttuple,
@@ -329,6 +339,8 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'mov_mask', registration_args)
     _extract_arg(args, args_descriptor, 'mov_mask_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'default_output_dir', registration_args)
+    _extract_arg(args, args_descriptor, 'processing_size', registration_args)
+    _extract_arg(args, args_descriptor, 'processing_overlap_factor', registration_args)
     _extract_arg(args, args_descriptor, 'output_blocksize', registration_args)
     _extract_arg(args, args_descriptor, 'transform_dir', registration_args)
     _extract_arg(args, args_descriptor, 'transform_name', registration_args)

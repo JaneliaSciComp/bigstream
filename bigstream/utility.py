@@ -5,7 +5,7 @@ import psutil
 import SimpleITK as sitk
 import zarr
 
-from zarr import blosc
+#from zarr import blosc
 
 
 logger = logging.getLogger(__name__)
@@ -150,10 +150,11 @@ def create_zarr(
 
     synchronizer = None
     if multithreaded:
-        blosc.use_threads = True
+#        blosc.use_threads = True
         synchronizer = zarr.ThreadSynchronizer()
     zarr_disk = zarr.open(
-        path, 'a',
+        path,
+        mode='a',
         shape=shape,
         chunks=chunks,
         dtype=dtype,

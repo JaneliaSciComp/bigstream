@@ -233,11 +233,11 @@ def distributed_piecewise_alignment_pipeline(
                 mask_crop = fix_mask[tuple(slice(a, b) for a, b in zip(start, stop))]
                 if not np.sum(mask_crop) / np.prod(mask_crop.shape) >= foreground_percentage:
                     foreground = False
-    
+
             if foreground:
                 indices.append((i, j, k,))
                 slices.append(coords)
-    
+
         # determine foreground neighbor structure
         neighbor_flags = []
         neighbor_offsets = np.array(list(product([-1, 0, 1], repeat=fix.ndim)))
@@ -316,13 +316,13 @@ def distributed_piecewise_alignment_pipeline(
             fix = fix_zarr[fix_slices]
             mov = mov_zarr[mov_slices] if np.all(mov_stop > 0) else None  # edge case: mov block outside domain
             fix_mask, mov_mask = fix_mask_zarr, mov_mask_zarr
-            if isinstance(fix_mask_zarr, zarr.core.Array):
+            if isinstance(fix_mask_zarr, zarr.Array):
                 ratio = np.array(fix_mask_zarr.shape) / fix_zarr.shape
                 start = np.round( ratio * fix_block_coords[0] ).astype(int)
                 stop = np.round( ratio * (fix_block_coords[-1] + 1) ).astype(int)
                 fix_mask_slices = tuple(slice(a, b) for a, b in zip(start, stop))
                 fix_mask = fix_mask_zarr[fix_mask_slices]
-            if isinstance(mov_mask_zarr, zarr.core.Array):
+            if isinstance(mov_mask_zarr, zarr.Array):
                 ratio = np.array(mov_mask_zarr.shape) / mov_zarr.shape
                 start = np.round( ratio * mov_start ).astype(int)
                 stop = np.round( ratio * mov_stop ).astype(int)

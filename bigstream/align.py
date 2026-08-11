@@ -1076,6 +1076,11 @@ def affine_align(
             fix, mov, transform,
             sitk.CenteredTransformInitializerFilter.MOMENTS,
         )
+    if isinstance(initial_condition, str) and initial_condition == "CENTER_MASKS":
+        transform = sitk.CenteredTransformInitializer(
+            fix_mask, mov_mask, transform,
+            sitk.CenteredTransformInitializerFilter.MOMENTS,
+        )
 
     # and finally set the initial transform, and masks
     irm.SetInitialTransform(transform, inPlace=True)

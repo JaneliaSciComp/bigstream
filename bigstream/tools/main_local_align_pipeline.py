@@ -569,6 +569,13 @@ def _align_local_data(fix_image: ImageData,
 
         deform_field_spacing = get_spatial_values(fix_image.voxel_spacing)
 
+        # each worker must own a whole shard, not just a chunk
+        inv_processing_size = get_processing_size(
+            inv_deformfield_chunksize,
+            shard_shape=inv_deformfield_spatial_shard,
+            blocksize=inv_deformfield_chunksize if inv_deformfield_spatial_shard is None else None,
+        )
+
         logger.info((
             'Calculate inverse transformation '
             f'{inv_deformfield_path}:{inv_deformfield_subpath} '
@@ -580,7 +587,7 @@ def _align_local_data(fix_image: ImageData,
         distributed_invert_displacement_vector_field(
             deformfield,
             deform_field_spacing / fix_image.expansion_factor,
-            inv_deformfield_chunksize, # use blocksize for partitioning the work
+            inv_processing_size, # shard-sized block for partitioning the work
             inv_deformfield,
             cluster_client,
             overlap_factor=transform_overlap_factor,
@@ -651,6 +658,9 @@ def _align_local_data(fix_image: ImageData,
             zarr_format=zarr_format,
             shard_shape=align_shard_size,
         )
+        # each worker must own a whole shard, not just a chunk, to avoid
+        # unsynchronized writes into a shard shared with another worker
+        align_processing_size = getattr(align, 'shards', None) or align_chunk_size
         logger.info(f'Apply static transforms {static_transforms}' +
                     f'and local transform {deformfield_path}:{deformfield_subpath}' +
                     f'to warp {mov_image} -> {align_path}:{align_subpath}')
@@ -667,7 +677,7 @@ def _align_local_data(fix_image: ImageData,
             np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor,
             mov_image,
             np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor,
-            align_chunksize, # use block chunk size for distributing work
+            align_processing_size, # shard-sized block for distributing work
             static_transforms + deform_transforms, # transform_list
             cluster_client,
             overlap_factor=transform_overlap_factor,

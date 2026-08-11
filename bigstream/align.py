@@ -6,11 +6,11 @@ import SimpleITK as sitk
 import bigstream.transform as bst
 import bigstream.utility as ut
 
-from . import features
-from .configure_irm import configure_irm
-from .metrics import patch_mutual_information
-from .metrics import local_correlation_coefficient
-from .diagnostics import deform_field_diagnostics
+from bigstream import features
+from bigstream.configure_irm import configure_irm
+from bigstream.metrics import patch_mutual_information
+from bigstream.metrics import local_correlation_coefficient
+from bigstream.diagnostics import deform_field_diagnostics
 
 from fishspot.filter import apply_foreground_mask
 
@@ -1186,49 +1186,37 @@ def affine_align(
         )
         irm.SetMovingInitialTransform(T)
 
-    # distinguish between 2D and 3D for rigid transforms
-    ndims = fix.GetDimension()
-    rigid_transform_constructor = sitk.Euler2DTransform if ndims == 2 else sitk.Euler3DTransform
+    if initial_transform_given:
+        # convert initial transform to sitk transform object
+        if rigid:
+            transform = bst.matrix_to_euler_transform(initial_condition)
+        else:
+            transform = bst.matrix_to_affine_transform(initial_condition)
+    else:
+        # or, initialize with the correct empty transform type
+        ndims = fix.GetDimension()
+        if rigid:
+            transform = sitk.Euler2DTransform() if ndims == 2 else sitk.Euler3DTransform()
+        else:
+            transform = sitk.AffineTransform(ndims)
 
     # set transform to optimize
     if isinstance(initial_condition, str):
+        logger.info(f'{context} initial condition: {initial_condition} ')
         if initial_condition == 'CENTER':
-            a, b = fix, mov
-            initializer = sitk.CenteredTransformInitializer(
-                a, # fix
-                b, # mov
-                rigid_transform_constructor(), # EulerTransform
-                sitk.CenteredTransformInitializerFilter.GEOMETRY,
-            )
-            x = rigid_transform_constructor(initializer).GetTranslation()[::-1]
-            initial_condition = np.eye(ndims+1)
-            initial_condition[:ndims, -1] = x
-            logger.info(f'CENTER initial condition: {initial_condition}')
-            initial_transform_given = True
-        elif initial_condition == 'MOMENTS':
-            a, b = fix, mov
-            initial_transform = sitk.CenteredTransformInitializer(
-                a, # fix
-                b, # mov
-                rigid_transform_constructor(), # EulerTransform
+            transform = sitk.CenteredTransformInitializer(
+                fix, mov, transform,
                 sitk.CenteredTransformInitializerFilter.MOMENTS,
             )
-            initial_condition = bst.affine_transform_to_matrix(initial_transform)
-            logger.info(f'MOMENTS initial condition: {initial_condition}')
-            initial_transform_given = True
+        elif initial_condition == 'CENTER_MASKS' and fix_mask is not None and mov_mask is not None:
+            transform = sitk.CenteredTransformInitializer(
+                fix_mask, mov_mask, transform,
+                sitk.CenteredTransformInitializerFilter.MOMENTS,
+            )
 
-    if rigid and not initial_transform_given:
-        transform = rigid_transform_constructor()
-    elif rigid and initial_transform_given:
-        transform = bst.matrix_to_euler_transform(initial_condition)
-    elif not rigid and not initial_transform_given:
-        transform = sitk.AffineTransform(fix.GetDimension())
-    elif not rigid and initial_transform_given:
-        transform = bst.matrix_to_affine_transform(initial_condition)
-    else:
-        transform = None
+    # and finally set the initial transform
     irm.SetInitialTransform(transform, inPlace=True)
-    # set masks
+    # and set masks
     if fix_mask is not None:
         irm.SetMetricFixedMask(fix_mask)
     if mov_mask is not None:
@@ -1692,7 +1680,7 @@ def alignment_pipeline(
     # define how to run alignment functions
     a = (fix, mov, fix_spacing, mov_spacing)
     b = {'fix_mask':fix_mask, 'mov_mask':mov_mask,
-         'fix_roi': roi_voxel_coords, 
+         'fix_roi': roi_voxel_coords,
          'fix_origin':fix_origin, 'mov_origin':mov_origin,}
     align = {'ransac':lambda **c: feature_point_ransac_affine_align(*a, **{**b, **c}),
              'random':lambda **c: random_affine_search(*a, **{**b, **c})[0],

@@ -993,6 +993,8 @@ def affine_transform_to_matrix(transform):
     matrix = np.eye(ndims+1)
     matrix[:ndims, :ndims] = np.array(transform.GetMatrix()).reshape((ndims,ndims))
     matrix[:ndims, -1] = np.array(transform.GetTranslation())
+    origin = np.array(transform.GetCenter())
+    matrix = change_affine_matrix_origin(matrix, -origin)
     return invert_matrix_axes(matrix)
 
 
@@ -1122,14 +1124,9 @@ def physical_parameters_to_affine_matrix_3d(params, center):
         The affine matrix representing those physical transform parameters
     """
 
-    # translation
-    aff = np.eye(4)
-    aff[:3, -1] = params[:3]
     # rotation
-    x = np.eye(4)
-    x[:3, :3] = Rotation.from_rotvec(params[3:6]).as_matrix()
-    x = change_affine_matrix_origin(x, -center)
-    aff = np.matmul(x, aff)
+    aff = np.eye(4)
+    aff[:3, :3] = Rotation.from_rotvec(params[3:6]).as_matrix()
     # scale
     x = np.diag(tuple(params[6:9]) + (1,))
     aff = np.matmul(x, aff)
@@ -1139,7 +1136,14 @@ def physical_parameters_to_affine_matrix_3d(params, center):
     shy[0, 1], shy[2, 1] = params[9], params[11]
     shz[0, 2], shz[1, 2] = params[9], params[10]
     x = np.matmul(shz, np.matmul(shy, shx))
-    return np.matmul(x, aff)
+    aff = np.matmul(x, aff)
+    # translation
+    x = np.eye(4)
+    x[:3, -1] = params[:3]
+    aff = np.matmul(x, aff)
+    # apply the center
+    center = np.array(center)
+    return change_affine_matrix_origin(aff, -center)
 
 
 def matrix_to_displacement_field(matrix, shape, spacing=None, centered=False):
@@ -1311,3 +1315,89 @@ def transform_list_to_composite_transform(transform_list, spacing=None, origin=N
             t = field_to_displacement_field_transform(t, a, b)
         transform.AddTransform(t)
     return transform
+
+
+######################## Transform sampling ############################
+
+def generate_random_affine_transforms_3d(
+    number_of_samples,
+    max_translation,
+    max_rotation,
+    max_scale,
+    max_shear,
+    center,
+    return_parameters=False,
+):
+    """
+    Given limits for translation, rotation, scale, and shear parameters, generate
+    an array of random affine transforms.
+
+    Parameters
+    ----------
+    number_of_samples : int
+        The number of affines to generate
+
+    max_translation : float or tuple of float
+        The maximum amplitude translation allowed in random sampling.
+        Specified in physical units (e.g. um or mm)
+        Can be specified per axis.
+
+    max_rotation : float or tuple of float
+        The maximum amplitude rotation allowed in random sampling.
+        Specified in radians
+        Can be specified per axis.
+
+    max_scale : float or tuple of float
+        The maximum amplitude scaling allowed in random sampling.
+        Can be specified per axis.
+
+    max_shear : float or tuple of float
+        The maximum amplitude shearing allowed in random sampling.
+        Can be specified per axis.
+
+    center : length 3 tuple or 2d array of shape (number_of_samples, 3)
+        Linear transforms are specified up to a choice of origin. This point is that
+        origin. The most physically intuitive point to use is the center of your image/domain.
+        If you want a different center for each affine, then supply a 2d array of centers.
+        This should be in physical units (e.g. um or mm); the same units as max_translation.
+
+    return_parameters : bool (default: False)
+        If False, only the affine transforms are returned.
+        If True, in addition to the affine transforms, the physical
+        parameters that determined the affines are also returned.
+
+    Returns
+    -------
+    affines : 3d array
+        This array has shape (number_of_samples, 4, 4) and contains the random
+        affine transform samples
+
+    parameters : 2d array
+        This is only returned if return_parameters == True (not the default)
+        This array has shape (number_of_samples, 12)
+        Each row contains the 12 parameters that determine the corresponding
+        affine transform. They are in this order:
+        (transX, transY, transZ, rotX, rotY, rotZ, scaleX, scaleY, scaleZ, shearX, shearY, shearZ)
+    """
+
+    # sample the physical parameters
+    params = np.zeros((number_of_samples, 12))
+    F = lambda mx: 2 * (mx * np.random.rand(number_of_samples, 3)) - mx
+    params[:, 0:3] = F(max_translation)
+    params[:, 3:6] = F(max_rotation)
+    params[:, 6:9] = np.e**F(np.log(max_scale))
+    params[:, 9:12] = F(max_shear)
+
+    # convert to affine matrices
+    affines = []
+    for iii, param in enumerate(params):
+        c = center[iii] if isinstance(center, np.ndarray) else center
+        affines.append( physical_parameters_to_affine_matrix_3d(param, c) )
+    affines = np.array(affines)
+
+    # ship it
+    if return_parameters:
+        return affines, params
+    else:
+        return affines
+

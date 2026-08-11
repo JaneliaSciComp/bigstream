@@ -4,10 +4,9 @@ import bigstream.utility as ut
 from bigstream.align import affine_align, alignment_pipeline
 from bigstream.transform import apply_transform, generate_random_affine_transforms_3d
 from bigstream.metrics import local_correlation_coefficient
-from scipy.ndimage import zoom
 from scipy.linalg import logm, expm
 from scipy.sparse.linalg import lsqr, norm
-from scipy.sparse import csr_array, vstack
+from scipy.sparse import csr_array
 from scipy.special import factorial
 import zarr
 from zarr import blosc
@@ -19,7 +18,6 @@ from distributed import Event
 import time
 import os
 import aicspylibczi
-#from ngff_zarr import to_ngff_image, to_multiscales, to_ngff_zarr
 import nrrd
 import glob
 
@@ -177,6 +175,8 @@ def distributed_stitch_new(
     max_iterations=10,
     aligned_lcc_threshold=0.7,
     lcc_radius=8.,
+    tile_subpath=None,
+    origins=None,
     cluster=None,
     cluster_kwargs={},
 ):
@@ -186,6 +186,8 @@ def distributed_stitch_new(
     neighbor_transforms, neighbor_correlations, alignments = align_all_neighbors(
         tile_paths, tile_grid_positions, spacing, overlap_factor, steps,
         lcc_radius=lcc_radius,
+        tile_subpath=tile_subpath,
+        origins=origins,
         cluster=cluster,
         cluster_kwargs=cluster_kwargs,
     )
@@ -207,6 +209,8 @@ def align_all_neighbors(
     overlap_factor,
     steps,
     lcc_radius=8.,
+    tile_subpath=None,
+    origins=None,
     cluster=None,
     cluster_kwargs={},
 ):
@@ -216,13 +220,16 @@ def align_all_neighbors(
     # TODO: ensure all steps are affine
 
     # get origins
-    F = lambda p: p.split('/')[-1].split('.')[0].split('_')[2].split('x')
-    origins = [[int(x) for x in F(p)] for p in tile_paths]
-    origins = np.array(origins) * spacing
+    if origins is None and tile_paths[0].split('.')[-1] in ['nrrd',]:
+        F = lambda p: p.split('/')[-1].split('.')[0].split('_')[2].split('x')
+        origins = [[int(x) for x in F(p)] for p in tile_paths]
+        origins = np.array(origins) * spacing
 
     # fix/mov assignments are a checkerboard pattern
     tile_grid = np.max(tile_grid_positions, axis=0) + 1
-    fixed_flags = ~(np.arange(np.prod(tile_grid)).reshape(tile_grid) % 2).astype(bool)
+    fixed_flags = np.mgrid[tuple(slice(x) for x in tile_grid)]
+    fixed_flags = np.sum(fixed_flags, axis=0) % 2
+    fixed_flags = (fixed_flags == 0).astype(bool)
     fixed_flags = [fixed_flags[x] for x in tile_grid_positions]
 
     # neighbors share faces
@@ -243,7 +250,7 @@ def align_all_neighbors(
         for neighbor_delta in neighbor_deltas:
             neighbor_position = position + neighbor_delta
             if np.all(neighbor_position >= 0) and np.all(neighbor_position < tile_grid):
-                raster_index = int(np.ravel_multi_index(neighbor_position, tile_grid))
+                raster_index = tile_grid_positions.index(tuple(neighbor_position))
                 axis = np.nonzero(neighbor_delta)[0][0]
                 if neighbor_delta[axis] < 0:
                     paths = [tile_paths[raster_index], tile_paths[iii]]
@@ -255,7 +262,6 @@ def align_all_neighbors(
                     origin = origins[raster_index]
                 alignment = (paths, axis, fixed_first, origin, (iii, raster_index))
                 alignments.append(alignment)
-
 
     # define how to align a single pair of neighbors
     def align_neighbors(alignment):
@@ -271,14 +277,22 @@ def align_all_neighbors(
         print('ALIGNMENT SPEC')
         print(paths[0], '\n', paths[1], '\n', axis, fixed_first, origin, raster_indices, flush=True)
 
-        # read tile_A
-        tile_A = nrrd.read(paths[0])[0].transpose(2,1,0)
+        # read tiles
+        if paths[0].split('.')[-1] in ['nrrd',]:
+            tile_A = nrrd.read(paths[0])[0].transpose(2,1,0)
+            tile_B = nrrd.read(paths[1])[0].transpose(2,1,0)
+        else:
+            n5_path = '/'.join(paths[0].split('/')[:-1])
+            n5_file = zarr.open(store=zarr.N5Store(n5_path), mode='r')
+            tile_A_path = '/' + paths[0].split('/')[-1] + tile_subpath
+            tile_A = n5_file[tile_A_path][...].transpose(2,1,0)
+            tile_B_path = '/' + paths[1].split('/')[-1] + tile_subpath
+            tile_B = n5_file[tile_B_path][...].transpose(2,1,0)
+
+        # crop tiles
         crop = [slice(None),] * tile_A.ndim
         crop[axis] = slice(int(-2 * overlap_factor[axis] * tile_A.shape[axis]), None)
         tile_A = tile_A[tuple(crop)]
-
-        # read tile_B
-        tile_B = nrrd.read(paths[1])[0].transpose(2,1,0)
         crop = [slice(None),] * tile_B.ndim
         crop[axis] = slice(0, int(2 * overlap_factor[axis] * tile_B.shape[axis]))
         tile_B = tile_B[tuple(crop)]
@@ -295,26 +309,30 @@ def align_all_neighbors(
         )
 
         # score the result
+        # TODO: this scoring method still has flaws.
+        #       For one thing, voxels close to the mask edge will unfairly drag the score down
+        #       That is because their neighborhoods contain zeros in the aligned image but data
+        #       in the fixed image. I could erode the mask to adress this.
         aligned = apply_transform(
             fix, mov, spacing, spacing,
             fix_origin=origin, mov_origin=origin,
             transform_list=[affine,],
         )
+
+        # XXX TEMP TEMP DEBUG - hard coded skip sampling is temporary
         _, corr_image = local_correlation_coefficient(
-            fix, aligned, spacing, lcc_radius, return_image=True,
+            fix[::2, ::2, ::8], aligned[::2, ::2, ::8], spacing, lcc_radius, return_image=True,
         )
         corr_mask = ~(np.isnan(corr_image) + np.isinf(corr_image))
-        corr_mask = corr_mask * (aligned > 0)
+        corr_mask = corr_mask * (aligned[::2, ::2, ::8] > 0)
         corr = max(0, np.nanmean(corr_image[corr_mask]))
 
         # XXX TEMP TEMP DEBUG
         import tifffile
-        bundle = np.stack((fix, aligned,), axis=1)
         idx = raster_indices
-        folder = '/'.join(paths[0].split('/')[:-1])
-        tifffile.imwrite(
-            f'{folder}/bundle_{idx[0]}_{idx[1]}.tiff', bundle, imagej=True, metadata={'axes':'ZCYX'},
-        )
+        nrrd.write(f'./{idx[0]}_{idx[1]}_fix.nrrd', fix, compression_level=2)
+        nrrd.write(f'./{idx[0]}_{idx[1]}_mov.nrrd', mov, compression_level=2)
+        nrrd.write(f'./{idx[0]}_{idx[1]}_aligned.nrrd', aligned, compression_level=2)
         # XXX END DEBUG
 
         return affine, corr
@@ -333,11 +351,10 @@ def align_all_neighbors(
     neighbor_correlations = neighbor_correlations / np.max(neighbor_correlations)
 
    # XXX TEMP TEMP DEBUG
-    folder = '/'.join(tile_paths[0].split('/')[:-1])
-    np.save(f'{folder}/neighbor_transforms.npy', neighbor_transforms)
-    np.save(f'{folder}/neighbor_correlations.npy', neighbor_correlations)
-    neighbor_transforms = np.load(f'{folder}/neighbor_transforms.npy')
-    neighbor_correlations = np.load(f'{folder}/neighbor_correlations.npy')
+    np.save(f'./neighbor_transforms.npy', neighbor_transforms)
+    np.save(f'./neighbor_correlations.npy', neighbor_correlations)
+    neighbor_transforms = np.load(f'./neighbor_transforms.npy')
+    neighbor_correlations = np.load(f'./neighbor_correlations.npy')
     for iii in range(len(alignments)):
         print(alignments[iii][-1], neighbor_correlations[iii])
     # XXX END DEBUG
@@ -902,39 +919,4 @@ def distributed_apply_stitch(
     all_events = cluster.client.gather(futures)
     return output_zarr
 
-
-#@cluster
-#def generate_ome_ngff_zarr(
-#    input_zarr_array,
-#    spacing,
-#    write_path,
-#    scale_factors,
-#    chunks,
-#    cluster=None,
-#    cluster_kwargs={},
-#    **kwargs,
-#):
-#    """
-#    """
-#    
-#    print('calling to_ngff_image', flush=True)
-#    ngff_image = to_ngff_image(
-#        input_zarr_array,
-#        dims=('z', 'y', 'x'),
-#        scale={a:b for a, b in zip('zyx', spacing)},
-#        axes_units={a:'micrometer' for a in 'zyx'}
-#    )
-#    print('calling to_multiscales', flush=True)
-#    multiscales = to_multiscales(
-#        ngff_image,
-#        scale_factors,
-#        chunks=chunks,
-#    )
-#    print('calling to_ngff_zarr', flush=True)
-#    to_ngff_zarr(
-#        write_path,
-#        multiscales,
-#        **kwargs,
-#    )
-#    return zarr.open(write_path, 'r+')
 

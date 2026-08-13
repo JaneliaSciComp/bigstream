@@ -1175,7 +1175,11 @@ def affine_align(
     mov_mask_spacing = X[7]
 
     # set up registration object
-    logger.debug(f'Configure {context} IRM args: {kwargs}')
+    ndims = fix.GetDimension()
+    logger.debug((
+        f'Configure {context} IRM args: {kwargs} for {ndims}-D image registration '
+        f'of a {mov.GetSize()} moving image to a {fix.GetSize()} fix image'
+    ))
     irm = configure_irm(context=context, **kwargs)
     # set initial static transforms
     if static_transform_list:
@@ -1194,7 +1198,6 @@ def affine_align(
             transform = bst.matrix_to_affine_transform(initial_condition)
     else:
         # or, initialize with the correct empty transform type
-        ndims = fix.GetDimension()
         if rigid:
             transform = sitk.Euler2DTransform() if ndims == 2 else sitk.Euler3DTransform()
         else:
@@ -1203,16 +1206,30 @@ def affine_align(
     # set transform to optimize
     if isinstance(initial_condition, str):
         logger.info(f'{context} initial condition: {initial_condition} ')
-        if initial_condition == 'CENTER':
-            transform = sitk.CenteredTransformInitializer(
-                fix, mov, transform,
-                sitk.CenteredTransformInitializerFilter.MOMENTS,
+        # the MOMENTS initializer computes a center of mass and fails on an
+        # all-zero (empty background) block - common in blockwise alignment.
+        # Treat that as an alignment failure and return the default transform.
+        try:
+            if initial_condition == 'CENTER':
+                transform = sitk.CenteredTransformInitializer(
+                    fix,
+                    mov,
+                    transform,
+                    sitk.CenteredTransformInitializerFilter.MOMENTS,
+                )
+            elif initial_condition == 'CENTER_MASKS' and fix_mask is not None and mov_mask is not None:
+                transform = sitk.CenteredTransformInitializer(
+                    fix_mask,
+                    mov_mask,
+                    transform,
+                    sitk.CenteredTransformInitializerFilter.MOMENTS,
+                )
+        except RuntimeError as e:
+            logger.warning(
+                f'{context} centered transform initializer failed ({e}); '
+                'returning default transform'
             )
-        elif initial_condition == 'CENTER_MASKS' and fix_mask is not None and mov_mask is not None:
-            transform = sitk.CenteredTransformInitializer(
-                fix_mask, mov_mask, transform,
-                sitk.CenteredTransformInitializerFilter.MOMENTS,
-            )
+            return default
 
     # and finally set the initial transform
     irm.SetInitialTransform(transform, inPlace=True)

@@ -458,7 +458,10 @@ def get_transforms(transforms_locations, expansion_factor=1):
     if not transforms_locations:
         return transforms, tuple(transforms_spacings)
 
-    for location in transforms_locations.split(','):
+    if isinstance(transforms_locations, str):
+        transforms_locations = transforms_locations.split(',')
+
+    for location in transforms_locations:
         location = location.strip()
         if not location:
             continue

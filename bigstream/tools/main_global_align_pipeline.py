@@ -4,6 +4,7 @@ import numpy as np
 import os
 import bigstream.io_utility as io_utility
 import bigstream.utility as ut
+import zarr
 
 from dask.distributed import (Client, LocalCluster)
 
@@ -215,8 +216,8 @@ def _run_global_align(reg_args:RegistrationInputs,
         logger.info('Skip global alignment - both fix and moving image are needed')
 
 
-def _align_global_data(fix_image, fix_mask,
-                       mov_image, mov_mask,
+def _align_global_data(fix_image, fix_mask_arg,
+                       mov_image, mov_mask_arg,
                        roi,
                        steps,
                        processing_size,
@@ -225,14 +226,14 @@ def _align_global_data(fix_image, fix_mask,
                        static_transforms,
                        static_transforms_spacings=()):
     logger.info('Read image data for global alignment')
-    if isinstance(fix_mask, ImageData):
-        fix_mask = fix_mask.image_array
+    if isinstance(fix_mask_arg, ImageData):
+        fix_mask = fix_mask_arg.image_array
     else:
-        fix_mask = fix_mask
-    if isinstance(mov_mask, ImageData):
-        mov_mask = mov_mask.image_array
+        fix_mask = fix_mask_arg
+    if isinstance(mov_mask_arg, ImageData):
+        mov_mask = mov_mask_arg.image_array
     else:
-        mov_mask = mov_mask
+        mov_mask = mov_mask_arg
 
     logger.info(f'Calculate global transform using: {steps}')
     fix_spacing = get_spatial_values(fix_image.voxel_spacing)
@@ -274,18 +275,32 @@ def _align_global_data(fix_image, fix_mask,
                                        mov_origin=mov_origin,
                                        static_transform_list=static_transforms)
     else:
-        # if the processing_size is specified run a blockwise alignment using a local dask scheduler
-
-        # create the output numpy array
-        transform = np.zeros(tuple(fix_image.spatial_dims) + (fix_image.spatial_ndim,), dtype=np.float32)
+        # if the processing_size is specified run a blockwise alignment using a
+        # local dask scheduler. distributed_alignment_pipeline writes each block
+        # into output_transform in place (under a lock) and validates its chunk
+        # shape, so it must be a zarr array (NOT a dask array, whose .chunks is a
+        # tuple-of-tuples and which is not writable block-by-block). Chunk size is
+        # the processing block size (zyx) plus the trailing vector axis.
+        vector_ndim = int(fix_image.spatial_ndim)
+        block_zyx = tuple(int(s) for s in processing_size[::-1])
+        transform = zarr.zeros(
+            shape=tuple(int(d) for d in fix_image.spatial_dims) + (vector_ndim,),
+            chunks=block_zyx + (vector_ndim,),
+            dtype=np.float32,
+        )
         logger.info((
             f'Run a blockwise alignment with {processing_size} processing size and {processing_overlap_factor} overlap '
             f'to align a {mov_image.spatial_dims} moving image to a {fix_image.spatial_dims} fixed image '
             f'and generate a {transform.shape} deformation field '
         ))
 
-        # create a local dask scheduler
-        cluster_client = Client(LocalCluster())
+        # create a local dask scheduler. memory_limit=0 disables the per-worker
+        # memory monitor so it does not spill/pause/terminate or emit the noisy
+        # "unmanaged memory is high" warnings when a block's buffers exceed the
+        # (auto-detected, often tiny) per-worker limit
+        cluster_client = Client(LocalCluster(threads_per_worker=1,
+                                             memory_limit=0,
+                                             processes=False))
 
         deform_ok = distributed_alignment_pipeline(
             fix_image,
@@ -293,11 +308,11 @@ def _align_global_data(fix_image, fix_mask,
             mov_image,
             mov_spacing / fix_image.expansion_factor,
             steps,
-            processing_size,
+            block_zyx,
             cluster_client,
             overlap_factor=processing_overlap_factor,
-            fix_mask=fix_mask,
-            mov_mask=mov_mask,
+            fix_mask=fix_mask_arg,
+            mov_mask=mov_mask_arg,
             roi=roi,
             mov_origin_transform=mov_origin_transform,
             static_transform_list=static_transforms,
@@ -307,6 +322,9 @@ def _align_global_data(fix_image, fix_mask,
             f'Finished computing the {transform.shape} deformation field '
             f'for the alignment of {mov_image} to {fix_image} -> {deform_ok} '
         ))
+        # materialize the assembled field so downstream apply/save see a numpy
+        # array (same as the non-blockwise path)
+        transform = transform[...]
 
     if len(transform.shape) == 2:
         logger.info(f'Apply affine transform: {transform}')

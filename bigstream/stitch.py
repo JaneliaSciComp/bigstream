@@ -8,8 +8,9 @@ from scipy.linalg import logm, expm
 from scipy.sparse.linalg import lsqr, norm
 from scipy.sparse import csr_array
 from scipy.special import factorial
+from skimage.filters import threshold_otsu
 import zarr
-from zarr import blosc
+#from zarr import blosc
 from aicsimageio.readers import CziReader
 from xml.etree import ElementTree
 from itertools import product
@@ -20,6 +21,7 @@ import os
 import aicspylibczi
 import nrrd
 import glob
+import xml.etree.ElementTree as ET
 
 
 def create_synthetic_tiles(
@@ -166,7 +168,7 @@ def create_neighbor_transforms_from_tile_transforms(
     return neighbor_transforms, alignments
 
 
-def distributed_stitch_new(
+def distributed_stitch_synthetic_data(
     tile_paths,
     tile_grid_positions,
     spacing,
@@ -175,8 +177,148 @@ def distributed_stitch_new(
     max_iterations=10,
     aligned_lcc_threshold=0.7,
     lcc_radius=8.,
+    cluster=None,
+    cluster_kwargs={},
+):
+
+    # get origins
+    F = lambda p: p.split('/')[-1].split('.')[0].split('_')[2].split('x')
+    origins = [[int(x) for x in F(p)] for p in tile_paths]
+    origins = np.array(origins) * spacing
+
+    return distributed_stitch_new(
+        tile_paths,
+        tile_grid_positions,
+        spacing,
+        origins,
+        overlap_factor,
+        steps,
+        max_iterations=max_iterations,
+        aligned_lcc_threshold=aligned_lcc_threshold,
+        lcc_radius=lcc_radius,
+        cluster=cluster,
+        cluster_kwargs=cluster_kwargs,
+    )
+
+
+def distributed_stitch_bigstitcher_xml(
+    xml_path,
+    steps,
+    max_iterations=10,
+    aligned_lcc_threshold=0.7,
+    lcc_radius=8.,
     tile_subpath=None,
-    origins=None,
+    cluster=None,
+    cluster_kwargs={},
+):
+
+    # parse xml, get major nodes
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+    ViewSetups = root.find('SequenceDescription').find('ViewSetups').findall('ViewSetup')
+    ViewRegistrations = root.find('ViewRegistrations')
+
+    # get tile paths
+    basepath = root.find('BasePath').text
+    n5_path = basepath + '/' + root.find('SequenceDescription').find('ImageLoader').find('n5').text
+    tile_paths = [n5_path + '/setup' + x.find('id').text for x in ViewSetups]
+
+    # get tile size and spacing
+    first_view = ViewSetups[0]
+    tile_size = first_view.find('size').text
+    tile_size = np.array([int(x) for x in tile_size.split()])
+    spacing = first_view.find('voxelSize').find('size').text
+    spacing = np.array([float(x) for x in spacing.split()])
+
+    # scale spacings XXX NEED TO AUTOMATE, CURRENTLY BAD MAGIC NUMBERS
+    spacing_s2 = spacing * [4, 4, 1]
+    spacing_s3 = spacing * [8, 8, 2]
+
+    # get origins
+    origins = []
+    for ViewRegistration in ViewRegistrations.findall('ViewRegistration'):
+        for ViewTransform in ViewRegistration.findall('ViewTransform'):
+            if ViewTransform.find('Name').text == 'Translation to Regular Grid':
+                affine = ViewTransform.find('affine').text
+                affine = np.array(affine.split()).astype(np.float64).reshape(3, 4)
+                origins.append(affine[:, -1])
+    origins = np.array(origins) * spacing
+
+    # determine overlap factor and tile grid positions
+    tile_grid_positions = []
+    increments = [np.unique(origins[:, x]) for x in range(origins.shape[1])]
+    for origin in origins:
+        tile_grid_position = tuple(np.where(x == y)[0][0] for x, y in zip(origin, increments))
+        tile_grid_positions.append(tile_grid_position)
+
+    # get overlap factors
+    A = np.array([x[1] if len(x) > 1 else x[0] for x in increments])
+    B = np.array([x[0] for x in increments])
+    overlap_factor = (A - B) / spacing / tile_size
+    overlap_factor = [(1 - x)/2 if x > 0 else 0 for x in overlap_factor]
+
+    for x, y, z in zip(tile_paths, tile_grid_positions, origins): print(x, y, z)
+    print(spacing, spacing_s2, spacing_s3)
+    print(tile_size, overlap_factor)
+
+    # stitch
+#    tile_transforms = distributed_stitch_new(
+#        tile_paths,
+#        tile_grid_positions,
+#        spacing_s2,
+#        origins,
+#        overlap_factor,
+#        steps,
+#        max_iterations=max_iterations,
+#        aligned_lcc_threshold=aligned_lcc_threshold,
+#        lcc_radius=lcc_radius,
+#        tile_subpath=tile_subpath,
+#        cluster=cluster,
+#        cluster_kwargs=cluster_kwargs,
+#    )
+
+    tile_transforms = np.load('solved_affines_inv.npy')
+
+    # POSSIBLY I NEED TO INVERT TRANSFORMS TO CONFORM TO BIGSTITCHER SPEC
+    tile_transforms_vox = np.linalg.inv(tile_transforms)
+
+    # THIS SEEMS CORRECT
+    # make copy of affine transforms in voxel units at full res scale
+    scale_transform_rt = np.eye(4)
+    scale_transform_rt[:3, :3] = np.diag(spacing)
+    scale_transform_lt = np.eye(4)
+    scale_transform_lt[:3, :3] = np.diag(1/spacing)
+    tile_transforms_vox = np.matmul(scale_transform_lt, np.matmul(tile_transforms_vox, scale_transform_rt))
+
+    # put transform data into xml tree
+    for iii, ViewRegistration in enumerate(ViewRegistrations.findall('ViewRegistration')):
+        transform = ET.Element('ViewTransform', attrib={'type':'affine'})
+        name = ET.SubElement(transform, 'Name')
+        name.text = 'BigStream APGO'
+        affine = ET.SubElement(transform, 'affine')
+        affine.text = ' '.join(tile_transforms_vox[iii].flatten()[:-4].astype(str))
+        ViewRegistration.insert(0, transform)
+
+    # write xml tree to new file
+    write_path = xml_path[:-4] + '_apgo.xml'
+    ET.indent(tree, space=' ')
+    tree.write(write_path, xml_declaration=True, encoding='unicode')
+
+    # return transforms
+    return tile_transforms
+
+
+def distributed_stitch_new(
+    tile_paths,
+    tile_grid_positions,
+    spacing,
+    origins,
+    overlap_factor,
+    steps,
+    max_iterations=10,
+    aligned_lcc_threshold=0.7,
+    lcc_radius=8.,
+    tile_subpath=None,
     cluster=None,
     cluster_kwargs={},
 ):
@@ -184,10 +326,9 @@ def distributed_stitch_new(
     """
 
     neighbor_transforms, neighbor_correlations, alignments = align_all_neighbors(
-        tile_paths, tile_grid_positions, spacing, overlap_factor, steps,
+        tile_paths, tile_grid_positions, spacing, origins, overlap_factor, steps,
         lcc_radius=lcc_radius,
         tile_subpath=tile_subpath,
-        origins=origins,
         cluster=cluster,
         cluster_kwargs=cluster_kwargs,
     )
@@ -206,11 +347,11 @@ def align_all_neighbors(
     tile_paths,
     tile_grid_positions,
     spacing,
+    origins,
     overlap_factor,
     steps,
     lcc_radius=8.,
     tile_subpath=None,
-    origins=None,
     cluster=None,
     cluster_kwargs={},
 ):
@@ -218,12 +359,6 @@ def align_all_neighbors(
     """
 
     # TODO: ensure all steps are affine
-
-    # get origins
-    if origins is None and tile_paths[0].split('.')[-1] in ['nrrd',]:
-        F = lambda p: p.split('/')[-1].split('.')[0].split('_')[2].split('x')
-        origins = [[int(x) for x in F(p)] for p in tile_paths]
-        origins = np.array(origins) * spacing
 
     # fix/mov assignments are a checkerboard pattern
     tile_grid = np.max(tile_grid_positions, axis=0) + 1
@@ -309,23 +444,27 @@ def align_all_neighbors(
         )
 
         # score the result
-        # TODO: this scoring method still has flaws.
-        #       For one thing, voxels close to the mask edge will unfairly drag the score down
-        #       That is because their neighborhoods contain zeros in the aligned image but data
-        #       in the fixed image. I could erode the mask to adress this.
         aligned = apply_transform(
             fix, mov, spacing, spacing,
             fix_origin=origin, mov_origin=origin,
             transform_list=[affine,],
         )
 
-        # XXX TEMP TEMP DEBUG - hard coded skip sampling is temporary
-        _, corr_image = local_correlation_coefficient(
-            fix[::2, ::2, ::8], aligned[::2, ::2, ::8], spacing, lcc_radius, return_image=True,
-        )
-        corr_mask = ~(np.isnan(corr_image) + np.isinf(corr_image))
-        corr_mask = corr_mask * (aligned[::2, ::2, ::8] > 0)
-        corr = max(0, np.nanmean(corr_image[corr_mask]))
+        fix_nonzero = fix[fix > 0]
+        mn, mx = fix_nonzero.min(), fix_nonzero.max()
+        hist, bins = np.histogram(fix_nonzero, bins=mx-mn+1)
+        fix_thresh = threshold_otsu(hist=(hist, bins[1:]))
+        fix_thresh_mask = fix > fix_thresh
+
+        aligned_nonzero = aligned[aligned > 0]
+        mn, mx = aligned_nonzero.min(), aligned_nonzero.max()
+        hist, bins = np.histogram(aligned_nonzero, bins=mx-mn+1)
+        aligned_thresh = threshold_otsu(hist=(hist, bins[1:]))
+        aligned_thresh_mask = aligned > aligned_thresh
+
+        corr_mask = fix_thresh_mask * aligned_thresh_mask
+        corr = np.corrcoef(fix[corr_mask], aligned[corr_mask])[0, 1]
+        corr = max(0, corr)
 
         # XXX TEMP TEMP DEBUG
         import tifffile
@@ -348,7 +487,6 @@ def align_all_neighbors(
         neighbor_correlations.append(b)
     neighbor_transforms = np.array(neighbor_transforms)
     neighbor_correlations = np.array(neighbor_correlations)
-    neighbor_correlations = neighbor_correlations / np.max(neighbor_correlations)
 
    # XXX TEMP TEMP DEBUG
     np.save(f'./neighbor_transforms.npy', neighbor_transforms)
@@ -880,7 +1018,7 @@ def distributed_apply_stitch(
 
         # register as ready to write
         write_region = tuple(slice(a, b) for a, b in zip(fix_origin, fix_end))
-        blosc.set_nthreads(2*ncores)
+#        blosc.set_nthreads(2*ncores)
 
         # get neighbors info
         neighbor_events = []

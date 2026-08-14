@@ -257,33 +257,24 @@ def distributed_stitch_bigstitcher_xml(
     overlap_factor = (A - B) / spacing / tile_size
     overlap_factor = [(1 - x)/2 if x > 0 else 0 for x in overlap_factor]
 
-    for x, y, z in zip(tile_paths, tile_grid_positions, origins): print(x, y, z)
-    print(spacing, spacing_s2, spacing_s3)
-    print(tile_size, overlap_factor)
-
     # stitch
-#    tile_transforms = distributed_stitch_new(
-#        tile_paths,
-#        tile_grid_positions,
-#        spacing_s2,
-#        origins,
-#        overlap_factor,
-#        steps,
-#        max_iterations=max_iterations,
-#        aligned_lcc_threshold=aligned_lcc_threshold,
-#        lcc_radius=lcc_radius,
-#        tile_subpath=tile_subpath,
-#        cluster=cluster,
-#        cluster_kwargs=cluster_kwargs,
-#    )
+    tile_transforms = distributed_stitch_new(
+        tile_paths,
+        tile_grid_positions,
+        spacing_s2,
+        origins,
+        overlap_factor,
+        steps,
+        max_iterations=max_iterations,
+        aligned_lcc_threshold=aligned_lcc_threshold,
+        lcc_radius=lcc_radius,
+        tile_subpath=tile_subpath,
+        cluster=cluster,
+        cluster_kwargs=cluster_kwargs,
+    )
 
-    tile_transforms = np.load('solved_affines_inv.npy')
-
-    # POSSIBLY I NEED TO INVERT TRANSFORMS TO CONFORM TO BIGSTITCHER SPEC
+    # convert to bigstitcher conventions: tile to global coordinates in voxel units at full res scale
     tile_transforms_vox = np.linalg.inv(tile_transforms)
-
-    # THIS SEEMS CORRECT
-    # make copy of affine transforms in voxel units at full res scale
     scale_transform_rt = np.eye(4)
     scale_transform_rt[:3, :3] = np.diag(spacing)
     scale_transform_lt = np.eye(4)

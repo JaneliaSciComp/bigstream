@@ -326,15 +326,16 @@ def _align_global_data(fix_image, fix_mask_arg,
         # array (same as the non-blockwise path)
         transform = transform[...]
 
+    transform_spacing = fix_spacing / fix_image.expansion_factor
     if len(transform.shape) == 2:
-        logger.info(f'Apply affine transform: {transform}')
+        logger.info(f'Apply affine transform: {transform}, spacing: {transform_spacing}')
     else:
-        logger.info(f'Apply deform transform: {transform.shape}')
+        logger.info(f'Apply deform transform: {transform.shape}, spacing: {transform_spacing}')
     # apply transform. the static transforms carry their own spacings (a global
     # deform may have been generated at a different scale); the freshly-computed
     # transform is at the current fix scale (a matrix ignores spacing).
-    transforms_list = static_transforms + [transform,]
-    transforms_spacings = tuple(static_transforms_spacings) + (fix_spacing / fix_image.expansion_factor,)
+    transforms_list = static_transforms + [transform]
+    transforms_spacings = tuple(static_transforms_spacings) + (transform_spacing,)
     aligned = apply_transform(fix_image_array,
                               mov_image_array,
                               fix_spacing / fix_image.expansion_factor,

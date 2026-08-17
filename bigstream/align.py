@@ -1217,7 +1217,7 @@ def affine_align(
                     transform,
                     sitk.CenteredTransformInitializerFilter.MOMENTS,
                 )
-            elif initial_condition == 'CENTER_MASKS' and fix_mask is not None and mov_mask is not None:
+            elif initial_condition == 'CENTER_MASKS':
                 transform = sitk.CenteredTransformInitializer(
                     fix_mask,
                     mov_mask,

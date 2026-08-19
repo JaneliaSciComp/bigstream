@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def generate_foreground_mask(image,
                              image_spacing,
-                             image_subsampling=4,
+                             image_subsampling=(4,4,4),
                              mask_smoothing=2,
                              iterations=[40,20,10],
                              smooth_sigmas=[32,24,16],
@@ -20,8 +20,10 @@ def generate_foreground_mask(image,
                              lambda1=1,
                              lambda2=10,
                              background=None,
-                             percentile_thresh=None):
-    subsampled_image = image[::image_subsampling, ::image_subsampling, ::image_subsampling]
+                             percentile_thresh=None,
+                             final_closing=(5,5,5),
+                             final_dilation=(10,10,10)):
+    subsampled_image = image[::image_subsampling[0], ::image_subsampling[1], ::image_subsampling[2]]
     subsampled_image_spacing = image_spacing * image_subsampling
     logger.debug((
         f'Sample {image.shape} image with resolution {image_spacing} '
@@ -29,7 +31,14 @@ def generate_foreground_mask(image,
         f'using smooth_sigmas: {smooth_sigmas} and iterations: {iterations}'
     ))
     if percentile_thresh is None:
-        logger.info('Generate foreground mask using level_set.foreground_segmentation')
+        logger.info((
+            'Generate foreground mask using level_set.foreground_segmentation '
+            f'mask_smoothing: {mask_smoothing}, '
+            f'iterations: {iterations}, '
+            f'shrink factors: {shrink_factors}, '
+            f'lambda1: {lambda1}, '
+            f'lambda2: {lambda2}, '
+        ))
         mask = level_set.foreground_segmentation(
             subsampled_image, subsampled_image_spacing,
             mask_smoothing=mask_smoothing,
@@ -48,7 +57,15 @@ def generate_foreground_mask(image,
         mask = gaussian_filter(subsampled_image, smooth_sigmas[-1]) > thresh
 
     # enlarge and smooth mask
-    mask = binary_closing(mask, np.ones((10,10,10))).astype(np.uint8)
-    mask = binary_dilation(mask, np.ones((5,5,5))).astype(np.uint8)
+    mask = binary_closing(mask, np.ones(final_closing)).astype(np.uint8)
+    mask = binary_dilation(mask, np.ones(final_dilation)).astype(np.uint8)
     mask = zoom(mask, np.array(image.shape) / subsampled_image.shape, order=0)
-    return mask, subsampled_image_spacing / image_subsampling
+    mask_spacing = subsampled_image_spacing / image_subsampling
+    if mask.any():
+        logger.info((
+            f'Complete foreground mask with shape {mask.shape} for {image.shape} image '
+            f'mask spacing: {mask_spacing}, image spacing: {image_spacing} '
+        ))
+    else:
+        logger.warning(f'No foreground mask found for {image.shape} image')
+    return mask, mask_spacing

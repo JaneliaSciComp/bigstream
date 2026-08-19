@@ -85,12 +85,12 @@ def segment(
         Foreground segmentation, same shape as image, uint8
     """
 
+    if threshold is not None:
+        image[image < threshold] = 0
     if init is None:
-        if threshold is not None:
-            logger.info(f'Use provided init threshold {threshold}')
-            init = image > threshold
-        else:
-            init = "checkerboard"
+        init = np.zeros_like(image, dtype=np.uint8)
+        bounds = np.ceil(np.array(image.shape) * 0.1).astype(int)
+        init[tuple(slice(b, -b) for b in bounds)] = 1
     else:
         logger.info(f'Use initial mask: {init.shape}')
 
@@ -230,9 +230,10 @@ def foreground_segmentation(
 
     # ensure output is on correct grid
     if mask.shape != image.shape:
-        logger.info(f'Final mask reshape {mask.shape} -> {image.shape}')
-        zoom_factors = [x/y for x, y in zip(image.shape, mask.shape)]
+        to_reshape = mask.shape
+        zoom_factors = [x/y for x, y in zip(image.shape, to_reshape)]
         mask = zoom(mask, zoom_factors, order=0)
+        logger.info(f'Final mask reshape {to_reshape} to {image.shape} -> {mask.shape}')
     return mask
 
 

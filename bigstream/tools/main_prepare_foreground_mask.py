@@ -48,8 +48,9 @@ def _define_args():
 
     args_parser.add_argument('--mask-subsampling',
                             dest='mask_subsampling',
-                            type=int,
-                            default=2,
+                            type=inttuple,
+                            default=(2,),
+                            metavar='sx,sy,sx',
                             help='Mask subsampling')
     args_parser.add_argument('--mask-smoothing',
                              dest='mask_smoothing',
@@ -171,38 +172,45 @@ def _generate_foreground_mask(args):
     logger.debug(f'Read timeindex: {image_data.image_timeindex}, channel: {image_data.image_channel} image of shape: {image_array.shape}')
 
     if not args.mask_iterations:
-        mask_iterations = [10, 20, 40]
+        mask_iterations = [40, 20, 10]
     else:
         mask_iterations = list(args.mask_iterations)
 
     if not args.mask_smooth_sigmas:
-        smooth_sigmas = [8, 16, 24]
+        smooth_sigmas = [24, 16, 8]
     elif len(args.mask_smooth_sigmas) < len(mask_iterations):
-        smooth_sigmas = list(args.mask_smooth_sigmas)
-        n_missing = len(mask_iterations) - len(smooth_sigmas)
-        if n_missing > 0:
-            last_sigma = smooth_sigmas[-1]
-            smooth_sigmas.extend(last_sigma + 8 * i for i in range(1, n_missing + 1))
+        raise ValueError((
+            f'Mask smooth sigmas {args.mask_smooth_sigmas} should have the same number of values '
+            f'as the mask_iterations {mask_iterations} ({len(args.mask_smooth_sigmas)} < {len(mask_iterations)}) '
+        ))
     else:
         smooth_sigmas = args.mask_smooth_sigmas[0:len(mask_iterations)]
 
     if not args.mask_shrink_factors:
-        mask_shrink_factors = (1,) * len(mask_iterations)
+        mask_shrink_factors = tuple(1 << i for i in range(0, len(mask_iterations)))[::-1]
     elif len(args.mask_shrink_factors) < len(mask_iterations):
-        mask_shrink_factors = (1,) * (len(mask_iterations) - len(args.mask_shrink_factors)) + args.mask_shrink_factors
+        # append 1
+        mask_shrink_factors = args.mask_shrink_factors + (1,) * (len(mask_iterations) - len(args.mask_shrink_factors))
     else:
         mask_shrink_factors = args.mask_shrink_factors[0:len(mask_iterations)]
+
+    if not args.mask_subsampling:
+        mask_subsampling = (2,) * image_array.ndim
+    elif len(args.mask_subsampling) < image_array.ndim:
+        mask_subsampling = (args.mask_subsampling + (1,) * (image_array.ndim - len(args.mask_subsampling)))[::-1]
+    else:
+        mask_subsampling = args.mask_subsampling[::-1]
 
     mask, mask_spacing = generate_foreground_mask(
         image_array,
         get_spatial_values(image_data.voxel_spacing),
-        image_subsampling=args.mask_subsampling,
+        image_subsampling=mask_subsampling,
         mask_smoothing=args.mask_smoothing,
         lambda1=args.mask_lambda1,
         lambda2=args.mask_lambda2,
-        iterations=mask_iterations[::-1],
-        smooth_sigmas=smooth_sigmas[::-1],
-        shrink_factors=mask_shrink_factors[::-1],
+        iterations=mask_iterations,
+        smooth_sigmas=smooth_sigmas,
+        shrink_factors=mask_shrink_factors,
         background=args.background,
         percentile_thresh=args.mask_thresh_percentile,
     )

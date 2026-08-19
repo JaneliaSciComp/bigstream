@@ -14,6 +14,8 @@ from bigstream.diagnostics import deform_field_diagnostics
 
 from fishspot.filter import apply_foreground_mask
 
+from scipy.ndimage import zoom
+
 
 logger = logging.getLogger(__name__)
 
@@ -56,15 +58,31 @@ def realize_mask(image, mask, mask_percentile=(), roi=None):
         if len(mask_percentile) != 2:
             raise ValueError(f'Invalid mask percentile {mask_percentile} - must be a tuple (low,high)')
         low_thresh, high_thresh = np.percentile(image, tuple(mask_percentile))
-        result = ((image > low_thresh) * (image < high_thresh)).astype(np.uint8)
-    elif isinstance(mask, np.ndarray):
-        result = (mask > 0).astype(np.uint8)
-    elif isinstance(mask, (tuple, list)):
-        result = np.isin(image, mask, invert=True).astype(np.uint8)
-    elif callable(mask):
-        result = mask(image).astype(np.uint8)
+        intensity_filter = ((image > low_thresh) * (image < high_thresh)).astype(np.uint8)
     else:
+        intensity_filter = None
+
+    if mask is not None and isinstance(mask, np.ndarray):
+        mask_filter = (mask > 0).astype(np.uint8)
+    elif isinstance(mask, (tuple, list)):
+        mask_filter = np.isin(image, mask, invert=True).astype(np.uint8)
+    elif callable(mask):
+        mask_filter = mask(image).astype(np.uint8)
+    else:
+        mask_filter = None
+
+    if mask_filter is not None and mask_filter.shape != image.shape:
+        logger.info(f'Reshape mask filter {mask_filter.shape} to match image shape: {image.shape}')
+        mask_filter = zoom(mask_filter, [x/y for x,y in zip(image.shape, mask_filter.shape)], order=0)
+
+    if intensity_filter is None and mask_filter is None:
         result = None
+    elif mask_filter is None:
+        result = intensity_filter
+    elif intensity_filter is None:
+        result = mask_filter
+    else:
+        result = mask_filter * intensity_filter
 
     # restrict the foreground to the ROI box
     if roi is not None:

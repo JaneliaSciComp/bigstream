@@ -211,3 +211,21 @@ def calc_downsampling_attr(downsampling):
         return downsampling
 
     return list(downsampling)[::-1]
+
+
+def clip_arr_to_roi(arr, roi):
+    if roi is not None and arr is not None:
+        spatial_ndim = arr.ndim
+        roi_min = roi[:spatial_ndim]
+        roi_max = roi[spatial_ndim:spatial_ndim * 2]
+        for axis, (start, stop) in enumerate(zip(roi_min, roi_max)):
+            start = max(0, int(np.floor(start)))
+            stop = min(arr.shape[axis], int(np.ceil(stop)))
+
+            outside_low = [slice(None)] * arr.ndim
+            outside_low[axis] = slice(None, start)
+            arr[tuple(outside_low)] = 0
+
+            outside_high = [slice(None)] * arr.ndim
+            outside_high[axis] = slice(stop, None)
+            arr[tuple(outside_high)] = 0

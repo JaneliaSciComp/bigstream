@@ -2,8 +2,9 @@ import argparse
 import logging
 import numpy as np
 import os
+import tempfile
 import bigstream.io_utility as io_utility
-import bigstream.utility as ut
+import bigstream.transform as bst
 import zarr
 
 from dask.distributed import (Client, LocalCluster)
@@ -14,7 +15,8 @@ from bigstream.configure_bigstream import (configure_logging,
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.io_utility import read_block
 from bigstream.image_data import (ImageData,
-                                  calc_full_voxel_resolution_attr, calc_downsampling_attr)
+                                  calc_full_voxel_resolution_attr, calc_downsampling_attr,
+                                  clip_arr_to_roi)
 from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 from bigstream.transform import (apply_transform,
                                  invert_displacement_vector_field)
@@ -46,6 +48,10 @@ def _define_args(args_descriptor):
                              dest='reuse_existing_transform',
                              action='store_true',
                              help='Do not recompute global transform if found')
+    args_parser.add_argument('--save-composed-transform',
+                             dest='save_composed_transform',
+                             action='store_true',
+                             help='Persisted global transformation is composed with the provided static transformations')
 
     args_parser.add_argument('--compression', '--compressor',
                              dest='compressor',
@@ -132,6 +138,7 @@ def _run_global_align(reg_args:RegistrationInputs,
                       compressor_opts,
                       zarr_format,
                       sharding_factor=None,
+                      save_composed_transform=False,
                       inv_transform_args=None):
     global_steps, _ = get_algorithm_parameters(align_config,
                                                'global_align',
@@ -140,7 +147,7 @@ def _run_global_align(reg_args:RegistrationInputs,
         logger.info('Skip global alignment because no global steps were specified.')
         return None
 
-    fix, fix_mask, mov, mov_mask, roi = get_input_images(reg_args)
+    fix, fix_mask, mov, mov_mask, roi, fix_mask_roi, mov_mask_roi = get_input_images(reg_args)
     if fix.has_data() and mov.has_data():
         # compose mov origin transform from user affine + OME translations
         mov_origin_transform = compose_origin_transform(
@@ -152,9 +159,11 @@ def _run_global_align(reg_args:RegistrationInputs,
         transform, aligned = _align_global_data(fix, fix_mask,
                                                 mov, mov_mask,
                                                 roi,
+                                                fix_mask_roi, mov_mask_roi,
                                                 global_steps,
                                                 reg_args.processing_size,
                                                 reg_args.processing_overlap_factor,
+                                                reg_args.foreground_percentage,
                                                 mov_origin_transform,
                                                 static_transforms,
                                                 static_transforms_spacings)
@@ -167,10 +176,10 @@ def _run_global_align(reg_args:RegistrationInputs,
             reg_args,
             fix,
             aligned,
-            mov.get_attr('axes'),
-            mov.get_attr('coordinateTransformations'),
-            mov.voxel_spacing,
-            mov.voxel_downsampling,
+            fix.get_attr('axes'),
+            fix.get_attr('coordinateTransformations'),
+            fix.voxel_spacing,
+            fix.voxel_downsampling,
             compressor,
             compressor_opts,
             zarr_format,
@@ -184,7 +193,17 @@ def _run_global_align(reg_args:RegistrationInputs,
         else:
             transform_blocksize = reg_args.output_blocksize[::-1]
 
-        _save_transform(transform,
+        if save_composed_transform:
+            if len(static_transforms) > 0:
+                logger.info(f'Composing global transformation result with {len(static_transforms)} static transforms')
+                final_transforms = static_transforms + [transform]
+                final_transforms_spacings = static_transforms_spacings + (fix.voxel_spacing,)
+                transform_to_save = bst.compose_transform_list(final_transforms, final_transforms_spacings)
+            else:
+                transform_to_save = transform
+        else:
+            transform_to_save = transform
+        _save_transform(transform_to_save,
                         reg_args.transform_path(),
                         transform_subpath,
                         fix_image=fix,
@@ -219,19 +238,31 @@ def _run_global_align(reg_args:RegistrationInputs,
 def _align_global_data(fix_image, fix_mask_arg,
                        mov_image, mov_mask_arg,
                        roi,
+                       fix_mask_roi, mov_mask_roi,
                        steps,
                        processing_size,
                        processing_overlap_factor,
+                       foreground_percentage,
                        mov_origin_transform,
                        static_transforms,
                        static_transforms_spacings=()):
     logger.info('Read image data for global alignment')
     if isinstance(fix_mask_arg, ImageData):
-        fix_mask = fix_mask_arg.image_array
+        logger.info(f'Alignment fix mask: {fix_mask_arg}')
+        if fix_mask_roi:
+            logger.info(f'Clip fix mask to roi: {fix_mask_roi}')
+            fix_mask = clip_arr_to_roi(fix_mask_arg.image_array[...], fix_mask_roi)
+        else:
+            fix_mask = fix_mask_arg.image_array[...]
     else:
         fix_mask = fix_mask_arg
     if isinstance(mov_mask_arg, ImageData):
-        mov_mask = mov_mask_arg.image_array
+        logger.info(f'Alignment mov mask: {mov_mask_arg}')
+        if mov_mask_roi:
+            logger.info(f'Clip mov mask to roi: {mov_mask_roi}')
+            mov_mask = clip_arr_to_roi(mov_mask_arg.image_array[...], mov_mask_roi)
+        else:
+            mov_mask = mov_mask_arg.image_array[...]
     else:
         mov_mask = mov_mask_arg
 
@@ -281,11 +312,22 @@ def _align_global_data(fix_image, fix_mask_arg,
         # shape, so it must be a zarr array (NOT a dask array, whose .chunks is a
         # tuple-of-tuples and which is not writable block-by-block). Chunk size is
         # the processing block size (zyx) plus the trailing vector axis.
-        vector_ndim = int(fix_image.spatial_ndim)
+        #
+        # It must also be an ON-DISK zarr, not an in-memory one: dask/distributed
+        # serializes the task closure (even with a threaded, processes=False
+        # cluster), so an in-memory zarr would be copied per worker and the block
+        # writes would never reach the array the main process reads back -> the
+        # assembled field would come back all zeros. An on-disk zarr is shared by
+        # path across workers, so the writes persist.
         block_zyx = tuple(int(s) for s in processing_size[::-1])
-        transform = zarr.zeros(
-            shape=tuple(int(d) for d in fix_image.spatial_dims) + (vector_ndim,),
-            chunks=block_zyx + (vector_ndim,),
+        displacement_vector_ndim = int(fix_image.spatial_ndim)
+        transform_tmp_dir = tempfile.TemporaryDirectory(prefix='.global_deform_',
+                                                        dir=os.getcwd())
+        transform = zarr.open(
+            os.path.join(transform_tmp_dir.name, 'global-deform-field.zarr'),
+            mode='w',
+            shape=tuple(int(d) for d in fix_image.spatial_dims) + (displacement_vector_ndim,),
+            chunks=block_zyx + (displacement_vector_ndim,),
             dtype=np.float32,
         )
         logger.info((
@@ -314,6 +356,7 @@ def _align_global_data(fix_image, fix_mask_arg,
             fix_mask=fix_mask_arg,
             mov_mask=mov_mask_arg,
             roi=roi,
+            foreground_percentage=foreground_percentage,
             mov_origin_transform=mov_origin_transform,
             static_transform_list=static_transforms,
             output_transform=transform,
@@ -323,8 +366,11 @@ def _align_global_data(fix_image, fix_mask_arg,
             f'for the alignment of {mov_image} to {fix_image} -> {deform_ok} '
         ))
         # materialize the assembled field so downstream apply/save see a numpy
-        # array (same as the non-blockwise path)
+        # array (same as the non-blockwise path), then drop the temp store
         transform = transform[...]
+        transform_tmp_dir.cleanup()
+        if not transform.any():
+            logger.info('Got an empty deformation field (all zeros)')
 
     transform_spacing = fix_spacing / fix_image.expansion_factor
     if len(transform.shape) == 2:
@@ -352,7 +398,7 @@ def _apply_global_transform(reg_args:RegistrationInputs,
                             compressor_opts,
                             zarr_format,
                             sharding_factor=None):
-    (fix_image, _, mov_image, _, _) = get_input_images(reg_args)
+    (fix_image, _, mov_image, _, _, _, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
         full_image_coords = tuple(slice(None) for _ in range(fix_image.spatial_ndim))
         fix_image_array = read_block(
@@ -387,10 +433,10 @@ def _apply_global_transform(reg_args:RegistrationInputs,
             reg_args,
             fix_image,
             aligned,
-            mov_image.get_attr('axes'),
-            mov_image.get_attr('coordinateTransformations'),
-            mov_image.voxel_spacing,
-            mov_image.voxel_downsampling,
+            fix_image.get_attr('axes'),
+            fix_image.get_attr('coordinateTransformations'),
+            fix_image.voxel_spacing,
+            fix_image.voxel_downsampling,
             compressor,
             compressor_opts,
             zarr_format,
@@ -582,8 +628,8 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          aligned_array,
                          axes,
                          dataset_transformations,
-                         voxel_resolution,
-                         downsampling,
+                         aligned_spacing,
+                         aligned_downsampling,
                          compressor,
                          compressor_opts,
                          zarr_format,
@@ -606,6 +652,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
         })
 
     if align_path:
+        logger.info(f'Prepare to save global alignment to {align_path}')
         align_attrs = io_utility.prepare_parent_group_attrs(
             align_path,
             reg_args.align_dataset(),
@@ -656,9 +703,9 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             for_timeindex=reg_args.get_align_timeindex(),
             for_channel=reg_args.get_align_channel(),
             parent_attrs=align_attrs,
-            pixelResolution=calc_full_voxel_resolution_attr(voxel_resolution,
-                                                            downsampling),
-            downsamplingFactors=calc_downsampling_attr(downsampling),
+            pixelResolution=calc_full_voxel_resolution_attr(aligned_spacing,
+                                                            aligned_downsampling),
+            downsamplingFactors=calc_downsampling_attr(aligned_downsampling),
             zarr_format=zarr_format,
             shard_shape=aligned_dataset_shardsize,
         )
@@ -726,6 +773,7 @@ def main():
                           args.compressor_opts,
                           output_zarr_format,
                           sharding_factor=args.output_sharding_factor,
+                          save_composed_transform=args.save_composed_transform,
                           inv_transform_args=inv_transform_args)
     else:
         # global transform found -> just apply it

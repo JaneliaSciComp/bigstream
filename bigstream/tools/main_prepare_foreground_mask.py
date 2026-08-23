@@ -50,7 +50,7 @@ def _define_args():
                             dest='mask_subsampling',
                             type=inttuple,
                             default=(2,),
-                            metavar='sx,sy,sx',
+                            metavar='sx,sy,sz',
                             help='Mask subsampling')
     args_parser.add_argument('--mask-smoothing',
                              dest='mask_smoothing',
@@ -72,6 +72,12 @@ def _define_args():
                              type=inttuple,
                              default=(),
                              help='Shrink factor per sigma/iteration')
+    args_parser.add_argument('--mask-dilation',
+                            dest='mask_dilation',
+                            type=inttuple,
+                            default=(10,),
+                            metavar='dx,dy,dz',
+                            help='Mask final dilation')
     args_parser.add_argument('--lambda1', '--mask-lambda1',
                              dest='mask_lambda1',
                              type=float,
@@ -197,9 +203,18 @@ def _generate_foreground_mask(args):
     if not args.mask_subsampling:
         mask_subsampling = (2,) * image_array.ndim
     elif len(args.mask_subsampling) < image_array.ndim:
-        mask_subsampling = (args.mask_subsampling + (1,) * (image_array.ndim - len(args.mask_subsampling)))[::-1]
+        repeated_value = args.mask_subsampling[-1] # repeat last value
+        mask_subsampling = (args.mask_subsampling + (repeated_value,) * (image_array.ndim - len(args.mask_subsampling)))[::-1]
     else:
         mask_subsampling = args.mask_subsampling[::-1]
+
+    if not args.mask_dilation:
+        mask_dilation = (10,) * image_array.ndim
+    elif len(args.mask_dilation) < image_array.ndim:
+        repeated_value = args.mask_dilation[-1] # repeat last value
+        mask_dilation = (args.mask_dilation + (repeated_value,) * (image_array.ndim - len(args.mask_dilation)))[::-1]
+    else:
+        mask_dilation = args.mask_dilation[::-1]
 
     mask, mask_spacing = generate_foreground_mask(
         image_array,
@@ -213,6 +228,7 @@ def _generate_foreground_mask(args):
         shrink_factors=mask_shrink_factors,
         background=args.background,
         percentile_thresh=args.mask_thresh_percentile,
+        final_dilation=mask_dilation,
     )
 
     logger.info(f'Write {mask.shape} mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')

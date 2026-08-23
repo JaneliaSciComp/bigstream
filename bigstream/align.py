@@ -2,6 +2,7 @@ import cv2
 import logging
 import numpy as np
 import SimpleITK as sitk
+import zarr
 
 import bigstream.transform as bst
 import bigstream.utility as ut
@@ -62,13 +63,16 @@ def realize_mask(image, mask, mask_percentile=(), roi=None):
     else:
         intensity_filter = None
 
-    if mask is not None and isinstance(mask, np.ndarray):
+    if mask is None:
+        mask_filter = None
+    elif isinstance(mask, np.ndarray) or isinstance(mask, zarr.Array):
         mask_filter = (mask > 0).astype(np.uint8)
     elif isinstance(mask, (tuple, list)):
         mask_filter = np.isin(image, mask, invert=True).astype(np.uint8)
     elif callable(mask):
         mask_filter = mask(image).astype(np.uint8)
     else:
+        logger.warning(f'Unsupported mask type {type(mask)}')
         mask_filter = None
 
     if mask_filter is not None and mask_filter.shape != image.shape:
@@ -1161,7 +1165,8 @@ def affine_align(
     # determine the correct default
     if default is None:
         default = np.eye(fix.ndim + 1)
-    initial_transform_given = isinstance(initial_condition, np.ndarray)
+    initial_transform_given = (isinstance(initial_condition, np.ndarray) or
+                               isinstance(initial_condition, zarr.Array))
     if initial_transform_given and np.all(default == np.eye(fix.ndim + 1)):
         default = initial_condition
 
@@ -1174,7 +1179,9 @@ def affine_align(
 
     # realize masks
     fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
+    logger.debug(f'Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
     mov_mask = realize_mask(mov, mov_mask)
+    logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip sample and convert inputs to sitk images
     X = apply_alignment_spacing(
@@ -1235,13 +1242,15 @@ def affine_align(
                     transform,
                     sitk.CenteredTransformInitializerFilter.MOMENTS,
                 )
-            elif initial_condition == 'CENTER_MASKS':
+                logger.debug(f'CENTER initial condition: {transform}')
+            elif initial_condition == 'CENTER_MASKS' and fix_mask is not None and mov_mask is not None:
                 transform = sitk.CenteredTransformInitializer(
                     fix_mask,
                     mov_mask,
                     transform,
                     sitk.CenteredTransformInitializerFilter.MOMENTS,
                 )
+                logger.debug(f'CENTER_MASKS initial condition: {transform}')
         except RuntimeError as e:
             logger.warning(
                 f'{context} centered transform initializer failed ({e}); '
@@ -1482,15 +1491,15 @@ def deformable_align(
     transform = sitk.BSplineTransformInitializer(
         image1=fix, transformDomainMeshSize=initial_cp_grid, order=3,
     )
-    bspline_control_point_levels = control_point_levels[::-1]
+    bspline_cp_scale_levels = control_point_levels[::-1]
     logger.debug((
         f'{context} '
-        f'BSpline control point levels: {bspline_control_point_levels}, '
+        f'BSpline control point levels: {bspline_cp_scale_levels}, '
         f'mesh size: {fix.GetSize()}*{fix.GetSpacing()}/({control_point_spacing_xyz}*{control_point_levels[0]})={initial_cp_grid}, '
         f'BSpline transform {transform} '
     ))
     irm.SetInitialTransformAsBSpline(
-        transform, inPlace=True, scaleFactors=bspline_control_point_levels,
+        transform, inPlace=True, scaleFactors=bspline_cp_scale_levels,
     )
 
     # set initial static transforms
@@ -1686,7 +1695,7 @@ def alignment_pipeline(
     # check default case
     if fix is None or mov is None:
         ndim = len(fix_spacing)
-        field_steps = {'deform', 'demons', 'elastix'}
+        field_steps = {'deform', 'demons', 'elastix_deform'}
         if field_steps & {x[0] for x in steps}:
             # if a field-producing step is present, create a zero displacement field
             shape = fix.shape if fix is not None else mov.shape
@@ -1697,7 +1706,7 @@ def alignment_pipeline(
 
     # lazy imports so bigstream.align has no hard dependency on bigstream.contrib
     from bigstream.contrib.demons_align import demons_align
-    from bigstream.contrib.elastix_align import elastix_align
+    from bigstream.contrib.elastix_align import elastix_affine_align, elastix_deformable_align
 
     full_fix_shape = fix.shape
     fix_spacing = np.asarray(fix_spacing, dtype=np.float64)
@@ -1723,7 +1732,8 @@ def alignment_pipeline(
              'affine':lambda **c: affine_align(*a, **{**b, **c}),
              'deform':lambda **c: deformable_align(*a, **{**b, **c})[1],
              'demons':lambda **c: demons_align(*a, **{**b, **c})[1],
-             'elastix':lambda **c: elastix_align(*a, **{**b, **c})[1],
+             'elastix_affine':lambda **c: elastix_affine_align(*a, **{**b, **c}),
+             'elastix_deform':lambda **c: elastix_deformable_align(*a, **{**b, **c})[1],
              }
 
     # loop over steps
@@ -1739,8 +1749,7 @@ def alignment_pipeline(
             for t in arguments['static_transform_list']
         ]
         logger.debug(f'Run {context} {alignment} {printable_args}')
-        alignment_function = alignment.split('-')[0]
-        alignment_result = align[alignment_function](context=f'{alignment} {context}', **arguments)
+        alignment_result = align[alignment](context=f'{alignment} {context}', **arguments)
         logger.debug(f'Completed {context} {alignment} {printable_args}')
         new_transforms.append(alignment_result)
 
@@ -1822,7 +1831,8 @@ def ransac_masks_meta_align(
         'affine' : run `affine_align`
         'deform' : run `deformable_align`
         'demons' : run `demons_align`
-        'elastix' : run `elastix_align`
+        'elastix_affine' : run `elastix_affine_align`
+        'elastix_deform' : run `elastix_deformable_align`
         For each tuple, the dict specifies the arguments to that alignment function
         Arguments specified here override any global arguments given through kwargs
         for their specific step only.

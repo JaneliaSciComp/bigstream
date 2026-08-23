@@ -51,11 +51,6 @@ def _define_args(local_descriptor):
                              dest='local_transform_overlap_factor',
                              type=float,
                              help='partition overlap when splitting the work for applying a transformation - a fractional number between 0 - 1')
-    args_parser.add_argument('--foreground-percentage', '--foreground_percentage',
-                             dest='foreground_percentage',
-                             default=0.0,
-                             type=float,
-                             help='Signal percentage per block in order for the block to be considered')
 
     args_parser.add_argument('--inv-step',
                              dest='inv_step',
@@ -203,7 +198,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
 
     logger.info(f'Run local registration with: {reg_args}, {local_steps}')
 
-    (fix_image, fix_mask, mov_image, mov_mask, roi) = get_input_images(reg_args)
+    (fix_image, fix_mask, mov_image, mov_mask, roi, fix_mask_roi, mov_mask_roi) = get_input_images(reg_args)
     if mov_image.ndim != fix_image.ndim:
         # only check for ndim and not shape because as it happens 
         # the test data has different shape for fix.highres and mov.highres
@@ -744,7 +739,7 @@ def main():
         zarr_format=output_zarr_format,
         sharding_factor=args.output_sharding_factor,
         verbose=args.verbose,
-        foreground_percentage=args.foreground_percentage,
+        foreground_percentage=reg_inputs.foreground_percentage,
         max_concurrent_zarr_reads=args.max_concurrent_zarr_reads,
         max_cluster_jobs=args.max_cluster_jobs,
         display_displacement_diagnostics=args.display_displacement_diagnostics,

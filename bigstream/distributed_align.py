@@ -90,25 +90,25 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     mov_stop = np.max(np.ceil(mov_block_coords).astype(int), axis=0) + 1
 
     logger.debug((
-        f'Block {block_index} : '
-        f'non-truncated moving block start (voxel coords): {mov_start} '
-        f'non-truncated moving block stop (voxel coords): {mov_stop} '
+        f'Block {block_index} \n'
+        f'non-truncated moving block start (voxel coords): {mov_start}\n'
+        f'non-truncated moving block stop (voxel coords): {mov_stop}'
     ))
 
     mov_start = np.maximum(0, mov_start)
-    mov_stop = np.minimum(np.array(mov_shape), mov_stop)
+    mov_stop = np.minimum(np.array(mov_shape)-1, mov_stop)
     mov_slices = tuple(slice(a, b) for a, b in zip(mov_start, mov_stop))
 
     # get moving crop origin relative to fixed crop
     mov_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
 
     logger.debug((
-        f'Block {block_index} : '
-        f'fix voxel coords:\n {fix_block_voxel_coords}\n'
-        f'fix phys coords:\n {fix_block_phys_coords}\n'
-        f'mov origin relative to fix origin phys coords: {mov_origin}, '
-        f'mov block slices {mov_slices}, '
-        f'mov phys coords: \n{mov_block_phys_coords}\n'
+        f'Block {block_index}:\n'
+        f'fix block voxel coords:\n{fix_block_voxel_coords}\n'
+        f'fix block phys coords:\n{fix_block_phys_coords}\n'
+        f'mov origin relative to fix origin phys coords: {mov_origin}\n'
+        f'mov block voxel coords {mov_slices}\n'
+        f'mov block phys coords:\n{mov_block_phys_coords}\n'
     ))
 
     # read masks
@@ -121,6 +121,9 @@ def _prepare_compute_block_spatial_transform_params(block_info,
         fix_blockmask_coords = tuple(slice(a, b)
                                      for a, b in zip(fix_mask_start,
                                                      fix_mask_stop))
+        logger.debug((
+            f'Fix mask block {block_index} coords: {fix_blockmask_coords}'
+        ))
 
     if mov_fullmask_shape is not None:
         ratio = np.array(mov_fullmask_shape) / mov_shape
@@ -130,11 +133,14 @@ def _prepare_compute_block_spatial_transform_params(block_info,
             mov_blockmask_coords = tuple(slice(a, b)
                                         for a, b in zip(mov_mask_start,
                                                         mov_mask_stop))
+        logger.debug((
+            f'Mov mask block {block_index} coords: {mov_blockmask_coords}'
+        ))
 
     logger.debug((
         'Return blocks data: '
-        f'{block_index}, {fix_block_coords},'
-        f'{mov_origin},'
+        f'{block_index}, {fix_block_coords}, '
+        f'{mov_origin}, {mov_slices}, '
         f'{fix_blockmask_coords}, {mov_blockmask_coords}'
     ))
 
@@ -158,14 +164,14 @@ def _read_blocks_for_processing(blocks_info,
                                 mask_reader=ThrottledArraySliceReader()):
     # blocks_info is a tuple containing the fields below 
     # and the extract method knows to get the coords of the block to be read
-    #    block_index,
-    #    fix_block_coords,
-    #    fix_block_neighbors,
-    #    mov_block_coords,
-    #    fix_mask_block_coords,
-    #    mov_mask_block_coords,
-    #    origin,
-    #    block_transforms
+    #    0:block_index,
+    #    1:fix_block_coords,
+    #    2:fix_block_neighbors,
+    #    3:mov_block_coords,
+    #    4:fix_mask_block_coords,
+    #    5:mov_mask_block_coords,
+    #    6:mov_origin,
+    #    7:block_transforms
     logger.debug(f'Read blocks: {blocks_info}')
     fix_block = _read_imagedata_block(blocks_info[1], fix, fix_block_reader)
 
@@ -212,6 +218,7 @@ def _read_imagedata_block(block_coords, image_data, image_block_reader,
         b = None
     if b is not None:
         if np.issubdtype(b.dtype, np.floating):
+            logger.debug(f'Convert block at {block_coords} to np.float32')
             return b.astype(np.float32)
     return b
 
@@ -392,18 +399,20 @@ def _get_transform_weights(block_index,
     logger.debug(f'Adjust transform for {block_index}')
 
     # create the standard weights array
-    core = tuple(x - 2*y + 2 for x, y in zip(block_size, block_overlaps))
-    pad = tuple((2*y - 1, 2*y - 1) for y in block_overlaps)
+    core = tuple(max(x - 2*y + 2, 0) for x, y in zip(block_size, block_overlaps))
+    pad = tuple((max(2*y - 1, 0), max(2*y - 1, 0)) for y in block_overlaps)
     weights = np.pad(np.ones(core, dtype=np.float64), pad, mode='linear_ramp')
 
     # rebalance if any neighbors are missing
     if not np.all(list(block_neighbors.values())):
-        logger.debug(f'Rebalance transform weights for {block_index}')
+        logger.debug(f'Rebalance transform {weights.shape} weights for {block_index}')
         # define overlap slices
         slices = {}
         slices[-1] = tuple(slice(0, 2*y) for y in block_overlaps)
         slices[0] = (slice(None),) * len(block_overlaps)
-        slices[1] = tuple(slice(-2*y, None) for y in block_overlaps)
+        # select the last 2*y elements per axis; index from the shape (not -2*y)
+        # so a zero-overlap axis yields an empty slice instead of the whole axis
+        slices[1] = tuple(slice(s - 2*y, s) for y, s in zip(block_overlaps, weights.shape))
 
         missing_weights = np.zeros_like(weights)
         for neighbor, flag in block_neighbors.items():
@@ -423,6 +432,10 @@ def _get_transform_weights(block_index,
     # crop weights if block is on edge of domain
     block_dim = len(block_index)
     for i in range(block_dim):
+        # no overlap padding on this axis -> nothing to crop. Guard also avoids
+        # slice(None, -0) == slice(None, 0), which would empty the last block.
+        if block_overlaps[i] <= 0:
+            continue
         region = [slice(None),]*block_dim
         if block_index[i] == 0:
             region[i] = slice(block_overlaps[i], None)
@@ -543,15 +556,20 @@ def distributed_alignment_pipeline(
         the displacement vector.
     """
 
-    # there's no need to convert anything to a zarr array 
-    # since they are already zarr arrays
-    logger.info(f'Run distributed alignment with: {steps}')
-
     # determine fixed image slices for blocking
     # For 4-D or 5-D images we only use the spatial dimensions
     # to partition the work
     fix_spatial_dims = fix_image.spatial_dims
     mov_spatial_dims = mov_image.spatial_dims
+
+    # there's no need to convert anything to a zarr array 
+    # since they are already zarr arrays
+    logger.info((
+        f'Run distributed alignment with: {steps} for aligning '
+        f'{mov_spatial_dims} moving image to '
+        f'{fix_spatial_dims} fix image '
+    ))
+
     # masks are binary foreground images only (the ROI is a separate parameter)
     if fix_mask is not None:
         fix_mask_image = as_image_data(fix_mask)
@@ -615,6 +633,7 @@ def distributed_alignment_pipeline(
             fix_mask_block_coords = tuple(slice(a, b)
                                                 for a, b in zip(mask_start, mask_stop))
             fix_mask_crop = _read_imagedata_block(fix_mask_block_coords, fix_mask_image, ThrottledArraySliceReader(max_concurrent_reads))
+            logger.info(f'{bi} read fix mask {fix_mask_crop.shape} block at {fix_mask_block_coords} from {fix_mask_image.shape} mask image')
             foreground_ratio = np.sum(fix_mask_crop) / np.prod(fix_mask_crop.shape)
             logger.debug(f'Block {bi} fg ratio: {foreground_ratio}')
             if foreground_ratio < foreground_percentage:

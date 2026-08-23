@@ -82,11 +82,11 @@ def blob_detection(
         processed_image = winsorize(processed_image, limits=winsorize_limits,
                                     inplace=True)
         done_winsorize_time = time.time()
-        logger.debug(f'Winsorization completed in {done_winsorize_time-start_time}s')
+        logger.debug(f'Clipped intensities (winsorized) to {winsorize_limits} in {done_winsorize_time-start_time}s')
     if background_subtract:
         processed_image = white_tophat(processed_image, max_blob_radius)
         done_tophat_time = time.time()
-        logger.debug(f'White top hat completed in {done_tophat_time-start_time}s')
+        logger.debug(f'Subtracted background in {done_tophat_time-start_time}s')
 
     spots = blob_detect_method(
         processed_image,

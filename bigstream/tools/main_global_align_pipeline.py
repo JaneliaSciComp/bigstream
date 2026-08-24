@@ -438,6 +438,10 @@ def _prealign(fix, mov,
               prealign_steps,
               static_transforms=[],
               downsample=1):
+    """
+    Really rough fix and mov image registration to give better chance of 
+    success to the next step.
+    """
     logger.info((
         f'Prealign {fix.shape} image to {mov.shape} image '
         f'fix spacing {fix_spacing}, mov spacing {mov_spacing} '

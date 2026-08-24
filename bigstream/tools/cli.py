@@ -296,6 +296,10 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       type=inttuple,
                       help='Alignment blocksize')
 
+    args.add_argument(args_descriptor.argflag('prealign-steps'),
+                      dest=args_descriptor.argdest('prealign_steps'),
+                      type=stringlist,
+                      help='Pre-registration steps')
     args.add_argument(args_descriptor.argflag('registration-steps'),
                       dest=args_descriptor.argdest('registration_steps'),
                       type=stringlist,
@@ -318,7 +322,9 @@ def get_algorithm_parameters(config_filename, context, steps):
             logger.info(f'Final config {config}')
     else:
         config = default_config
-    context_config = config[context]
+    # a missing section (e.g. an optional 'global_prealign') is treated as empty
+    # rather than raising KeyError, so callers can request it unconditionally
+    context_config = config.get(context, {})
     align_pipeline = []
     if steps and len(steps) > 0:
         # the steps are defined
@@ -376,6 +382,7 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'align_timeindex', registration_args)
     _extract_arg(args, args_descriptor, 'align_channel', registration_args)
     _extract_arg(args, args_descriptor, 'align_blocksize', registration_args)
+    _extract_arg(args, args_descriptor, 'prealign_steps', registration_args)
     _extract_arg(args, args_descriptor, 'registration_steps', registration_args)
     _extract_arg(args, args_descriptor, 'mov_origin_transform', registration_args)
     _extract_arg(args, args_descriptor, 'static_transforms', registration_args)

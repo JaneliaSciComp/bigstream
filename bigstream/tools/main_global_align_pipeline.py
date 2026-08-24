@@ -44,6 +44,13 @@ def _define_args(args_descriptor):
     args_parser.add_argument('--align-config',
                              dest='align_config',
                              help='Align config file')
+
+    args_parser.add_argument('--prealign-downsample',
+                             dest='prealign_downsample',
+                             type=int,
+                             default=1,
+                             help='Pre-align downsampling')
+
     args_parser.add_argument('--reuse-existing-transform',
                              dest='reuse_existing_transform',
                              action='store_true',
@@ -82,6 +89,11 @@ def _define_args(args_descriptor):
     args_parser.add_argument('--cpus', dest='cpus',
                              type=int, default=0,
                              help='Number of cpus allocated')
+    args_parser.add_argument('--local-dask-workers', '--local_dask_workers',
+                             dest='local_dask_workers',
+                             type=int,
+                             default=1,
+                             help='Number of workers when using a local cluster')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -137,9 +149,11 @@ def _run_global_align(reg_args:RegistrationInputs,
                       compressor,
                       compressor_opts,
                       zarr_format,
+                      prealign_downsample=1,
                       sharding_factor=None,
                       save_composed_transform=False,
-                      inv_transform_args=None):
+                      inv_transform_args=None,
+                      local_workers=1):
     global_steps, _ = get_algorithm_parameters(align_config,
                                                'global_align',
                                                reg_args.registration_steps)
@@ -154,19 +168,25 @@ def _run_global_align(reg_args:RegistrationInputs,
             reg_args.get_mov_origin_transform(),
             mov.get_attr('globalCoordinateTransformations'),
         )
+        prealign_steps, _ = get_algorithm_parameters(align_config,
+                                                     'global_prealign',
+                                                     reg_args.prealign_steps)
         # calculate and apply the global transform
         static_transforms, static_transforms_spacings = reg_args.get_static_transforms()
         transform, aligned = _align_global_data(fix, fix_mask,
                                                 mov, mov_mask,
                                                 roi,
                                                 fix_mask_roi, mov_mask_roi,
+                                                prealign_steps,
                                                 global_steps,
                                                 reg_args.processing_size,
                                                 reg_args.processing_overlap_factor,
                                                 reg_args.foreground_percentage,
                                                 mov_origin_transform,
                                                 static_transforms,
-                                                static_transforms_spacings)
+                                                static_transforms_spacings,
+                                                prealign_downsample=prealign_downsample,
+                                                local_workers=local_workers)
         if len(transform.shape) == 2:
             logger.info(f'Global affine transform: {transform}')
         else:
@@ -235,17 +255,22 @@ def _run_global_align(reg_args:RegistrationInputs,
         logger.info('Skip global alignment - both fix and moving image are needed')
 
 
-def _align_global_data(fix_image, fix_mask_arg,
-                       mov_image, mov_mask_arg,
-                       roi,
-                       fix_mask_roi, mov_mask_roi,
-                       steps,
-                       processing_size,
-                       processing_overlap_factor,
-                       foreground_percentage,
-                       mov_origin_transform,
-                       static_transforms,
-                       static_transforms_spacings=()):
+def _align_global_data(
+        fix_image, fix_mask_arg,
+        mov_image, mov_mask_arg,
+        roi,
+        fix_mask_roi, mov_mask_roi,
+        prealign_steps,
+        steps,
+        processing_size,
+        processing_overlap_factor,
+        foreground_percentage,
+        mov_origin_transform,
+        static_transforms,
+        static_transforms_spacings=(),
+        prealign_downsample=1,
+        local_workers=1,
+):
     logger.info('Read image data for global alignment')
     if isinstance(fix_mask_arg, ImageData):
         logger.info(f'Alignment fix mask: {fix_mask_arg}')
@@ -289,11 +314,14 @@ def _align_global_data(fix_image, fix_mask_arg,
         image_timeindex=mov_image.image_timeindex,
         image_channel=mov_image.image_channel,
     )
+    # moving-image origin (translation) used by both the non-blockwise alignment
+    # and the blockwise prealign; compute it once so both branches can use it
+    if mov_origin_transform is not None:
+        mov_origin = mov_origin_transform[:3, 3]
+    else:
+        mov_origin = None
+
     if processing_size is None:
-        if mov_origin_transform is not None:
-            mov_origin = mov_origin_transform[:3, 3]
-        else:
-            mov_origin = None
         transform = alignment_pipeline(fix_image_array,
                                        mov_image_array,
                                        fix_spacing / fix_image.expansion_factor,
@@ -307,22 +335,29 @@ def _align_global_data(fix_image, fix_mask_arg,
                                        static_transform_list=static_transforms)
     else:
         # if the processing_size is specified run a blockwise alignment using a
-        # local dask scheduler. distributed_alignment_pipeline writes each block
-        # into output_transform in place (under a lock) and validates its chunk
-        # shape, so it must be a zarr array (NOT a dask array, whose .chunks is a
-        # tuple-of-tuples and which is not writable block-by-block). Chunk size is
-        # the processing block size (zyx) plus the trailing vector axis.
-        #
-        # It must also be an ON-DISK zarr, not an in-memory one: dask/distributed
-        # serializes the task closure (even with a threaded, processes=False
-        # cluster), so an in-memory zarr would be copied per worker and the block
-        # writes would never reach the array the main process reads back -> the
-        # assembled field would come back all zeros. An on-disk zarr is shared by
-        # path across workers, so the writes persist.
         block_zyx = tuple(int(s) for s in processing_size[::-1])
         displacement_vector_ndim = int(fix_image.spatial_ndim)
         transform_tmp_dir = tempfile.TemporaryDirectory(prefix='.global_deform_',
                                                         dir=os.getcwd())
+        if len(prealign_steps) > 0:
+            # Run a rough registration to improve the odds for the blockwise registration
+            prealign_transform = _prealign(
+                fix_image_array, mov_image_array,
+                fix_spacing / fix_image.expansion_factor,
+                mov_spacing / fix_image.expansion_factor,
+                fix_mask,
+                mov_mask,
+                prealign_steps,
+                static_transforms=static_transforms,
+                downsample=prealign_downsample
+            )
+            logger.info(f'Pre-align transform: {prealign_transform}')
+            transforms_list = static_transforms + [ prealign_transform ]
+        else:
+            logger.info('Skip pre-align')
+            prealign_transform = None
+            transforms_list = static_transforms
+
         transform = zarr.open(
             os.path.join(transform_tmp_dir.name, 'global-deform-field.zarr'),
             mode='w',
@@ -340,10 +375,10 @@ def _align_global_data(fix_image, fix_mask_arg,
         # memory monitor so it does not spill/pause/terminate or emit the noisy
         # "unmanaged memory is high" warnings when a block's buffers exceed the
         # (auto-detected, often tiny) per-worker limit
-        cluster_client = Client(LocalCluster(threads_per_worker=1,
+        cluster_client = Client(LocalCluster(n_workers=local_workers,
+                                             threads_per_worker=1,
                                              memory_limit=0,
                                              processes=False))
-
         deform_ok = distributed_alignment_pipeline(
             fix_image,
             fix_spacing / fix_image.expansion_factor,
@@ -358,7 +393,7 @@ def _align_global_data(fix_image, fix_mask_arg,
             roi=roi,
             foreground_percentage=foreground_percentage,
             mov_origin_transform=mov_origin_transform,
-            static_transform_list=static_transforms,
+            static_transform_list=transforms_list,
             output_transform=transform,
         )
         logger.info((
@@ -371,6 +406,12 @@ def _align_global_data(fix_image, fix_mask_arg,
         transform_tmp_dir.cleanup()
         if not transform.any():
             logger.info('Got an empty deformation field (all zeros)')
+        # fold the prealign into the result
+        if prealign_transform is not None:
+            transform = bst.compose_transform_list(
+                [prealign_transform, transform],
+                [None, fix_spacing / fix_image.expansion_factor],
+            )
 
     transform_spacing = fix_spacing / fix_image.expansion_factor
     if len(transform.shape) == 2:
@@ -389,6 +430,54 @@ def _align_global_data(fix_image, fix_mask_arg,
                               transform_list=transforms_list,
                               transform_spacing=transforms_spacings)
     return transform, aligned
+
+
+def _prealign(fix, mov,
+              fix_spacing, mov_spacing,
+              fix_mask, mov_mask,
+              prealign_steps,
+              static_transforms=[],
+              downsample=1):
+    logger.info((
+        f'Prealign {fix.shape} image to {mov.shape} image '
+        f'fix spacing {fix_spacing}, mov spacing {mov_spacing} '
+        f'downsample: {downsample}, steps: {prealign_steps}'
+    ))
+    if downsample > 1:
+        f = fix[::downsample, ::downsample, ::downsample]
+        m = mov[::downsample, ::downsample, ::downsample]
+        fspacing = np.asarray(fix_spacing, float) * downsample
+        mspacing = np.asarray(mov_spacing, float) * downsample
+        if fix_mask is not None:
+            fm = fix_mask[::downsample, ::downsample, ::downsample]
+        else:
+            fm = None
+        if mov_mask is not None:
+            mm = mov_mask[::downsample, ::downsample, ::downsample]
+        else:
+            mm = None
+    else:
+        f = fix
+        m = mov
+        fspacing = np.asarray(fix_spacing, float)
+        mspacing = np.asarray(mov_spacing, float)
+        if fix_mask is not None:
+            fm = fix_mask
+        else:
+            fm = None
+        if mov_mask is not None:
+            mm = mov_mask
+        else:
+            mm = None
+
+    return alignment_pipeline(
+        f, m,
+        fspacing, mspacing,                                    
+        prealign_steps,
+        fix_mask=fm,
+        mov_mask=mov_mask,
+        static_transform_list=static_transforms,
+    )
 
 
 def _apply_global_transform(reg_args:RegistrationInputs,
@@ -772,9 +861,11 @@ def main():
                           args.compressor,
                           args.compressor_opts,
                           output_zarr_format,
+                          prealign_downsample=args.prealign_downsample,
                           sharding_factor=args.output_sharding_factor,
                           save_composed_transform=args.save_composed_transform,
-                          inv_transform_args=inv_transform_args)
+                          inv_transform_args=inv_transform_args,
+                          local_workers=args.local_dask_workers)
     else:
         # global transform found -> just apply it
         _apply_global_transform(reg_inputs,

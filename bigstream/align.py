@@ -596,7 +596,9 @@ def feature_point_ransac_affine_align(
 
     # realize masks
     fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
+    logger.debug(f'Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
     mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
+    logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # apply static transforms
     if static_transform_list:
@@ -1055,6 +1057,8 @@ def affine_align(
     fix_mask=None,
     mov_mask=None,
     fix_roi=None,
+    fix_mask_percentile=None,
+    mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -1178,9 +1182,9 @@ def affine_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
     logger.debug(f'Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
-    mov_mask = realize_mask(mov, mov_mask)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
     logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip sample and convert inputs to sitk images
@@ -1307,6 +1311,8 @@ def deformable_align(
     fix_mask=None,
     mov_mask=None,
     fix_roi=None,
+    fix_mask_percentile=None,
+    mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -1440,8 +1446,10 @@ def deformable_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
-    mov_mask = realize_mask(mov, mov_mask)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
+    logger.debug(f'Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
+    logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip sample and convert inputs to sitk images
     X = apply_alignment_spacing(

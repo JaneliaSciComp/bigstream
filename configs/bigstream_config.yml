@@ -1,92 +1,74 @@
 ransac:
-  blob_sizes: [6, 14]
-  nspots: 5000
-  num_sigma_max: 5
-  cc_radius: 15
-  match_threshold: 0.6
-  max_spot_match_distance:
-  point_matches_threshold: 50
-  align_threshold: 2.0
-  diagonal_constraint: 0.15
-  fix_spots_count_threshold: 50
-  fix_spot_detection_kwargs:
-    blob_method: log
-    background_subtract: false
-    threshold: 0.0001
-    threshold_rel: 0.001
-    winsorize_limits: [0.01, 0.01]
-  mov_spots_count_threshold: 50
-  mov_spot_detection_kwargs:
-    blob_method: log
-    background_subtract: false
-    threshold: 0.0001
-    threshold_rel: 0.001
-    winsorize_limits: [0.01, 0.01]
+    blob_sizes: [6, 14]
+    nspots: 5000
+    num_sigma_max: 5
+    cc_radius: 15
+    match_threshold: 0.6
+    max_spot_match_distance:
+    point_matches_threshold: 50
+    align_threshold: 2.0
+    diagonal_constraint: 0.15
+    fix_spots_count_threshold: 50
+    fix_spot_detection_kwargs:
+        blob_method: log
+        background_subtract: false
+        threshold: 0.0001
+        threshold_rel: 0.001
+        winsorize_limits: [0.01, 0.01]
+    mov_spots_count_threshold: 50
+    mov_spot_detection_kwargs:
+        blob_method: log
+        background_subtract: false
+        threshold: 0.0001
+        threshold_rel: 0.001
+        winsorize_limits: [0.01, 0.01]
 
 global_align:
-  ransac:
-    # overriden parameters
-    num_sigma_max: 5
-    point_matches_threshold: 25
-  affine:
-    alignment_spacing: 1.0
-    shrink_factors: [2]
-    smooth_sigmas: [2]
-    metric: MMI
-    optimizer: RSGD
-    optimizer_args:
-      learningRate: 0.25
-      minStep: 0.001
-      numberOfIterations: 4000
+    ransac:
+        # overriden parameters
+        num_sigma_max: 5
+        point_matches_threshold: 25
+    affine:
+      alignment_spacing: 1.0
+      shrink_factors: [2]
+      smooth_sigmas: [2]
+      metric: MMI
+      optimizer: RSGD
+      optimizer_args:
+          learningRate: 0.25
+          minStep: 0.001
+          numberOfIterations: 4000
 
 local_align:
-  steps: [ransac, affine, deform]
-  block_size: [128, 128, 128]
-  block_overlap: 0.25
-  transform_overlap: 0.1
-  ransac:
-    # overriden parameters
-    alignment_spacing: 4
-    num_sigma_max: 6
-    diagonal_constraint: 0.15
-    point_matches_threshold: 15
-    fix_spots_count_threshold: 25
-    mov_spots_count_threshold: 25
-  affine:
-    alignment_spacing: 4.0
-    shrink_factors: [4]
-    smooth_sigmas: [4.0]
-    metric: MMI
-    optimizer: RSGD
-    optimizer_args:
-      learningRate: 0.25
-      minStep: 0.0001
-      numberOfIterations: 100
-  deform:
-    sampling: NONE
-    sampling_percentage: 1.0
-    alignment_spacing: 1.0
-    control_point_spacing: 128
-    control_point_levels: [1]
-    shrink_factors: [1]
-    smooth_sigmas: [1.0]
-    metric: MMI
-    optimizer: RSGD
-    optimizer_args:
-      learningRate: 2
-      minStep: 0.001
-      numberOfIterations: 50
-  demons:
-    iterations: [30, 20, 10]
-    smooth_sigmas: [2.0, 1.0, 0.5]
-    shrink_factors: [4, 2, 1]
-    variant: diffeomorphic
-    field_smoothing_sigma: 1.0
-    update_smoothing_sigma: 0.0
-    smooth_displacement_field: true
-    smooth_update_field: false
-    max_rms_error: 0.01
-    histogram_match: true
-    histogram_match_levels: 1024
-    histogram_match_points: 7
-    histogram_match_threshold_at_mean: true
+    ransac:
+        # overriden parameters
+        alignment_spacing: 4
+        num_sigma_max: 6
+        diagonal_constraint: 0.15
+        point_matches_threshold: 15
+        fix_spots_count_threshold: 25
+        mov_spots_count_threshold: 25
+    affine:
+        alignment_spacing: 4.0
+        shrink_factors: [4]
+        smooth_sigmas: [4.0]
+        metric: MMI
+        optimizer: RSGD
+        optimizer_args:
+            learningRate: 0.25
+            minStep: 0.0001
+            numberOfIterations: 100
+    deform:
+        sampling: NONE
+        sampling_percentage: 1.0
+        alignment_spacing: 1.0
+        control_point_spacing: 128
+        control_point_levels: [1]
+        shrink_factors: [1]
+        smooth_sigmas: [1.0]
+        metric: MMI
+        optimizer: RSGD
+        optimizer_args:
+            learningRate: 2
+            minStep: 0.001
+            numberOfIterations: 50

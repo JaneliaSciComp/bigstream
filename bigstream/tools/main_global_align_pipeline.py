@@ -9,6 +9,8 @@ import bigstream.transform as bst
 import zarr
 
 from dask.distributed import (Client, LocalCluster)
+from skimage import filters
+
 
 from bigstream.align import alignment_pipeline
 from bigstream.configure_bigstream import (configure_logging,
@@ -356,7 +358,19 @@ def _align_global_data(
                 downsample=prealign_downsample
             )
             logger.info(f'Pre-align transform: {prealign_transform}')
-            transforms_list = static_transforms + [ prealign_transform ]
+            # check if pre-align transform is identity and if it is ignore it
+            identity = np.eye(fix_image_array.ndim + 1)
+            prealign_is_identity = (
+                np.ndim(prealign_transform) == 2 and
+                np.shape(prealign_transform) == identity.shape and
+                np.allclose(prealign_transform, identity)
+            )
+            if prealign_is_identity:
+                logger.info('Prealign transform is IDENTITY - skip it')
+                prealign_transform = None
+                transforms_list = static_transforms
+            else:
+                transforms_list = static_transforms + [ prealign_transform ]
         else:
             logger.info('Skip pre-align')
             prealign_transform = None
@@ -433,7 +447,9 @@ def _align_global_data(
                               mov_spacing / mov_image.expansion_factor,
                               transform_list=transforms_list,
                               transform_spacing=transforms_spacings)
-    alignment_score = dice_score(fix_image_array, aligned)
+    # estimate background
+    alignment_score = dice_score(fix_image_array, aligned,
+                                 background=_estimate_background(fix_image_array))
     logger.info(f'Dice score for the alignment of {fix_image} to {mov_image}: {alignment_score}')
     return transform, aligned
 
@@ -546,6 +562,13 @@ def _apply_global_transform(reg_args:RegistrationInputs,
     else:
         # both fix and mov volume must be valid
         return None
+
+
+def _estimate_background(image_array):
+    sub = image_array[::2, ::2, ::2]
+    bg = filters.threshold_triangle(sub)
+    logger.info(f'Estimate background: {bg}')
+    return bg
 
 
 def _save_transform(transform, transform_path, transform_subpath,

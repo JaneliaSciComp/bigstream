@@ -1,0 +1,74 @@
+local_align:
+    demons:
+        iterations: [30, 20, 10]
+        smooth_sigmas: [2.0, 1.0, 0.5]
+        shrink_factors: [4, 2, 1]
+        variant: diffeomorphic
+        field_smoothing_sigma: 1.0
+        update_smoothing_sigma: 0.0
+        smooth_displacement_field: true
+        smooth_update_field: false
+        max_rms_error: 0.01
+        histogram_match: true
+        histogram_match_levels: 1024
+        histogram_match_points: 7
+        histogram_match_threshold_at_mean: true
+
+    elastix_affine:
+        align_method: affine
+        alignment_spacing: 4.0
+        ImagePyramidSchedule: [4,4,4, 2,2,2, 1,1,1]
+        NumberOfResolutions: 3
+        UseDirectionCosines: 'false'
+        Metric: AdvancedMattesMutualInformation
+        UseMultiThreadingForMetrics: 'true'
+        ShowExactMetricValue: 'true'
+        ErodeFixedMask: 'false'
+        ErodeMovingMask: 'false'
+        NumberOfHistogramBins: 32
+        NumberOfFixedHistogramBins: 32
+        NumberOfMovingHistogramBins: 32
+        Optimizer: AdaptiveStochasticGradientDescent   # self-tuning step; no manual LR
+        MaximumNumberOfIterations: 1200   # affine is cheap; give ASGD room to converge
+        NumberOfSpatialSamples: 8192
+        NewSamplesEveryIteration: 'true'
+        ImageSampler: RandomSparseMask
+        RandomSeed: 4237894
+        RequiredRatioOfValidSamples: 0.1
+        MaximumNumberOfSamplingAttempts: 8
+        FixedLimitRangeRatio: 1
+        MovingLimitRangeRatio: 1
+        FixedKernelBSplineOrder: 1
+        MovingKernelBSplineOrder: 1
+        SigmoidInitialTime: 0
+        FiniteDifferenceDerivative: 'false'
+        MaxBandCovSize: 192
+        NumberOfBandStructureSamples: 10
+        UseAdaptiveStepSizes: 'true'
+        UseConstantStep: 'false'
+        NumberOfGradientMeasurements: 0
+        NumberOfJacobianMeasurements: 500
+        AutomaticScalesEstimation: 'true'          # correct rotation/scale vs translation weighting
+        AutomaticTransformInitialization: 'true'
+        AutomaticTransformInitializationMethod: CenterOfGravity   # kills bulk translation up front
+        keep_logs: true
+
+    elastix_deform:
+        align_method: bspline
+        alignment_spacing: 4.0
+        control_point_spacing: [300, 300, 300]   # physical µm; mesh fine enough to bend the tube, coarse enough to stay stable
+        ImagePyramidSchedule: [4,4,4, 2,2,2, 1,1,1]
+        Metric: AdvancedMattesMutualInformation
+        NumberOfHistogramBins: 32
+        NumberOfFixedHistogramBins: 32
+        NumberOfMovingHistogramBins: 32
+        Optimizer: AdaptiveStochasticGradientDescent
+        MaximumNumberOfIterations: 500
+        NumberOfSpatialSamples: 8192
+        NewSamplesEveryIteration: 'true'
+        ImageSampler: RandomSparseMask
+        RandomSeed: 4237894
+        RequiredRatioOfValidSamples: 0.05
+        FixedKernelBSplineOrder: 1
+        MovingKernelBSplineOrder: 3
+        FinalBSplineInterpolationOrder: 3

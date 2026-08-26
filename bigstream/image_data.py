@@ -229,3 +229,5 @@ def clip_arr_to_roi(arr, roi):
             outside_high = [slice(None)] * arr.ndim
             outside_high[axis] = slice(stop, None)
             arr[tuple(outside_high)] = 0
+
+    return arr

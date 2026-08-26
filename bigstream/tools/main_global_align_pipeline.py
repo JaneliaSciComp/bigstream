@@ -223,15 +223,22 @@ def _run_global_align(reg_args:RegistrationInputs,
                 transform_to_save = transform
         else:
             transform_to_save = transform
-        _save_transform(transform_to_save,
-                        reg_args.transform_path(),
-                        transform_subpath,
-                        fix_image=fix,
-                        compressor=compressor,
-                        compressor_opts=compressor_opts,
-                        zarr_format=zarr_format,
-                        transform_blocksize=transform_blocksize,
-                        sharding_factor=sharding_factor)
+        _save_transform(
+            transform_to_save,
+            reg_args.transform_path(),
+            transform_subpath,
+            fix_image=fix,
+            compressor=compressor,
+            compressor_opts=compressor_opts,
+            zarr_format=zarr_format,
+            transform_blocksize=transform_blocksize,
+            sharding_factor=sharding_factor,
+            prealign_steps=prealign_steps,
+            prealign_downsample=prealign_downsample,
+            global_steps=global_steps,
+            block_processsize=reg_args.processing_size,
+            block_processoverlap=reg_args.processing_overlap_factor,
+        )
         # generate and save the global inverse transform
         inv_transform_path = reg_args.inv_transform_path()
         if inv_transform_path:
@@ -388,8 +395,8 @@ def _align_global_data(
             block_zyx,
             cluster_client,
             overlap_factor=processing_overlap_factor,
-            fix_mask=fix_mask_arg,
-            mov_mask=mov_mask_arg,
+            fix_mask=fix_mask,
+            mov_mask=mov_mask,
             roi=roi,
             foreground_percentage=foreground_percentage,
             mov_origin_transform=mov_origin_transform,
@@ -479,7 +486,7 @@ def _prealign(fix, mov,
         fspacing, mspacing,                                    
         prealign_steps,
         fix_mask=fm,
-        mov_mask=mov_mask,
+        mov_mask=mm,
         static_transform_list=static_transforms,
     )
 
@@ -544,7 +551,9 @@ def _save_transform(transform, transform_path, transform_subpath,
                     fix_image=None,
                     compressor=None, compressor_opts=None,
                     zarr_format=None,
-                    transform_blocksize=None, sharding_factor=None):
+                    transform_blocksize=None,
+                    sharding_factor=None,
+                    **transform_attrs):
     if not transform_path:
         logger.info('Skip saving global transformation')
         return
@@ -564,6 +573,7 @@ def _save_transform(transform, transform_path, transform_subpath,
             transform, transform_path, transform_subpath,
             transform_blocksize, fix_image,
             compressor, compressor_opts, zarr_format, sharding_factor,
+            **transform_attrs
         )
 
 
@@ -622,7 +632,8 @@ def _save_global_deform_field(deformfield_array,
                               deformfield_path, deformfield_subpath,
                               deformfield_blocksize, fix_image,
                               compressor, compressor_opts,
-                              zarr_format, sharding_factor=None):
+                              zarr_format, sharding_factor=None,
+                              **deformfield_dataset_attrs):
     """
     Persist a global deformation (displacement) field as an OME-ZARR dataset.
 

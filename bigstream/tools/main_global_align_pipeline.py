@@ -2,6 +2,7 @@ import argparse
 import logging
 import numpy as np
 import os
+import shutil
 import tempfile
 import bigstream.io_utility as io_utility
 import bigstream.transform as bst
@@ -12,6 +13,7 @@ from dask.distributed import (Client, LocalCluster)
 from bigstream.align import alignment_pipeline
 from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
+from bigstream.diagnostics import dice_score
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.io_utility import read_block
 from bigstream.image_data import (ImageData,
@@ -233,11 +235,6 @@ def _run_global_align(reg_args:RegistrationInputs,
             zarr_format=zarr_format,
             transform_blocksize=transform_blocksize,
             sharding_factor=sharding_factor,
-            prealign_steps=prealign_steps,
-            prealign_downsample=prealign_downsample,
-            global_steps=global_steps,
-            block_processsize=reg_args.processing_size,
-            block_processoverlap=reg_args.processing_overlap_factor,
         )
         # generate and save the global inverse transform
         inv_transform_path = reg_args.inv_transform_path()
@@ -436,6 +433,8 @@ def _align_global_data(
                               mov_spacing / mov_image.expansion_factor,
                               transform_list=transforms_list,
                               transform_spacing=transforms_spacings)
+    alignment_score = dice_score(fix_image_array, aligned)
+    logger.info(f'Dice score for the alignment of {fix_image} to {mov_image}: {alignment_score}')
     return transform, aligned
 
 
@@ -529,6 +528,8 @@ def _apply_global_transform(reg_args:RegistrationInputs,
                                   mov_spatial_spacing,
                                   transform_list=transforms_list,
                                   transform_spacing=transforms_spacings)
+        alignment_score = dice_score(fix_image_array, aligned)
+        logger.info(f'Dice score for the alignment of {fix_image} to {mov_image}: {alignment_score}')
         _save_aligned_volume(
             reg_args,
             fix_image,
@@ -552,11 +553,22 @@ def _save_transform(transform, transform_path, transform_subpath,
                     compressor=None, compressor_opts=None,
                     zarr_format=None,
                     transform_blocksize=None,
-                    sharding_factor=None,
-                    **transform_attrs):
+                    sharding_factor=None):
     if not transform_path:
         logger.info('Skip saving global transformation')
         return
+
+    if os.path.exists(transform_path):
+        # remove the path if it exists
+        if os.path.isfile(transform_path):
+            logger.info(f'Remove transform file: {transform_path}')
+            os.remove(transform_path)
+        elif os.path.islink(transform_path):
+            logger.info(f'Remove transform link: {transform_path}')
+            os.unlink(transform_path)
+        elif os.path.isdir(transform_path):
+            logger.info(f'Remove transform dir: {transform_path}')
+            shutil.rmtree(transform_path)
 
     if len(transform.shape) == 2:
         transform_location = os.path.dirname(transform_path)
@@ -573,7 +585,6 @@ def _save_transform(transform, transform_path, transform_subpath,
             transform, transform_path, transform_subpath,
             transform_blocksize, fix_image,
             compressor, compressor_opts, zarr_format, sharding_factor,
-            **transform_attrs
         )
 
 

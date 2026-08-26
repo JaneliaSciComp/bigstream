@@ -64,3 +64,12 @@ def deform_field_diagnostics(field, spacing, context=''):
             f'{context} Deform align field smoothness {name}: '
             f'max jump={g.max()}, p99 jump={np.percentile(g, 99)}'
         ))
+
+
+def dice_score(a, b, background=0):
+    a, b = a > background, b > background
+    a_and_b = np.logical_and(a, b).sum()
+    a_sum = a.sum()
+    b_sum = b.sum()
+    logger.debug(f'a and b: {a_and_b}, as: {a_sum}, bs: {b_sum}')
+    return 2. * a_and_b / max(a_sum + b_sum, 1)

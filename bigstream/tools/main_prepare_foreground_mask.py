@@ -230,7 +230,6 @@ def _generate_foreground_mask(args):
         percentile_thresh=args.mask_thresh_percentile,
         final_dilation=mask_dilation,
     )
-
     logger.info(f'Write {mask.shape} mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')
 
     axes = [a for a in (image_data.get_attr('axes') or []) if a.get('type') == 'space']

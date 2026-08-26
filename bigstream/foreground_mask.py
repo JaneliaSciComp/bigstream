@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 
-from scipy.ndimage import zoom, binary_closing, binary_dilation
+from scipy.ndimage import binary_closing, binary_dilation, label, zoom
 from scipy.ndimage.filters import gaussian_filter
 
 from . import level_set
@@ -66,6 +66,19 @@ def generate_foreground_mask(image,
             f'Complete foreground mask with shape {mask.shape} for {image.shape} image '
             f'mask spacing: {mask_spacing}, image spacing: {image_spacing} '
         ))
+        _mask_report(image, mask, background=(background if background is not None else 0))
     else:
         logger.warning(f'No foreground mask found for {image.shape} image')
     return mask, mask_spacing
+
+
+def _mask_report(image, mask, background=0):
+    signal = image > background
+    inside = np.logical_and(signal, mask > 0).sum()
+    # label on a 2x-decimated copy - this is good enough for component count
+    _, n_components = label(mask[::2, ::2, ::2] > 0)
+    logger.info((
+        f'Coverage {mask.mean() * 100:.1f}%, '
+        f'signal captured {inside / max(signal.sum(), 1) * 100:.1f}%, '
+        f'{n_components} components '
+    ))

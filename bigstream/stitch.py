@@ -8,7 +8,7 @@ from scipy.linalg import logm, expm
 from scipy.sparse.linalg import lsqr, norm
 from scipy.sparse import csr_array
 from scipy.special import factorial
-from skimage.filters import threshold_otsu
+from skimage.filters import threshold_li
 import zarr
 #from zarr import blosc
 from aicsimageio.readers import CziReader
@@ -176,7 +176,6 @@ def distributed_stitch_synthetic_data(
     steps,
     max_iterations=10,
     aligned_lcc_threshold=0.7,
-    lcc_radius=8.,
     cluster=None,
     cluster_kwargs={},
 ):
@@ -195,7 +194,6 @@ def distributed_stitch_synthetic_data(
         steps,
         max_iterations=max_iterations,
         aligned_lcc_threshold=aligned_lcc_threshold,
-        lcc_radius=lcc_radius,
         cluster=cluster,
         cluster_kwargs=cluster_kwargs,
     )
@@ -206,7 +204,6 @@ def distributed_stitch_bigstitcher_xml(
     steps,
     max_iterations=10,
     aligned_lcc_threshold=0.7,
-    lcc_radius=8.,
     tile_subpath=None,
     cluster=None,
     cluster_kwargs={},
@@ -261,13 +258,12 @@ def distributed_stitch_bigstitcher_xml(
     tile_transforms = distributed_stitch_new(
         tile_paths,
         tile_grid_positions,
-        spacing_s2,
+        spacing_s3,  # XXX NEED TO AUTOMATE, CURRENTLY BAD FIXED ASSUMPTION
         origins,
         overlap_factor,
         steps,
         max_iterations=max_iterations,
         aligned_lcc_threshold=aligned_lcc_threshold,
-        lcc_radius=lcc_radius,
         tile_subpath=tile_subpath,
         cluster=cluster,
         cluster_kwargs=cluster_kwargs,
@@ -308,7 +304,6 @@ def distributed_stitch_new(
     steps,
     max_iterations=10,
     aligned_lcc_threshold=0.7,
-    lcc_radius=8.,
     tile_subpath=None,
     cluster=None,
     cluster_kwargs={},
@@ -318,7 +313,6 @@ def distributed_stitch_new(
 
     neighbor_transforms, neighbor_correlations, alignments = align_all_neighbors(
         tile_paths, tile_grid_positions, spacing, origins, overlap_factor, steps,
-        lcc_radius=lcc_radius,
         tile_subpath=tile_subpath,
         cluster=cluster,
         cluster_kwargs=cluster_kwargs,
@@ -341,7 +335,6 @@ def align_all_neighbors(
     origins,
     overlap_factor,
     steps,
-    lcc_radius=8.,
     tile_subpath=None,
     cluster=None,
     cluster_kwargs={},
@@ -442,15 +435,11 @@ def align_all_neighbors(
         )
 
         fix_nonzero = fix[fix > 0]
-        mn, mx = fix_nonzero.min(), fix_nonzero.max()
-        hist, bins = np.histogram(fix_nonzero, bins=mx-mn+1)
-        fix_thresh = threshold_otsu(hist=(hist, bins[1:]))
+        fix_thresh = threshold_li(fix[fix > 0])
         fix_thresh_mask = fix > fix_thresh
 
         aligned_nonzero = aligned[aligned > 0]
-        mn, mx = aligned_nonzero.min(), aligned_nonzero.max()
-        hist, bins = np.histogram(aligned_nonzero, bins=mx-mn+1)
-        aligned_thresh = threshold_otsu(hist=(hist, bins[1:]))
+        aligned_thresh = threshold_li(aligned[aligned > 0])
         aligned_thresh_mask = aligned > aligned_thresh
 
         corr_mask = fix_thresh_mask * aligned_thresh_mask
@@ -458,11 +447,10 @@ def align_all_neighbors(
         corr = max(0, corr)
 
         # XXX TEMP TEMP DEBUG
-        import tifffile
         idx = raster_indices
-        nrrd.write(f'./{idx[0]}_{idx[1]}_fix.nrrd', fix, compression_level=2)
-        nrrd.write(f'./{idx[0]}_{idx[1]}_mov.nrrd', mov, compression_level=2)
-        nrrd.write(f'./{idx[0]}_{idx[1]}_aligned.nrrd', aligned, compression_level=2)
+        nrrd.write(f'./overlap_images/{idx[0]}_{idx[1]}_fix.nrrd', fix, compression_level=2)
+        nrrd.write(f'./overlap_images/{idx[0]}_{idx[1]}_mov.nrrd', mov, compression_level=2)
+        nrrd.write(f'./overlap_images/{idx[0]}_{idx[1]}_aligned.nrrd', aligned, compression_level=2)
         # XXX END DEBUG
 
         return affine, corr
@@ -536,7 +524,7 @@ def find_tile_transforms(
         for col in range(4):
             tile_tangents[1:, row, col] = lsqr(
                 bch_constraints, neighbor_tangents[:, row, col] * neighbor_correlations,
-                atol=0, btol=1e-6, conlim=1e8,
+                atol=0, btol=0, conlim=1e8,
             )[0]
 
     # put estimates in the Lie group
@@ -559,10 +547,6 @@ def find_tile_transforms(
         Ainv = np.linalg.inv(A)
         return np.matmul(A, np.matmul(B, Ainv))
 
-    def Adinv(A, B):
-        Ainv = np.linalg.inv(A)
-        return np.matmul(Ainv, np.matmul(B, A))
-
     # run least square optimization iterations with Jacobian
     residuals = []
     neighbor_transforms_inv = np.linalg.inv(neighbor_transforms)
@@ -579,13 +563,12 @@ def find_tile_transforms(
             fixed_transforms_in_order[iii] = A
         residual_tangents = logm(residual_transforms)
 
-        # XXX TEMP TEMP DEBUG
-        xxx_r = np.sum( neighbor_correlations * np.linalg.norm(residual_transforms, axis=(1, 2)), axis=0)
-        yyy_r = np.sum( neighbor_correlations * np.linalg.norm(residual_tangents, axis=(1, 2)), axis=0)
-        residuals.append((xxx_r, yyy_r))
+        # compute scalar residual values for tracking
+        g_residual = np.sum( neighbor_correlations * np.linalg.norm(residual_transforms, axis=(1, 2)) )
+        a_residual = np.sum( neighbor_correlations * np.linalg.norm(residual_tangents, axis=(1, 2)) )
+        residuals.append((g_residual, a_residual))
         if verbose:
-            print(np.round([xxx_r, yyy_r], decimals=3))
-        # XXX END DEBUG
+            print(np.round(residuals[-1], decimals=3))
 
         # apply jacobian terms and stack
         residual_tangents = dexp(residual_transforms, residual_tangents, 2)
@@ -616,11 +599,13 @@ def find_tile_transforms(
         gn_constraints = gn_constraints.multiply(1. / col_norms)
 
         # solve the model
-        perturbation_tangents = np.zeros_like(tile_transforms)
         lsqr_solution = lsqr(
             gn_constraints, residual_tangents[:, :3, :].ravel(),
-            atol=1e-6, btol=1e-6, conlim=1e8,
+            atol=0, btol=0, conlim=1e8,
         )[0] / col_norms
+
+        # pack solution back into matrices, put perturbations on manifold
+        perturbation_tangents = np.zeros_like(tile_transforms)
         for iii in range(perturbation_tangents.shape[0]-1):
             perturbation_tangents[iii+1, :3, :] = lsqr_solution[12*iii:12*iii+12].reshape((3, 4))
         perturbation_transforms = expm(perturbation_tangents)
@@ -642,7 +627,8 @@ def find_tile_transforms(
         neighbor_correlations_per_tile[mov_idx].append(neighbor_correlations[iii])
     for iii, ncpt in enumerate(neighbor_correlations_per_tile):
         if np.sum(ncpt) == 0:
-            tile_transforms[iii] = np.zeros_like(tile_transforms[0])
+            print(f'REMOVING UNCONSTRAINED TILE RASTER INDEX: {iii}')
+            tile_transforms[iii] = np.eye(4)  #np.zeros_like(tile_transforms[0])
 
     if not return_residuals:
         return tile_transforms

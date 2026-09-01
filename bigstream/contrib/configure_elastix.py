@@ -46,7 +46,7 @@ def _as_str_list(value):
 
 
 def build_elastix_parameter_object(
-    align_method='bspline',
+    align_method,
     control_grid_spacing=None,
     context='',
     **align_args,

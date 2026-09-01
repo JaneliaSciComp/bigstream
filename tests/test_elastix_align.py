@@ -344,8 +344,10 @@ def test_extra_parameters_forwarded_as_kwargs():
     from bigstream.contrib.configure_elastix import build_elastix_parameter_object
 
     pm = build_elastix_parameter_object(
-        align_method='bspline', NumberOfResolutions=2,
-        RandomSeed=42, ImageSampler='RandomCoordinate',
+        'bspline',
+        NumberOfResolutions=2,
+        RandomSeed=42,
+        ImageSampler='RandomCoordinate',
     )
     assert pm['RandomSeed'] == ('42',)
     assert pm['ImageSampler'] == ('RandomCoordinate',)

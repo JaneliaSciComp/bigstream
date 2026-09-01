@@ -75,6 +75,8 @@ def elastix_affine_align(
     fix_mask=None,
     mov_mask=None,
     fix_roi=None,
+    fix_mask_percentile=None,
+    mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -95,9 +97,9 @@ def elastix_affine_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
     logger.debug(f'{context} Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
-    mov_mask = realize_mask(mov, mov_mask)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
     logger.debug(f'{context} Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip-sample and convert to SITK images (images_to_sitk casts to float32)
@@ -116,33 +118,38 @@ def elastix_affine_align(
     if default is None:
         default = np.eye(ndim + 1)
 
+    identity_tx = sitk.Transform(ndim, sitk.sitkIdentity)
+
+    # resample the fix mask onto the fix image grid (masks may be sampled
+    # differently than the image they belong to)
+    if fix_mask is not None:
+        fix_mask = sitk.Resample(
+            fix_mask, fix, identity_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
+        )
+
     # pre-warp mov (and its mask) by the static transforms so the returned affine
     # is the elastix correction ONLY (residual), consistent with affine_align.
-    initial_tx = sitk.Transform(ndim, sitk.sitkIdentity)
     if static_transform_list:
         T = bst.transform_list_to_composite_transform(
             static_transform_list,
             static_transform_spacing,
             static_transform_origin,
         )
-        mov = sitk.Resample(mov, fix, T, sitk.sitkLinear, 0.0)
+        is_field = any(len(t.shape) not in (1, 2) for t in static_transform_list)
+        mov_interp = sitk.sitkBSpline if is_field else sitk.sitkLinear
+        mov = sitk.Resample(mov, fix, T, mov_interp, 0.0)
         if mov_mask is not None:
             mov_mask = sitk.Resample(
                 mov_mask, fix, T, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
             )
-
-    # resample masks onto their image grids (masks may be sampled differently)
-    if fix_mask is not None:
-        fix_mask = sitk.Resample(
-            fix_mask, fix, initial_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
-        )
-    if mov_mask is not None:
+    elif mov_mask is not None:
+        # resample the mov mask onto the moving image grid
         mov_mask = sitk.Resample(
-            mov_mask, mov, initial_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
+            mov_mask, mov, identity_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
         )
 
     parameter_map_obj = build_elastix_parameter_object(
-        align_method=align_method,
+        align_method,
         context=context,
         **align_args,
     )
@@ -207,8 +214,7 @@ def elastix_affine_align(
                 )
             elif transform_type == 'SimilarityTransform':
                 sitk_transform = (
-                    sitk.Similarity3DTransform() if ndim == 3
-                    else sitk.Similarity2DTransform()
+                    sitk.Similarity3DTransform() if ndim == 3 else sitk.Similarity2DTransform()
                 )
             else:
                 logger.error((
@@ -237,7 +243,7 @@ def elastix_affine_align(
         # fix grid with the identity transform so the "before" SSD is computed on
         # the same grid as fix (and as the warped "after" image below); a direct
         # fix_arr - mov_arr would otherwise raise a shape-broadcast error.
-        mov_on_fix = sitk.Resample(mov, fix, initial_tx, sitk.sitkLinear, 0.0)
+        mov_on_fix = sitk.Resample(mov, fix, identity_tx, sitk.sitkLinear, 0.0)
         mov_on_fix_arr = sitk.GetArrayViewFromImage(mov_on_fix).astype(np.float64)
         fix_norm = _robust_normalize(fix_arr)
         # normalize with mov's own full-extent dynamic range (raw mov, no resample
@@ -284,6 +290,8 @@ def elastix_deformable_align(
     fix_mask=None,
     mov_mask=None,
     fix_roi=None,
+    fix_mask_percentile=None,
+    mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -309,8 +317,8 @@ def elastix_deformable_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
-    mov_mask = realize_mask(mov, mov_mask)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
 
     # skip-sample and convert to SITK images (images_to_sitk casts to float32)
     X = apply_alignment_spacing(
@@ -329,30 +337,34 @@ def elastix_deformable_align(
         zero_field = np.zeros(initial_fix_shape + (ndim,), dtype=np.float32)
         default = (zero_field.ravel(), zero_field)
 
+    identity_tx = sitk.Transform(ndim, sitk.sitkIdentity)
+    # resample the fix mask onto the image grid
+    if fix_mask is not None:
+        fix_mask = sitk.Resample(
+            fix_mask, fix, identity_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
+        )
+
     # pre-warp mov (and its mask) by the static transforms so the returned field
-    # is the elastix correction ONLY (residual), consistent with demons_align.
-    initial_tx = sitk.Transform(ndim, sitk.sitkIdentity)
+    # is the elastix correction ONLY (residual).
     if static_transform_list:
         T = bst.transform_list_to_composite_transform(
             static_transform_list,
             static_transform_spacing,
             static_transform_origin,
         )
-        mov = sitk.Resample(mov, fix, T, sitk.sitkLinear, 0.0)
+        is_field = any(len(t.shape) not in (1, 2) for t in static_transform_list)
+        mov_interp = sitk.sitkBSpline if is_field else sitk.sitkLinear
+        mov = sitk.Resample(mov, fix, T, mov_interp, 0.0)
         if mov_mask is not None:
             mov_mask = sitk.Resample(
                 mov_mask, fix, T, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
             )
-
-    # resample masks onto their image grids (masks may be sampled differently)
-    if fix_mask is not None:
-        fix_mask = sitk.Resample(
-            fix_mask, fix, initial_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
-        )
-    if mov_mask is not None:
+    elif mov_mask is not None:
+        # resample the mov mask onto the moving image grid
         mov_mask = sitk.Resample(
-            mov_mask, mov, initial_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
+            mov_mask, mov, identity_tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8,
         )
+
 
     # final grid spacing: zyx -> xyz, supporting scalar / short / long arrays
     control_grid_xyz = None
@@ -365,7 +377,7 @@ def elastix_deformable_align(
         control_grid_xyz = list(g[::-1])
 
     parameter_map_obj = build_elastix_parameter_object(
-        align_method=align_method,
+        align_method,
         control_grid_spacing=control_grid_xyz,
         context=context,
         **align_args,
@@ -438,7 +450,7 @@ def elastix_deformable_align(
         # fix grid with the identity transform so the "before" SSD is computed on
         # the same grid as fix (and as the warped "after" image below); a direct
         # fix_arr - mov_arr would otherwise raise a shape-broadcast error.
-        mov_on_fix = sitk.Resample(mov, fix, initial_tx, sitk.sitkLinear, 0.0)
+        mov_on_fix = sitk.Resample(mov, fix, identity_tx, sitk.sitkLinear, 0.0)
         mov_on_fix_arr = sitk.GetArrayViewFromImage(mov_on_fix).astype(np.float64)
         fix_norm = _robust_normalize(fix_arr)
         # normalize with mov's own full-extent dynamic range (raw mov, no resample
@@ -449,7 +461,7 @@ def elastix_deformable_align(
         disp_tx = sitk.DisplacementFieldTransform(
             sitk.Cast(sitk.Image(disp), sitk.sitkVectorFloat64)
         )
-        warped = sitk.Resample(mov, fix, disp_tx, sitk.sitkLinear, 0.0)
+        warped = sitk.Resample(mov, fix, disp_tx, sitk.sitkBSpline, 0.0)
         warped_arr = sitk.GetArrayViewFromImage(warped).astype(np.float64)
         warped_norm = _robust_normalize(warped_arr, stats=mov_stats)
         final_metric_value = float(np.mean((fix_norm - warped_norm) ** 2))
@@ -481,7 +493,7 @@ def elastix_deformable_align(
         ref_origin,
     )
     disp_full = sitk.Resample(
-        disp, ref, initial_tx, sitk.sitkLinear, 0.0, sitk.sitkVectorFloat64,
+        disp, ref, identity_tx, sitk.sitkLinear, 0.0, sitk.sitkVectorFloat64,
     )
 
     # convert from ITK/SITK xyz vector components to bigstream zyx convention

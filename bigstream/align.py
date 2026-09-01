@@ -778,6 +778,8 @@ def random_affine_search(
     fix_mask=None,
     mov_mask=None,
     fix_roi=None,
+    fix_mask_percentile=None,
+    mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
     static_transform_list=[],
@@ -1493,7 +1495,7 @@ def deformable_align(
     # initial control point grid
     cp_divisor = control_point_spacing_xyz * control_point_levels[0]
     initial_cp_grid = [
-        max(1, int(x*y/d))
+        max(1, round(x*y/d))
         for x, y, d in zip(fix.GetSize(), fix.GetSpacing(), cp_divisor)
     ]
     transform = sitk.BSplineTransformInitializer(

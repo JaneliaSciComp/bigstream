@@ -237,6 +237,8 @@ def _run_global_align(reg_args:RegistrationInputs,
             zarr_format=zarr_format,
             transform_blocksize=transform_blocksize,
             sharding_factor=sharding_factor,
+            prealign_steps=prealign_steps,
+            align_steps=global_steps,
         )
         # generate and save the global inverse transform
         inv_transform_path = reg_args.inv_transform_path()
@@ -245,15 +247,19 @@ def _run_global_align(reg_args:RegistrationInputs,
                                                             **(inv_transform_args or {}))
             if inverse_transform is not None:
                 inv_transform_subpath = reg_args.inv_transform_subpath or transform_subpath
-                _save_transform(inverse_transform,
-                                inv_transform_path,
-                                inv_transform_subpath,
-                                fix_image=fix,
-                                compressor=compressor,
-                                compressor_opts=compressor_opts,
-                                zarr_format=zarr_format,
-                                transform_blocksize=transform_blocksize,
-                                sharding_factor=sharding_factor)
+                _save_transform(
+                    inverse_transform,
+                    inv_transform_path,
+                    inv_transform_subpath,
+                    fix_image=fix,
+                    compressor=compressor,
+                    compressor_opts=compressor_opts,
+                    zarr_format=zarr_format,
+                    transform_blocksize=transform_blocksize,
+                    sharding_factor=sharding_factor,
+                    prealign_steps=prealign_steps,
+                    align_steps=global_steps,
+                )
         else:
             logger.info('Skip saving global inverse transformation')
 
@@ -576,7 +582,8 @@ def _save_transform(transform, transform_path, transform_subpath,
                     compressor=None, compressor_opts=None,
                     zarr_format=None,
                     transform_blocksize=None,
-                    sharding_factor=None):
+                    sharding_factor=None,
+                    **transform_attrs):
     if not transform_path:
         logger.info('Skip saving global transformation')
         return
@@ -667,7 +674,7 @@ def _save_global_deform_field(deformfield_array,
                               deformfield_blocksize, fix_image,
                               compressor, compressor_opts,
                               zarr_format, sharding_factor=None,
-                              **deformfield_dataset_attrs):
+                              **deformfield_attrs):
     """
     Persist a global deformation (displacement) field as an OME-ZARR dataset.
 
@@ -718,6 +725,7 @@ def _save_global_deform_field(deformfield_array,
         axes=deformfield_axes,
         dataset_transformations=deformfield_coord_transforms,
         zarr_format=zarr_format,
+        **deformfield_attrs
     )
 
     deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_blocksize))

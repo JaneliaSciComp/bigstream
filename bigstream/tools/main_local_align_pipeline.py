@@ -439,6 +439,7 @@ def _align_local_data(fix_image: ImageData,
             axes=deformfield_axes,
             dataset_transformations=deformfield_coord_transforms,
             zarr_format=zarr_format,
+            steps=steps,
         )
         deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
         deformfield_output_chunksize = deformfield_spatial_chunksize + (len(deformfield_spatial_chunksize),)
@@ -526,6 +527,7 @@ def _align_local_data(fix_image: ImageData,
             axes=deformfield_axes,
             dataset_transformations=deformfield_coord_transforms,
             zarr_format=zarr_format,
+            steps=steps,
         )
         inv_deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
         inv_deformfield_output_chunksize = inv_deformfield_spatial_chunksize + (len(inv_deformfield_spatial_chunksize),)

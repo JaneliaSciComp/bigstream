@@ -600,25 +600,6 @@ def feature_point_ransac_affine_align(
     mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
     logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
-    # apply static transforms
-    if static_transform_list:
-        mov = bst.apply_transform(
-            fix, mov, fix_spacing, mov_spacing,
-            transform_list=static_transform_list,
-            fix_origin=fix_origin,
-            mov_origin=mov_origin,
-        )
-        if mov_mask is not None:
-            mov_mask = bst.apply_transform(
-                fix.astype(mov_mask.dtype), mov_mask,
-                fix_spacing, mov_spacing,
-                transform_list=static_transform_list,
-                fix_origin=fix_origin, 
-                mov_origin=mov_origin,
-                interpolator='0',
-            )
-        mov_spacing = fix_spacing
-
     # skip sample and determine mask spacings
     X = apply_alignment_spacing(
         fix, mov,
@@ -635,6 +616,61 @@ def feature_point_ransac_affine_align(
     mov_spacing = X[5]
     fix_mask_spacing = X[6]
     mov_mask_spacing = X[7]
+
+    identity_tx = np.eye(len(fix.shape) + 1)
+    if fix_mask is not None:
+        initial_fix_mask_shape = fix_mask.shape
+        fix_mask = bst.apply_transform(
+            fix, fix_mask, fix_spacing, fix_mask_spacing,
+            transform_list=[identity_tx],
+            fix_origin=fix_origin,
+            mov_origin=fix_origin,
+        )
+        logger.info(f'Resampled fix mask shape from {initial_fix_mask_shape} to {fix_mask.shape}')
+        fix_mask_spacing = fix_spacing
+
+    # apply static transforms
+    if static_transform_list:
+        initial_mov_shape = mov.shape
+        mov = bst.apply_transform(
+            fix, mov, fix_spacing, mov_spacing,
+            transform_list=static_transform_list,
+            fix_origin=fix_origin,
+            mov_origin=mov_origin,
+        )
+        logger.info(f'Resampled {initial_mov_shape} mov image to fix image grid: {mov.shape}')
+        if mov_mask is not None:
+            mov_mask = bst.apply_transform(
+                fix.astype(mov_mask.dtype), mov_mask,
+                fix_spacing, mov_mask_spacing,
+                transform_list=static_transform_list,
+                fix_origin=fix_origin, 
+                mov_origin=mov_origin,
+                interpolator='0',
+            )
+            logger.info(f'Resampled mov image mask to fix image grid: {mov.shape}')
+            mov_mask_spacing = fix_spacing
+        mov_spacing = fix_spacing
+    else:
+        initial_mov_shape = mov.shape
+        mov = bst.apply_transform(
+            fix, mov, fix_spacing, mov_spacing,
+            transform_list=[identity_tx],
+            fix_origin=fix_origin,
+            mov_origin=mov_origin,
+        )
+        logger.info(f'Resampled {initial_mov_shape} mov image to fix image grid: {mov.shape}')
+        mov_spacing = fix_spacing
+        if mov_mask is not None:
+            mov_mask = bst.apply_transform(
+                fix.astype(mov_mask.dtype), mov_mask,
+                fix_spacing, mov_mask_spacing,
+                transform_list=[identity_tx],
+                fix_origin=fix_origin,
+                mov_origin=mov_origin,
+                interpolator='0',
+            )
+            mov_mask_spacing = fix_spacing
 
     # format inputs
     if type(cc_radius) not in (tuple,):
@@ -671,7 +707,7 @@ def feature_point_ransac_affine_align(
         if safeguard_exceptions:
             raise ValueError('fix spot detection safeguard failed')
         else:
-            logger.info(f'{context} - RANSAC returning default affine')
+            logger.info(f'{context} - RANSAC failed (insufficient fix spots) - returning default affine')
             return default
 
     # get mov spots
@@ -696,7 +732,7 @@ def feature_point_ransac_affine_align(
         if safeguard_exceptions:
             raise ValueError('mov spot detection safeguard failed')
         else:
-            logger.info(f'{context} - RANSAC returning default affine')
+            logger.info(f'{context} - RANSAC failed (insufficient mov spots) - returning default affine')
             return default
 
     # sort
@@ -733,7 +769,7 @@ def feature_point_ransac_affine_align(
         if safeguard_exceptions:
             raise ValueError('point matches safeguard failed')
         else:
-            logger.info(f'{context} - RANSAC returning default affine')
+            logger.info(f'{context} - RANSAC failed (insufficient matches) - returning default affine')
             return default
 
     # align
@@ -753,13 +789,13 @@ def feature_point_ransac_affine_align(
         if safeguard_exceptions:
             raise ValueError('diagonal_constraint safeguard failed')
         else:
-            logger.info(f'{context} - RANSAC returning default affine')
+            logger.info(f'{context} - RANSAC failed (degenerate affine) - returning default affine')
             return default
 
     # augment matrix and return
     affine = np.eye(fix.ndim + 1)
     affine[:fix.ndim, :] = Aff
-    logger.debug(f'{context} - RANSAC affine: {Aff}')
+    logger.debug(f'{context} - RANSAC successful affine: {Aff}')
     return affine
 
 

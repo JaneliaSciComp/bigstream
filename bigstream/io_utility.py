@@ -731,7 +731,8 @@ def prepare_parent_group_attrs(container_path,
                                axes=None,
                                dataset_transformations=None,
                                global_transformations=None,
-                               zarr_format=2):
+                               zarr_format=2,
+                               **more_attrs):
     """
     Prepare an OME-NGFF metadata dictionary for the parent group of a dataset.
 
@@ -791,7 +792,8 @@ def prepare_parent_group_attrs(container_path,
         global_transformations=global_transformations,
         zarr_format=zarr_format,
     )
-    return _serialize_ngff_metadata(metadata, zarr_format)
+    ngff_attrs = _serialize_ngff_metadata(metadata, zarr_format)
+    return {**ngff_attrs, **more_attrs}
 
 
 def read_image_container_attributes(container_path, subpath):

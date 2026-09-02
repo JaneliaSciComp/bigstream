@@ -331,6 +331,7 @@ def get_algorithm_parameters(config_filename, context, steps):
         pipeline_steps = steps
     else:
         pipeline_steps = context_config.get('steps', [])
+
     for step in pipeline_steps:
         alg_args = config.get(step, {})
         context_alg_args = context_config.get(step, {})

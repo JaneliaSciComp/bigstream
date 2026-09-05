@@ -172,7 +172,7 @@ def _read_blocks_for_processing(blocks_info,
     #    5:mov_mask_block_coords,
     #    6:mov_origin,
     #    7:block_transforms
-    logger.debug(f'Read blocks: {blocks_info}')
+    logger.debug(f'Read blocks: {blocks_info[:-1]}') # do not log block_transform
     fix_block = _read_imagedata_block(blocks_info[1], fix, fix_block_reader)
 
     mov_block_coords = blocks_info[3]

@@ -88,9 +88,15 @@ def segment(
     if threshold is not None:
         image[image < threshold] = 0
     if init is None:
-        init = np.zeros_like(image, dtype=np.uint8)
-        bounds = np.ceil(np.array(image.shape) * 0.1).astype(int)
-        init[tuple(slice(b, -b) for b in bounds)] = 1
+        if threshold is not None:
+            # seed from the image's own intensity so
+            # every region already above threshold is included
+            init = (image > 0).astype(np.uint8)
+            logger.info(f'Seed initial mask from threshold {threshold}: {init.sum()} voxels')
+        else:
+            init = np.zeros_like(image, dtype=np.uint8)
+            bounds = np.ceil(np.array(image.shape) * 0.1).astype(int)
+            init[tuple(slice(b, -b) for b in bounds)] = 1
     else:
         logger.info(f'Use initial mask: {init.shape}')
 
@@ -234,6 +240,6 @@ def foreground_segmentation(
         zoom_factors = [x/y for x, y in zip(image.shape, to_reshape)]
         mask = zoom(mask, zoom_factors, order=0)
         logger.info(f'Final mask reshape {to_reshape} to {image.shape} -> {mask.shape}')
-    return mask
+    return mask, background
 
 

@@ -390,6 +390,7 @@ def feature_point_ransac_affine_align(
     match_threshold=0.7,
     max_spot_match_distance=None,
     point_matches_threshold=50,
+    max_point_matches=-1,
     align_threshold=2.0,
     diagonal_constraint=0.25,
     fix_spot_detection_kwargs={},
@@ -682,12 +683,11 @@ def feature_point_ransac_affine_align(
         B = (B,)*fix.ndim
     blob_sizes = (np.array(A), np.array(B))
 
-    # get fix spots
     num_sigma = int(min(np.max(blob_sizes[1] - blob_sizes[0]), num_sigma_max))
     assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
 
-    logger.info(f'{context} computing fixed spots')
     if fix_spots is None:
+        # get fix spots
         fix_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
@@ -699,9 +699,14 @@ def feature_point_ransac_affine_align(
             mask=fix_mask,
             **fix_kwargs,
         )
-    elif fix_mask is not None:
+    else:
+        logger.info(f'{context} use provided {len(fix_spots)} fixed spots')
+
+    if fix_mask is not None:
         fix_spots = apply_foreground_mask(fix_spots, fix_mask)
-    logger.info(f'{context} found {len(fix_spots)} fixed spots')
+
+    logger.info(f'{context} - {len(fix_spots)} fixed spots')
+
     if len(fix_spots) < fix_spots_count_threshold:
         logger.info(f'{context} insufficient fixed spots found ({len(fix_spots)}) expected {fix_spots_count_threshold}')
         if safeguard_exceptions:
@@ -710,9 +715,8 @@ def feature_point_ransac_affine_align(
             logger.info(f'{context} - RANSAC failed (insufficient fix spots) - returning default affine')
             return default
 
-    # get mov spots
-    logger.info(f'{context} computing moving spots')
     if mov_spots is None:
+        # get mov spots
         mov_kwargs = {
             'num_sigma':num_sigma,
             'exclude_border':cc_radius,
@@ -724,9 +728,14 @@ def feature_point_ransac_affine_align(
             mask=mov_mask,
             **mov_kwargs,
         )
-    elif mov_mask is not None:
+    else:
+        logger.info(f'{context} use provided {len(mov_spots)} moving spots')
+
+    if mov_mask is not None:
         mov_spots = apply_foreground_mask(mov_spots, mov_mask)
-    logger.info(f'{context} found {len(mov_spots)} moving spots')
+
+    logger.info(f'{context} - {len(mov_spots)} moving spots')
+
     if len(mov_spots) < mov_spots_count_threshold:
         logger.info(f'{context} insufficient moving spots found ({len(mov_spots)}) expected {mov_spots_count_threshold}')
         if safeguard_exceptions:
@@ -748,16 +757,26 @@ def feature_point_ransac_affine_align(
     mov_spot_contexts = features.get_contexts(mov, mov_spots, cc_radius)
 
     # get pairwise correlations
-    logger.info(f'{context} computing pairwise correlations')
     correlations = features.pairwise_correlation(
         fix_spot_contexts, mov_spot_contexts,
     )
+    logger.info(f'{context} computed {correlations.shape} pairwise correlations: {correlations} ')
 
     # convert to physical units
     fix_spots = fix_spots * fix_spacing
     mov_spots = mov_spots * mov_spacing
 
+    n_top_cc = min(point_matches_threshold, correlations.size)
+    top_cc_indexes = np.argpartition(-correlations, n_top_cc - 1, axis=None)[:n_top_cc]
+    top_cc_values = np.sort(correlations.flat[top_cc_indexes])[::-1]
+
     # get matching points
+    logger.info((
+        f'{context} match {len(fix_spots)} fix spots '
+        f'with {len(mov_spots)} mov spots using {match_threshold} threshold '
+        f'and {max_spot_match_distance} max distance '
+        f'top {n_top_cc} correlations: {top_cc_values} '
+    ))
     fix_spots, mov_spots = features.match_points(
         fix_spots, mov_spots,
         correlations, match_threshold,
@@ -765,17 +784,29 @@ def feature_point_ransac_affine_align(
     )
     logger.info(f'{context} {len(fix_spots)} - {len(mov_spots)} matched spots')
     if len(fix_spots) < point_matches_threshold or len(mov_spots) < point_matches_threshold:
-        logger.info(f'{context} - insufficient point matches found')
+        logger.info(f'{context} - insufficient point matches found - expected at least {point_matches_threshold}')
+        logger.debug((
+            f'{context}\n'
+            f'fix spots: {fix_spots}\n'
+            f'mov spots: {mov_spots}\n'
+        ))
         if safeguard_exceptions:
             raise ValueError('point matches safeguard failed')
         else:
             logger.info(f'{context} - RANSAC failed (insufficient matches) - returning default affine')
             return default
-
     # align
-    logger.debug(f'{context} Found enough spots to estimate the affine ' +
-                 f'fix: {len(fix_spots)} ' +
-                 f'moving: {len(mov_spots)}')
+    logger.debug((
+        f'{context} Found enough spots to estimate the affine\n'
+        f'fix: {fix_spots}\n'
+        f'moving: {mov_spots}\n'
+    ))
+
+    if max_point_matches > 0 and len(fix_spots) > max_point_matches:
+        logger.debug(f'{context} Select first {max_point_matches} spots to estimate the affine')
+        fix_spots = fix_spots[:max_point_matches,:]
+        mov_spots = mov_spots[:max_point_matches,:]
+
     _, Aff, _ = cv2.estimateAffine3D(
         fix_spots, mov_spots,
         ransacThreshold=align_threshold,

@@ -55,7 +55,7 @@ def _define_args():
     args_parser.add_argument('--mask-smoothing',
                              dest='mask_smoothing',
                              type=int,
-                             default=1,
+                             default=0,
                              help='Number of iterations to apply mask smoothing - smaller value results in a rougher mask')  
     args_parser.add_argument('--mask-sigma', '--mask-smooth-sigmas',
                              dest='mask_smooth_sigmas',

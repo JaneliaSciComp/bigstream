@@ -615,6 +615,7 @@ def _save_transform(transform, transform_path, transform_subpath,
             transform, transform_path, transform_subpath,
             transform_blocksize, fix_image,
             compressor, compressor_opts, zarr_format, sharding_factor,
+            **transform_attrs,
         )
 
 

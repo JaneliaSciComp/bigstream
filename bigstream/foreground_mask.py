@@ -38,8 +38,9 @@ def generate_foreground_mask(image,
             f'shrink factors: {shrink_factors}, '
             f'lambda1: {lambda1}, '
             f'lambda2: {lambda2}, '
+            f'background: {background}, '
         ))
-        mask = level_set.foreground_segmentation(
+        mask, background = level_set.foreground_segmentation(
             subsampled_image, subsampled_image_spacing,
             mask_smoothing=mask_smoothing,
             iterations=iterations,

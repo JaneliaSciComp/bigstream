@@ -777,7 +777,7 @@ def feature_point_ransac_affine_align(
         f'and {max_spot_match_distance} max distance '
         f'top {n_top_cc} correlations: {top_cc_values} '
     ))
-    fix_spots, mov_spots = features.match_points(
+    fix_spots, mov_spots, match_scores = features.match_points(
         fix_spots, mov_spots,
         correlations, match_threshold,
         max_distance=max_spot_match_distance,
@@ -789,6 +789,7 @@ def feature_point_ransac_affine_align(
             f'{context}\n'
             f'fix spots: {fix_spots}\n'
             f'mov spots: {mov_spots}\n'
+            f'match scores: {match_scores}\n'
         ))
         if safeguard_exceptions:
             raise ValueError('point matches safeguard failed')

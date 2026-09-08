@@ -216,6 +216,7 @@ def match_points(a_pos, b_pos, scores, threshold, max_distance=None):
     # only points within max_distance should be considered
     max_score = np.max(scores) + 1
     if max_distance is not None:
+        source_scores = scores.copy()
         a_kdtree = cKDTree(a_pos)
         valid_pairs = a_kdtree.query_ball_tree(
             cKDTree(b_pos), max_distance,
@@ -223,12 +224,15 @@ def match_points(a_pos, b_pos, scores, threshold, max_distance=None):
         for iii, fancy_index in enumerate(valid_pairs):
             scores[iii, fancy_index] += max_score
         threshold += max_score
+    else:
+        source_scores = scores
 
     # get highest scores above threshold
     best_indcs = np.argmax(scores, axis=1)
     a_indcs = range(len(a_pos))
     keeps = scores[(a_indcs, best_indcs)] > threshold
 
-    # return positions of corresponding points
-    return a_pos[keeps, :3], b_pos[best_indcs[keeps], :3]
+    # return positions of corresponding points and their scores
+    match_scores = source_scores[(a_indcs, best_indcs)][keeps]
+    return a_pos[keeps, :3], b_pos[best_indcs[keeps], :3], match_scores
 

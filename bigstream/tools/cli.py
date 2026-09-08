@@ -305,6 +305,12 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       type=stringlist,
                       help='Registration steps')
 
+    args.add_argument(args_descriptor.argflag('norebalance-missing-neighbors'),
+                      dest=args_descriptor.argdest('norebalance_missing_neighbors'),
+                      default=False,
+                      action='store_true',
+                      help='Do not rebalance for missing neighbors')
+
 
 def get_algorithm_parameters(config_filename, context, steps):
     """
@@ -388,6 +394,7 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'mov_origin_transform', registration_args)
     _extract_arg(args, args_descriptor, 'static_transforms', registration_args)
     _extract_arg(args, args_descriptor, 'persist_mov_origin_transform', registration_args)
+    _extract_arg(args, args_descriptor, 'norebalance_missing_neighbors', registration_args)
     registration_inputs = RegistrationInputs()
     registration_inputs.__dict__.update(registration_args)
     return registration_inputs

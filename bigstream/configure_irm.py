@@ -61,6 +61,7 @@ def configure_irm(
     metric_args={},
     optimizer_args={},
     sampling_percentage=None,
+    sampling_seed=None,
     exhaustive_step_sizes=None,
     context='',
     callback=None,
@@ -153,6 +154,8 @@ def configure_irm(
         Required if sampling is 'REGULAR' or 'RANDOM'
         Percentage of voxels used during metric sampling
 
+    sampling_seed : int - sampling seed if sampling strategy is 'RANDOM'
+
     exhaustive_step_sizes : tuple of float (default: None)
         Required if optimizer is 'EXHAUSTIVE'
         Grid search step sizes for each parameter in the transform
@@ -206,7 +209,10 @@ def configure_irm(
     }
     irm.SetMetricSamplingStrategy(sampling_switch[sampling])
     if sampling in ('REGULAR', 'RANDOM'):
-        irm.SetMetricSamplingPercentage(sampling_percentage)
+        if sampling_seed is not None:
+            irm.SetMetricSamplingPercentage(sampling_percentage, sampling_seed)
+        else:
+            irm.SetMetricSamplingPercentage(sampling_percentage)
 
     # optimizer switch
     optimizer_switch = {

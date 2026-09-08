@@ -279,7 +279,8 @@ def _compute_block_transform(compute_transform_params,
                              block_overlaps=None,
                              nblocks=None,
                              output_transform=None,
-                             align_steps=[]):
+                             align_steps=[],
+                             rebalance_for_missing_neighbors=True):
     start_time = time.time()
     ((block_index,
       block_coords,
@@ -347,7 +348,8 @@ def _compute_block_transform(compute_transform_params,
                                      block_size,
                                      block_overlaps,
                                      block_neighbors,
-                                     nblocks)
+                                     nblocks,
+                                     rebalance_for_missing_neighbors)
 
     # handle end blocks
     if np.any(weights.shape != transform.shape[:-1]):
@@ -395,7 +397,8 @@ def _get_transform_weights(block_index,
                            block_size,
                            block_overlaps,
                            block_neighbors,
-                           nblocks):
+                           nblocks,
+                           rebalance_for_missing_neighbors):
     logger.debug(f'Adjust transform for {block_index}')
 
     # create the standard weights array
@@ -404,7 +407,7 @@ def _get_transform_weights(block_index,
     weights = np.pad(np.ones(core, dtype=np.float64), pad, mode='linear_ramp')
 
     # rebalance if any neighbors are missing
-    if not np.all(list(block_neighbors.values())):
+    if rebalance_for_missing_neighbors and not np.all(list(block_neighbors.values())):
         logger.debug(f'Rebalance transform {weights.shape} weights for {block_index}')
         # define overlap slices
         slices = {}
@@ -465,6 +468,7 @@ def distributed_alignment_pipeline(
     output_transform=None,
     max_concurrent_reads=0,
     max_cluster_jobs=0,
+    rebalance_for_missing_neighbors=True,
     display_displacement_diagnostics=False,
     **kwargs,
 ):
@@ -543,6 +547,13 @@ def distributed_alignment_pipeline(
 
     output_transform : ndarray (default: None)
         Output transform
+
+    rebalance_for_missing_neighbors : bool (default: True)
+        If True, when a block has a missing neighbor, it's linear blending weights
+        are rebalanced to account for the missing neighbor. The ensures transforms
+        aren't artificially dampened by missing neighbors, which have zero valued
+        displacement. However, if it is desired that the edges of masked regions
+        should more smoothly dampen into backgroun, then set this to false.
 
     kwargs : any additional arguments
         Arguments that will apply to all alignment steps. These are overruled by
@@ -704,7 +715,8 @@ def distributed_alignment_pipeline(
             block_overlaps=overlaps,
             nblocks=nblocks,
             align_steps=block_align_steps,
-            output_transform=output_transform
+            output_transform=output_transform,
+            rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
         )
 
     def block_processing_method(block_info):

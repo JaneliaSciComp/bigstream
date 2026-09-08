@@ -356,6 +356,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             max_concurrent_zarr_reads,
             max_cluster_jobs,
             display_displacement_diagnostics,
+            not reg_args.norebalance_missing_neighbors,
         )
     finally:
         cluster_client.close()
@@ -401,7 +402,8 @@ def _align_local_data(fix_image: ImageData,
                       foreground_percentage,
                       max_concurrent_zarr_reads,
                       max_cluster_jobs,
-                      display_displacement_diagnostics):
+                      display_displacement_diagnostics,
+                      rebalance_for_missing_neighbors):
     logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
                 f'using {ut.get_number_of_cores()} cpus')
 
@@ -440,6 +442,8 @@ def _align_local_data(fix_image: ImageData,
             dataset_transformations=deformfield_coord_transforms,
             zarr_format=zarr_format,
             steps=steps,
+            processsize=processing_size,
+            overlap=processing_overlap_factor,
         )
         deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
         deformfield_output_chunksize = deformfield_spatial_chunksize + (len(deformfield_spatial_chunksize),)
@@ -498,6 +502,7 @@ def _align_local_data(fix_image: ImageData,
             max_concurrent_reads=max_concurrent_zarr_reads,
             max_cluster_jobs=max_cluster_jobs,
             display_displacement_diagnostics=display_displacement_diagnostics,
+            rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
         )
         logger.info((
             'Finished computing the deformation field '
@@ -529,6 +534,7 @@ def _align_local_data(fix_image: ImageData,
             zarr_format=zarr_format,
             steps=steps,
             processsize=processing_size,
+            overlap=processing_overlap_factor,
         )
         inv_deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
         inv_deformfield_output_chunksize = inv_deformfield_spatial_chunksize + (len(inv_deformfield_spatial_chunksize),)

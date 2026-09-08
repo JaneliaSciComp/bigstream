@@ -210,7 +210,11 @@ def match_points(a_pos, b_pos, scores, threshold, max_distance=None):
     Returns
     -------
     matched_a_points, matched_b_points : two 2d-arrays both Px3
-        The points from a_pos and b_pos that correspond
+        The points from a_pos and b_pos that correspond, sorted by
+        match_scores in descending order (highest score first)
+
+    match_scores : 1d-array of length P
+        The correspondence score for each matched pair
     """
 
     # only points within max_distance should be considered
@@ -232,7 +236,9 @@ def match_points(a_pos, b_pos, scores, threshold, max_distance=None):
     a_indcs = range(len(a_pos))
     keeps = scores[(a_indcs, best_indcs)] > threshold
 
-    # return positions of corresponding points and their scores
+    # return positions of corresponding points and their scores,
+    # sorted by match score in descending order (highest first)
     match_scores = source_scores[(a_indcs, best_indcs)][keeps]
-    return a_pos[keeps, :3], b_pos[best_indcs[keeps], :3], match_scores
+    order = np.argsort(match_scores)[::-1]
+    return a_pos[keeps, :3][order], b_pos[best_indcs[keeps], :3][order], match_scores[order]
 

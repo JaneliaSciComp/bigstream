@@ -1559,24 +1559,24 @@ def deformable_align(
         ])
     control_point_spacing_xyz = control_point_spacing[::-1]
 
-    # initial control point grid
-    cp_divisor = control_point_spacing_xyz * control_point_levels[0]
+    # compute initial control point grid
+    initial_cp_units = control_point_spacing_xyz * control_point_levels[0]
     initial_cp_grid = [
         max(1, round(x*y/d))
-        for x, y, d in zip(fix.GetSize(), fix.GetSpacing(), cp_divisor)
+        for x, y, d in zip(fix.GetSize(), fix.GetSpacing(), initial_cp_units)
     ]
     transform = sitk.BSplineTransformInitializer(
         image1=fix, transformDomainMeshSize=initial_cp_grid, order=3,
     )
-    bspline_cp_scale_levels = control_point_levels[::-1]
+    bspline_scale_factors = control_point_levels[::-1]
     logger.debug((
         f'{context} '
-        f'BSpline control point levels: {bspline_cp_scale_levels}, '
-        f'mesh size: {fix.GetSize()}*{fix.GetSpacing()}/({control_point_spacing_xyz}*{control_point_levels[0]})={initial_cp_grid}, '
+        f'BSpline scale factors: {bspline_scale_factors}, '
+        f'initial mesh size: {fix.GetSize()}*{fix.GetSpacing()}/({control_point_spacing_xyz}*{control_point_levels[0]})={initial_cp_grid}, '
         f'BSpline transform {transform} '
     ))
     irm.SetInitialTransformAsBSpline(
-        transform, inPlace=True, scaleFactors=bspline_cp_scale_levels,
+        transform, inPlace=True, scaleFactors=bspline_scale_factors,
     )
 
     # set initial static transforms

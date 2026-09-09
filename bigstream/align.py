@@ -739,7 +739,7 @@ def feature_point_ransac_affine_align(
     if len(mov_spots) < mov_spots_count_threshold:
         logger.info(f'{context} insufficient moving spots found ({len(mov_spots)}) expected {mov_spots_count_threshold}')
         if safeguard_exceptions:
-            raise ValueError('mov spot detection safeguard failed')
+            raise ValueError(f'{context} mov spot detection safeguard failed')
         else:
             logger.info(f'{context} - RANSAC failed (insufficient mov spots) - returning default affine')
             return default
@@ -792,7 +792,7 @@ def feature_point_ransac_affine_align(
             f'match scores: {match_scores}\n'
         ))
         if safeguard_exceptions:
-            raise ValueError('point matches safeguard failed')
+            raise ValueError(f'{context} point matches safeguard failed')
         else:
             logger.info(f'{context} - RANSAC failed (insufficient matches) - returning default affine')
             return default
@@ -816,11 +816,10 @@ def feature_point_ransac_affine_align(
 
     # ensure affine is sensible
     if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
-        logger.info(f'{context} RANSAC produced degenerate affine: {Aff}')
         if safeguard_exceptions:
-            raise ValueError('diagonal_constraint safeguard failed')
+            raise ValueError(f'{context} diagonal_constraint safeguard failed - degenerate affine {Aff}')
         else:
-            logger.info(f'{context} - RANSAC failed (degenerate affine) - returning default affine')
+            logger.info(f'{context} - RANSAC failed (degenerate affine {Aff}) - returning default affine')
             return default
 
     # augment matrix and return

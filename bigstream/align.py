@@ -802,7 +802,6 @@ def feature_point_ransac_affine_align(
         f'fix: {fix_spots}\n'
         f'moving: {mov_spots}\n'
     ))
-
     if max_point_matches > 0 and len(fix_spots) > max_point_matches:
         logger.debug(f'{context} Select first {max_point_matches} spots to estimate the affine')
         fix_spots = fix_spots[:max_point_matches,:]

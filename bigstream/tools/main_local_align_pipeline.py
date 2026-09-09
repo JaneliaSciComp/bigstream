@@ -444,6 +444,8 @@ def _align_local_data(fix_image: ImageData,
             steps=steps,
             processsize=processing_size,
             overlap=processing_overlap_factor,
+            foreground_percentage=foreground_percentage,
+            rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
         )
         deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
         deformfield_output_chunksize = deformfield_spatial_chunksize + (len(deformfield_spatial_chunksize),)
@@ -535,6 +537,8 @@ def _align_local_data(fix_image: ImageData,
             steps=steps,
             processsize=processing_size,
             overlap=processing_overlap_factor,
+            foreground_percentage=foreground_percentage,
+            rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
         )
         inv_deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
         inv_deformfield_output_chunksize = inv_deformfield_spatial_chunksize + (len(inv_deformfield_spatial_chunksize),)

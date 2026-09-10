@@ -250,6 +250,16 @@ def _generate_foreground_mask(args):
         axes=axes,
         dataset_transformations=coordinate_transformations,
         zarr_format=output_zarr_format,
+        image_subsampling=mask_subsampling,
+        mask_smoothing=args.mask_smoothing,
+        lambda1=args.mask_lambda1,
+        lambda2=args.mask_lambda2,
+        iterations=mask_iterations,
+        smooth_sigmas=smooth_sigmas,
+        shrink_factors=mask_shrink_factors,
+        background=args.background,
+        percentile_thresh=args.mask_thresh_percentile,
+        final_dilation=mask_dilation,
     )
 
     output_shard_size = derive_shard_shape(

@@ -43,6 +43,9 @@
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "CLAUDE_CODE_DISABLE_ANALYTICS": "1"
     },
+    "containerEnv": {
+        "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
+    },
     "postCreateCommand": "bash .devcontainer/post-create.sh",
     "remoteUser": "vscode"
 }

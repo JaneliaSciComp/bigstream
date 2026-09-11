@@ -14,8 +14,9 @@ if ! command -v claude &> /dev/null; then
     npm install -g @anthropic-ai/claude-code
 fi
 
-echo 'source ${containerWorkspaceFolder}/.devcontainer/settings.sh' >> ~/.bashrc
-echo 'source ${containerWorkspaceFolder}/.devcontainer/settings.sh' >> ~/.bashrc
+WS="$(pwd)"
+echo "source ${WS}/.devcontainer/settings.sh" >> ~/.bashrc
+echo "source ${WS}/.devcontainer/settings.sh" >> ~/.zshrc
 
 echo ""
 echo "=========================================="

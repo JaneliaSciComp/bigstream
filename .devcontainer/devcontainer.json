@@ -21,7 +21,8 @@
                 "tamasfe.even-better-toml",
                 "dbaeumer.vscode-eslint",
                 "esbenp.prettier-vscode",
-                "bradlc.vscode-tailwindcss"
+                "bradlc.vscode-tailwindcss",
+                "Anthropic.claude-code"
             ],
             "settings": {
                 "python.defaultInterpreterPath": "${workspaceFolder}/.pixi/envs/default/bin/python",

@@ -216,7 +216,7 @@ def _generate_foreground_mask(args):
     else:
         mask_dilation = args.mask_dilation[::-1]
 
-    mask, mask_spacing = generate_foreground_mask(
+    mask, mask_spacing, mask_background = generate_foreground_mask(
         image_array,
         get_spatial_values(image_data.voxel_spacing),
         image_subsampling=mask_subsampling,
@@ -257,7 +257,9 @@ def _generate_foreground_mask(args):
         iterations=mask_iterations,
         smooth_sigmas=smooth_sigmas,
         shrink_factors=mask_shrink_factors,
-        background=args.background,
+        # persist the background that actually produced the mask, not the
+        # command line input - that is None on every automatic run
+        background=mask_background,
         percentile_thresh=args.mask_thresh_percentile,
         final_dilation=mask_dilation,
     )

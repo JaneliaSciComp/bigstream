@@ -56,11 +56,17 @@ def generate_foreground_mask(image,
         thresh = np.percentile(subsampled_image, percentile_thresh)
         logger.info(f'Use a threshold of {thresh} for {percentile_thresh}th percentile to determine the mask')
         mask = gaussian_filter(subsampled_image, smooth_sigmas[-1]) > thresh
+        # report against the threshold that actually produced the mask,
+        # otherwise _mask_report compares the image against 0
+        background = thresh
 
     # enlarge and smooth mask
     mask = binary_closing(mask, np.ones(final_closing)).astype(np.uint8)
     mask = binary_dilation(mask, np.ones(final_dilation)).astype(np.uint8)
-    mask = zoom(mask, np.array(image.shape) / subsampled_image.shape, order=0)
+    # mode='nearest' so the default cval=0 does not shave the mask's outer
+    # boundary planes off on the way back up to full resolution
+    mask = zoom(mask, np.array(image.shape) / subsampled_image.shape, order=0,
+                mode='nearest')
     mask_spacing = subsampled_image_spacing / image_subsampling
     if mask.any():
         logger.info((
@@ -70,7 +76,7 @@ def generate_foreground_mask(image,
         _mask_report(image, mask, background=(background if background is not None else 0))
     else:
         logger.warning(f'No foreground mask found for {image.shape} image')
-    return mask, mask_spacing
+    return mask, mask_spacing, background
 
 
 def _mask_report(image, mask, background=0):
@@ -79,7 +85,8 @@ def _mask_report(image, mask, background=0):
     # label on a 2x-decimated copy - this is good enough for component count
     _, n_components = label(mask[::2, ::2, ::2] > 0)
     logger.info((
-        f'Coverage {mask.mean() * 100:.1f}%, '
+        f'Background {background:.2f}, '
+        f'coverage {mask.mean() * 100:.1f}%, '
         f'signal captured {inside / max(signal.sum(), 1) * 100:.1f}%, '
         f'{n_components} components '
     ))

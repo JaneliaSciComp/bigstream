@@ -13,31 +13,53 @@ from skimage import filters
 logger = logging.getLogger(__name__)
 
 
-def estimate_background(image, rad=5):
+def estimate_background(image, ignore_zeros=True, zero_frac_thresh=0.01):
     """
-    Estimate typical background intensity value from the 8 corners of the image
+    Estimate the background intensity level of an image with the triangle
+    threshold.
+
+    Exact zeros are dropped before histogramming when they account for more
+    than zero_frac_thresh of the voxels. Stitched, rotated or ROI extracted
+    volumes carry large out of FOV regions of exact zeros, and
+    threshold_triangle anchors its construction line on the histogram peak -
+    when the zero bin is the peak the lever arm collapses and the estimate
+    drops towards zero, which floods the mask.
 
     Parameters
     ----------
     image : nd array
         The image
 
-    rad : int (default: 5)
-        The length of cubes samples from corners
+    ignore_zeros : bool (default: True)
+        Whether to drop exact zeros before estimating
+
+    zero_frac_thresh : scalar float (default: 0.01)
+        Only drop exact zeros when they account for more than this fraction of
+        the voxels - an image can legitimately hold a few zero valued voxels
 
     Returns
     -------
-    background_estimate : scalar of image.dtype
-        The estimated background value
+    background_estimate : scalar float
+        The estimated background intensity level
     """
 
-    a, b = slice(0, rad), slice(-rad, None)
-    if image.ndim == 2:
-        corners = ((a, a), (a, b), (b, a), (b, b))
-    elif image.ndim == 3:
-        corners = ((a,a,a), (a,a,b), (a,b,a), (a,b,b),
-                   (b,a,a), (b,a,b), (b,b,a), (b,b,b))
-    return np.median([np.mean(image[c]) for c in corners])
+    samples = np.asarray(image).reshape(-1)
+    samples = samples[np.isfinite(samples)]
+    if ignore_zeros and samples.size > 0:
+        zero_frac = np.count_nonzero(samples == 0) / samples.size
+        if zero_frac > zero_frac_thresh:
+            logger.info((
+                f'Exclude {zero_frac * 100:.1f}% exact zero voxels '
+                '(out of FOV padding) from the background estimate'
+            ))
+            samples = samples[samples != 0]
+    if samples.size == 0:
+        logger.warning('No valid voxels to estimate the background from - use 0')
+        return 0.
+    if samples.min() == samples.max():
+        logger.warning(f'Constant image ({samples.min()}) - use it as the background')
+        return float(samples.min())
+    return float(filters.threshold_triangle(samples))
 
 
 def segment(
@@ -86,7 +108,8 @@ def segment(
     """
 
     if threshold is not None:
-        image[image < threshold] = 0
+        # never write into the caller's array
+        image = np.where(image < threshold, 0, image)
     if init is None:
         if threshold is not None:
             # seed from the image's own intensity so
@@ -178,8 +201,11 @@ def foreground_segmentation(
         Controls variance of foreground region. A larger number means a larger segment.
 
     background : scalar float (default: None)
-        An estimate of the average background intensity value. If None, it will
-        automatically be estimated from the image using level_set.estimate_background
+        The background intensity level. Voxels below it are zeroed before
+        segmenting and, when no mask is given, seed the level set. If None it
+        is estimated with level_set.estimate_background - once on the input
+        image, which is the value returned to the caller, and again at every
+        scale on the smoothed and decimated image actually being segmented.
 
     return_largest_cc_only : bool (default: True)
         If true, final mask is eroded, then connected components are found,
@@ -199,7 +225,20 @@ def foreground_segmentation(
     -------
     foreground_mask : binary nd-array
         Foreground segmentation, same shape as image, uint8
+
+    background : scalar float
+        The background level resolved for the input image - either the value
+        given by the caller or the one estimated from image
     """
+
+    # resolve the background once, on the image as given, before any smoothing
+    # or decimation, so the value returned describes the data the caller passed
+    explicit_background = background is not None
+    if explicit_background:
+        logger.info(f'Use the given background level: {background}')
+    else:
+        background = estimate_background(image)
+        logger.info(f'Estimated background for {image.ndim}-D image: {background}')
 
     # segment
     seg_iter_params = list(zip(iterations, shrink_factors, smooth_sigmas))
@@ -207,14 +246,26 @@ def foreground_segmentation(
     for its, sf, ss in seg_iter_params:
         logger.debug(f'Apply gaussian: {ss}/{voxel_spacing} -> {ss/voxel_spacing}, shrink factor: {sf}')
         smoothed_image = gaussian_filter(image, ss/voxel_spacing) if ss > 0 else image
-        image_small = zoom(smoothed_image, 1./sf, order=3)
+        # mode='nearest': the default 'constant'/cval=0 zero-fills the outer
+        # boundary planes for some shape/factor combinations (e.g. 48 -> 24),
+        # which fakes up a block of background voxels the image never had
+        image_small = zoom(smoothed_image, 1./sf, order=3, mode='nearest')
         if mask is not None:
             zoom_factors = [x/y for x, y in zip(image_small.shape, mask.shape)]
             logger.debug(f'Zoom factors: {zoom_factors}')
-            mask = zoom(mask, zoom_factors, order=0)
-        elif background is None:
-            background = filters.threshold_triangle(image_small)
-            logger.debug(f'Estimated background for {image.ndim}-D image: {background}')
+            mask = zoom(mask, zoom_factors, order=0, mode='nearest')
+
+        if explicit_background:
+            scale_background = background
+        else:
+            # re-estimate on the image that is actually segmented: smoothing
+            # and decimation narrow the background peak, so a level taken at
+            # the coarsest scale sits inside the noise at the finest one
+            scale_background = estimate_background(image_small)
+            logger.debug((
+                f'Background for scale (sigma: {ss}, shrink: {sf}) '
+                f'{image_small.shape}: {scale_background}'
+            ))
 
         mask = segment(
             image_small,
@@ -222,7 +273,7 @@ def foreground_segmentation(
             lambda2,
             its,
             smoothing=mask_smoothing,
-            threshold=background,
+            threshold=scale_background,
             init=mask,
         )
 
@@ -238,7 +289,7 @@ def foreground_segmentation(
     if mask.shape != image.shape:
         to_reshape = mask.shape
         zoom_factors = [x/y for x, y in zip(image.shape, to_reshape)]
-        mask = zoom(mask, zoom_factors, order=0)
+        mask = zoom(mask, zoom_factors, order=0, mode='nearest')
         logger.info(f'Final mask reshape {to_reshape} to {image.shape} -> {mask.shape}')
     return mask, background
 

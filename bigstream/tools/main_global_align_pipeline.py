@@ -9,7 +9,6 @@ import bigstream.transform as bst
 import zarr
 
 from dask.distributed import (Client, LocalCluster)
-from skimage import filters
 
 
 from bigstream.align import alignment_pipeline
@@ -18,6 +17,7 @@ from bigstream.configure_bigstream import (configure_logging,
 from bigstream.diagnostics import dice_score
 from bigstream.distributed_align import distributed_alignment_pipeline
 from bigstream.io_utility import read_block
+from bigstream.level_set import estimate_background
 from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr, calc_downsampling_attr,
                                   clip_arr_to_roi)
@@ -571,8 +571,9 @@ def _apply_global_transform(reg_args:RegistrationInputs,
 
 
 def _estimate_background(image_array):
-    sub = image_array[::2, ::2, ::2]
-    bg = filters.threshold_triangle(sub)
+    # delegate to the mask path's estimator so the two pipelines cannot
+    # disagree about what the background level of the same image is
+    bg = estimate_background(image_array[::2, ::2, ::2])
     logger.info(f'Estimate background: {bg}')
     return bg
 

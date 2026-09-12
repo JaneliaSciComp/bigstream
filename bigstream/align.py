@@ -9,6 +9,11 @@ import bigstream.utility as ut
 
 from bigstream import features
 from bigstream.configure_irm import configure_irm
+from bigstream.deform_regularization import (
+    is_orientation_preserving,
+    validate_deform_regularization_params,
+    project_bspline_transform,
+)
 from bigstream.metrics import patch_mutual_information
 from bigstream.metrics import local_correlation_coefficient
 from bigstream.diagnostics import deform_field_diagnostics
@@ -1375,6 +1380,7 @@ def deformable_align(
     mov_spacing,
     control_point_spacing,
     control_point_levels,
+    control_point_constraint=None,
     alignment_spacing=None,
     fix_mask=None,
     mov_mask=None,
@@ -1429,7 +1435,31 @@ def deformable_align(
         is [4, 2, 1] then method will optimize at 400.0 units control
         points spacing, then optimize again at 200.0 units, then again
         at the requested 100.0 units control point spacing.
-    
+
+    control_point_constraint : dict (default: None)
+        If given, constrain the optimized control point coefficients to
+        guarantee the deformation is locally invertible (no folding), using
+        the sufficient condition of Chun & Fessler 2009. The coefficients are
+        projected onto the constraint set after optimization, which can only
+        make the image matching metric worse - see the logged before/after
+        metric values for the cost on your data.
+
+        None (the default) disables it and leaves behavior unchanged.
+
+        Keys, all optional:
+            'k': float or zyx list (default 0.32), per-component allowance.
+                 `sum(k) < 1` is required and guarantees a jacobian
+                 determinant of at least `1 - sum(k)` everywhere. Smaller is
+                 smoother and safer, larger fits the data more closely.
+            'K': float or zyx list (default: same as 'k'), per-component
+                 allowance for local expansion along the same axis. Set larger
+                 than 'k' to permit acute expansion while still forbidding
+                 collapse.
+            'mode': 'final' (default and currently the only supported value),
+                 project once after optimization.
+            'max_sweeps': int (default 100), projection iteration budget.
+            'tol': float (default 1e-9), projection convergence tolerance.
+
     alignment_spacing : float (default: None)
         Fixed and moving images are skip sampled to a voxel spacing
         as close as possible to this value. Intended for very fast
@@ -1505,6 +1535,10 @@ def deformable_align(
     # store initial fixed image shape
     initial_fix_shape = fix.shape
     initial_fix_spacing = fix_spacing
+
+    # validate the local invertibility configuration before any expensive work
+    control_point_constraint = validate_deform_regularization_params(
+        control_point_constraint, fix.ndim)
 
     # format static transform data explicitly
     a, b = format_static_transform_data(
@@ -1608,6 +1642,47 @@ def deformable_align(
         initial_metric_value = irm.MetricEvaluate(fix, mov)
         irm.Execute(fix, mov)
         final_metric_value = irm.MetricEvaluate(fix, mov)
+        if control_point_constraint is not None:
+            # project the optimized control points onto the local
+            # invertibility constraint set, then re-evaluate the metric so the
+            # value checked below belongs to the transform actually returned
+            pre_projection_metric_value = final_metric_value
+            projection_info = project_bspline_transform(
+                transform,
+                k=control_point_constraint['k'],
+                K=control_point_constraint['K'],
+                max_sweeps=control_point_constraint['max_sweeps'],
+                tol=control_point_constraint['tol'],
+                context=context,
+            )
+            if projection_info['n_violating_before'] > 0:
+                # MetricEvaluate reports the transform state captured during
+                # Execute and does not see coefficients written afterwards, so
+                # re-set the initial transform to refresh it. Without this the
+                # value below is stale and final_metric_check would be scoring
+                # the unprojected transform rather than the one returned.
+                irm.SetInitialTransformAsBSpline(
+                    transform, inPlace=True, scaleFactors=[1],
+                )
+                final_metric_value = irm.MetricEvaluate(fix, mov)
+                logger.info((
+                    f'{context} Deform align '
+                    f'initial metric: {initial_metric_value}, '
+                    f'final optimization metric: {pre_projection_metric_value}, '
+                    f'constraint adjusted metric: {final_metric_value} '
+                ))
+            # the guarantee covers the bspline warp; the composite warp is
+            # orientation preserving only if the static transforms are too
+            flipping = [
+                i for i, t in enumerate(static_transform_list)
+                if np.asarray(t).ndim == 2 and not is_orientation_preserving(t)
+            ]
+            if flipping:
+                logger.warning((
+                    f'{context} static transforms at positions {flipping} are '
+                    'not orientation preserving, so the composite transform '
+                    'may fold even though the deformation does not'
+                ))
     except Exception as e:
         logger.error(f'{context} Registration failed due to ITK exception: {e}')
         logger.info(f'{context} Returning default')

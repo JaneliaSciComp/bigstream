@@ -1,4 +1,8 @@
+import logging
+import re
+
 import numpy as np
+import pytest
 import SimpleITK as sitk
 
 from bigstream.align import deformable_align, alignment_pipeline
@@ -332,4 +336,130 @@ def test_return_tuple_consistency():
     _, final_ssd = _apply_field(fix, mov, SPACING, field)
     assert final_ssd < 0.5 * initial_ssd, (
         f"Field does not reduce SSD: initial={initial_ssd:.4f}, final={final_ssd:.4f}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 10. Local invertibility constraint (control_point_constraint)
+# ---------------------------------------------------------------------------
+
+def _interior_jacobian(field, spacing, margin=4):
+    """min |J| and non-positive fraction, excluding a boundary margin.
+
+    The boundary is excluded because the bspline evaluates to zero
+    displacement outside its supported region, which puts a step in the
+    sampled field at the domain edge regardless of the coefficients.
+    """
+    disp = ut.numpy_to_sitk(field[..., ::-1].astype(np.float64), spacing, vector=True)
+    jacobian = sitk.GetArrayFromImage(sitk.DisplacementFieldJacobianDeterminant(disp))
+    core = jacobian[margin:-margin, margin:-margin, margin:-margin]
+    return float(core.min()), float((core <= 0).mean())
+
+
+def _folding_pair():
+    """A fix/mov pair whose unconstrained registration is known to fold."""
+    fix = _random_smooth_volume(SHAPE)
+    sitk_fix = sitk.Cast(ut.numpy_to_sitk(fix, SPACING), sitk.sitkFloat32)
+    bspline_tx = sitk.BSplineTransformInitializer(sitk_fix, [3] * 3, order=3)
+    params = np.array(bspline_tx.GetParameters())
+    params += np.random.default_rng(7).uniform(-6.0, 6.0, size=params.shape)
+    bspline_tx.SetParameters(params.tolist())
+    mov = sitk.GetArrayFromImage(sitk.Resample(
+        sitk_fix, sitk_fix, bspline_tx, sitk.sitkLinear, 0.0, sitk.sitkFloat32,
+    )).astype(np.float32)
+    return fix, mov
+
+
+# fine control points + an aggressive optimizer, to provoke folding
+FOLDING_KWARGS = dict(
+    metric='MS', shrink_factors=(1,), smooth_sigmas=(0.0,),
+    optimizer_args={'learningRate': 2.0, 'minStep': 0.0,
+                    'numberOfIterations': 200},
+)
+
+
+def test_constraint_disabled_by_default():
+    """Omitting the constraint and passing None give identical results."""
+    fix, mov = _folding_pair()
+
+    _, omitted = deformable_align(
+        fix, mov, SPACING, SPACING, 4.0, [1], **FOLDING_KWARGS,
+    )
+    _, explicit_none = deformable_align(
+        fix, mov, SPACING, SPACING, 4.0, [1],
+        control_point_constraint=None, **FOLDING_KWARGS,
+    )
+    np.testing.assert_array_equal(omitted, explicit_none)
+
+
+def test_constraint_removes_folding():
+    """The unconstrained fit folds; the constrained fit does not."""
+    fix, mov = _folding_pair()
+
+    _, unconstrained = deformable_align(
+        fix, mov, SPACING, SPACING, 4.0, [1], **FOLDING_KWARGS,
+    )
+    unconstrained_min, unconstrained_frac = _interior_jacobian(unconstrained, SPACING)
+    assert unconstrained_frac > 0, 'test setup no longer produces folding'
+    assert unconstrained_min < 0
+
+    _, constrained = deformable_align(
+        fix, mov, SPACING, SPACING, 4.0, [1],
+        control_point_constraint={'k': 0.32}, **FOLDING_KWARGS,
+    )
+    constrained_min, constrained_frac = _interior_jacobian(constrained, SPACING)
+    assert constrained_frac == 0.0
+    assert constrained_min > 0.0
+    # and it is still a real deformation, not a collapse to identity
+    assert np.max(np.abs(constrained)) > 0.5
+
+
+def test_constraint_rejects_bad_configuration():
+    fix, mov = _folding_pair()
+
+    with pytest.raises(ValueError, match='sum'):
+        deformable_align(
+            fix, mov, SPACING, SPACING, 4.0, [1],
+            control_point_constraint={'k': [0.4, 0.4, 0.4]}, **FOLDING_KWARGS,
+        )
+    with pytest.raises(ValueError, match='mode'):
+        deformable_align(
+            fix, mov, SPACING, SPACING, 4.0, [1],
+            control_point_constraint={'mode': 'iteration'}, **FOLDING_KWARGS,
+        )
+    with pytest.raises(ValueError, match='unknown'):
+        deformable_align(
+            fix, mov, SPACING, SPACING, 4.0, [1],
+            control_point_constraint={'kk': 0.3}, **FOLDING_KWARGS,
+        )
+
+
+def test_constrained_metric_is_reevaluated_after_projection(caplog):
+    """
+    The metric reported after projection must reflect the projected transform.
+
+    SimpleITK's MetricEvaluate reports the transform state captured during
+    Execute and ignores coefficients written afterwards, so deformable_align
+    has to re-set the initial transform before re-evaluating. Without that the
+    'constraint adjusted metric' is stale and final_metric_check scores a
+    transform that is not the one returned.
+    """
+    fix, mov = _folding_pair()
+
+    with caplog.at_level(logging.INFO, logger='bigstream.align'):
+        deformable_align(
+            fix, mov, SPACING, SPACING, 4.0, [1],
+            control_point_constraint={'k': 0.32}, **FOLDING_KWARGS,
+        )
+
+    lines = [r.message for r in caplog.records
+             if 'final optimization metric' in r.message]
+    assert lines, 'no constraint metric line was logged'
+    optimization = float(re.search(
+        r'final optimization metric: (-?[\d.eE+-]+)', lines[-1]).group(1))
+    adjusted = float(re.search(
+        r'constraint adjusted metric: (-?[\d.eE+-]+)', lines[-1]).group(1))
+    assert optimization != adjusted, (
+        'metric was not re-evaluated after projection: the projection moved '
+        'coefficients but the reported metric is unchanged'
     )

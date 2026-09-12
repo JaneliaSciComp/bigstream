@@ -82,8 +82,15 @@ deform: &deform_args
   <<: *affine_args
   control_point_spacing: 50
   control_point_levels: [1]
+  # optional local invertibility constraint (Chun & Fessler 2009):
+  # guarantees the deformation does not fold, at some cost in metric value.
+  # omit or leave null to disable (default)
+  control_point_constraint:
+  #  k: 0.32            # scalar or [kz, ky, kx]; sum(k) < 1, min|J| >= 1-sum(k)
+  #  K:                 # optional expansion allowance, defaults to k
+  #  mode: final
 
-elastix: &elastix_args
+elastix_deform: &elastix_deform_args
   align_method: bspline
   alignment_spacing: 1.0
   control_point_spacing: 50

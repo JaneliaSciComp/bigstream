@@ -64,6 +64,8 @@ local_align:
         alignment_spacing: 1.0
         control_point_spacing: 128
         control_point_levels: [1]
+        control_point_constraint:
+            k: 0.32
         shrink_factors: [1]
         smooth_sigmas: [1.0]
         metric: MMI

@@ -1457,7 +1457,18 @@ def deformable_align(
                  collapse.
             'mode': 'final' (default and currently the only supported value),
                  project once after optimization.
-            'max_sweeps': int (default 100), projection iteration budget.
+            'max_displacement': float or zyx list (default None), bound on the
+                 per-component displacement in physical units. None disables
+                 it. 'k' bounds derivatives, not amplitude, so without this a
+                 smooth but very large displacement is fully C4 compliant - and
+                 while such a block does not fold on its own, it folds where
+                 `distributed_align` blends it against a neighbour that fitted
+                 something different. Use
+                 `deform_regularization.blend_safe_displacement_bound` to pick
+                 a value from the block overlap and voxel spacing.
+            'max_sweeps': int (default 100, or 300 when 'max_displacement' is
+                 set, since alternating between the two constraint sets
+                 converges more slowly), projection iteration budget.
             'tol': float (default 1e-9), projection convergence tolerance.
 
     alignment_spacing : float (default: None)
@@ -1651,11 +1662,13 @@ def deformable_align(
                 transform,
                 k=control_point_constraint['k'],
                 K=control_point_constraint['K'],
+                max_displacement=control_point_constraint['max_displacement'],
                 max_sweeps=control_point_constraint['max_sweeps'],
                 tol=control_point_constraint['tol'],
                 context=context,
             )
-            if projection_info['n_violating_before'] > 0:
+            if (projection_info['n_violating_before'] > 0
+                    or projection_info['n_clamped'] > 0):
                 # MetricEvaluate reports the transform state captured during
                 # Execute and does not see coefficients written afterwards, so
                 # re-set the initial transform to refresh it. Without this the

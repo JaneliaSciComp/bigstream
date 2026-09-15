@@ -22,10 +22,11 @@ def configure_logging(config_file, verbose):
     return logging.getLogger()
 
 
-def set_cpu_resources(cpus:int):
-    if cpus:
-        print(f'Set CPU resources: {cpus}')
-        os.environ['ITK_THREADS'] = str(cpus)
+def set_cpu_resources(cpu_cores:int, threads_per_cpu=1):
+    if cpu_cores:
+        cpus = cpu_cores * threads_per_cpu
+        print(f'Set CPU resources: {cpu_cores} * {threads_per_cpu} -> {cpus}')
+        os.environ['ITK_THREADS'] = str(cpus * threads_per_cpu)
         # ITK honors this env var when its global MultiThreader initializes.
         # SimpleITK's SetGlobalDefaultNumberOfThreads does NOT affect the `itk`
         # package elastix uses (separate libraries), so bound the `itk` side here.
@@ -35,6 +36,10 @@ def set_cpu_resources(cpus:int):
         os.environ['OPENBLAS_NUM_THREADS'] = str(cpus)
         os.environ['OPENMP_NUM_THREADS'] = str(cpus)
         os.environ['OMP_NUM_THREADS'] = str(cpus)
+    else:
+        cpus = 1
+
+    print('OS environment: ', os.environ)
 
     return cpus
 
@@ -86,9 +91,24 @@ deform: &deform_args
   # guarantees the deformation does not fold, at some cost in metric value.
   # omit or leave null to disable (default)
   control_point_constraint:
-  #  k: 0.32            # scalar or [kz, ky, kx]; sum(k) < 1, min|J| >= 1-sum(k)
+  #  k: 0.1             # scalar or [kz, ky, kx]; sum(k) < 1, min|J| >= 1-sum(k)
   #  K:                 # optional expansion allowance, defaults to k
   #  mode: final
+  #  # Bound on the per-component displacement, in the same physical units as
+  #  # the spacing the pipeline runs at - note that is voxel_spacing divided by
+  #  # the expansion factor, not the raw value recorded in the zarr.
+  #  #
+  #  # 'k' bounds derivatives, not amplitude, so without this a smooth but huge
+  #  # displacement is C4 compliant yet still folds where distributed_align
+  #  # blends it against a neighbour that fitted something different. The safe
+  #  # ceiling is (1 - sum(k) - 0.1) * L / (2 * ndim) with L the blend ramp
+  #  # length, so it depends on blocksize/overlap/spacing - leave this unset
+  #  # and the local align step logs the ceiling it computed for your lattice.
+  #  #
+  #  # Prefer a small k with a larger max_displacement over the reverse: k=0.1
+  #  # still guarantees min|J| >= 0.7 per block, and spends the freed jacobian
+  #  # budget on amplitude, which is what actually binds.
+  #  max_displacement: 16
 
 elastix_deform: &elastix_deform_args
   align_method: bspline

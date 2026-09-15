@@ -46,25 +46,37 @@ def deform_field_diagnostics(field, spacing, context=''):
     ))
 
     if n_folded:
-        # Distinguish real folding from the boundary artifact: a bspline
-        # evaluates to zero displacement outside the region it supports, so
-        # sampling the field anywhere past that region puts a step in it and
-        # reports folding there no matter what the coefficients are. This
-        # happens whenever the rendered grid is larger than the transform
-        # domain, e.g. when alignment_spacing skip samples the images the
-        # bspline domain was built from. Folding hugging the block faces is
-        # that artifact; folding in the interior is a real fold.
+        # Locate the folding, but do not explain it away. Folding at a block
+        # face used to be reported as "likely a transform domain boundary
+        # artifact" and ignored - which is exactly how a real one voxel fold
+        # sheet survived several production runs (a bspline rendered outside
+        # its valid region returns zero displacement, putting a full amplitude
+        # step at the face). `bspline_to_displacement_field` now extends the
+        # field past the domain instead, so face folding is NOT expected and
+        # is reported as an error wherever it carries a real displacement.
         folded = np.argwhere(jac_arr <= 0)
         border_distance = np.minimum(
             folded, np.array(jac_arr.shape) - 1 - folded).min(axis=1)
         n_interior = int(np.count_nonzero(border_distance > 2))
+        n_face = n_folded - n_interior
         logger.info((
             f'{context} Deform align folding location: '
-            f'{n_folded - n_interior} within 2 voxels of a face '
-            f'(likely a transform domain boundary artifact), '
+            f'{n_face} within 2 voxels of a face, '
             f'{n_interior} in the interior '
-            f'({100.0 * n_interior / jac_arr.size:.4f}% genuinely folded)'
+            f'({100.0 * n_interior / jac_arr.size:.4f}% of the block)'
         ))
+        if n_interior:
+            logger.error((
+                f'{context} Deform align has {n_interior} interior folded '
+                'voxels - the deformation is not locally invertible'
+            ))
+        if n_face:
+            logger.error((
+                f'{context} Deform align has {n_face} folded voxels at a block '
+                'face. These blend into neighbouring blocks, so they are not '
+                'self correcting; check the field smoothness maxima below for '
+                'a step at the domain boundary'
+            ))
 
     # field sanity and displacement magnitude statistics
     u = field

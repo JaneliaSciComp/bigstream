@@ -11,14 +11,15 @@ from flatten_json import flatten
 class ConfigureWorkerPlugin(WorkerPlugin):
 
     def __init__(self, logging_config, verbose,
-                 worker_cpus=0):
+                 worker_cpus=0, worker_threads_per_cpu=1):
         self.logging_config = logging_config
         self.verbose = verbose
         self.worker_cpus = worker_cpus
+        self.worker_threads_per_cpu = worker_threads_per_cpu
 
     def setup(self, worker: Worker):
         self.logger = configure_logging(self.logging_config, self.verbose)
-        set_cpu_resources(self.worker_cpus)
+        set_cpu_resources(self.worker_cpus, threads_per_cpu=self.worker_threads_per_cpu)
 
     def teardown(self, worker: Worker):
         pass

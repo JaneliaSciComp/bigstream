@@ -1254,6 +1254,20 @@ def bspline_to_displacement_field(
     -------
     displacement_field : nd-array
         The displacement vector field given by the b-spline transform
+
+    Notes
+    -----
+    A b-spline evaluates to zero displacement outside its transform domain, so
+    any requested voxel falling outside it would get a step down to zero and a
+    non-positive jacobian determinant there - a folded field, no matter how
+    well behaved the coefficients are. Those voxels are given the nearest
+    in-domain displacement instead, which extends the deformation outward as a
+    constant and keeps the field fold free.
+
+    This is not a rare edge case: a registration's b-spline domain is the
+    voxel center bounding box of the image it was optimized on, so whenever
+    alignment_spacing skip samples that image the domain falls short of the
+    original grid by `skip_factor - 1` voxels at each high face.
     """
     if spacing is None:
         spacing = np.ones(len(shape))
@@ -1266,7 +1280,59 @@ def bspline_to_displacement_field(
         shape[::-1], origin[::-1], spacing[::-1],
         direction[::-1, ::-1].ravel(),
     )
-    return sitk.GetArrayViewFromImage(df).astype(np.float32)[..., ::-1]
+    field = sitk.GetArrayViewFromImage(df).astype(np.float32)[..., ::-1]
+    return _extend_outside_bspline_domain(
+        field, bspline, shape, spacing, origin, direction,
+    )
+
+
+def _extend_outside_bspline_domain(
+    field, bspline, shape, spacing, origin, direction,
+):
+    """
+    Replace displacements sampled outside a bspline's domain by edge replication.
+
+    Only applied for axis aligned grids: with an oblique direction matrix the
+    out of domain region is not a slab per axis and there is nothing cheap and
+    correct to do, so the field is returned untouched.
+    """
+    if not np.allclose(direction, np.eye(len(shape))):
+        return field
+
+    # domain bounds, xyz from sitk -> zyx
+    domain_origin = np.asarray(bspline.GetTransformDomainOrigin())[::-1]
+    domain_size = np.asarray(
+        bspline.GetTransformDomainPhysicalDimensions())[::-1]
+    origin = np.asarray(origin, dtype=np.float64)
+    spacing = np.asarray(spacing, dtype=np.float64)
+
+    for axis, n in enumerate(shape):
+        coordinates = origin[axis] + np.arange(n) * spacing[axis]
+        # A voxel centre lying exactly ON the domain edge is not reliably
+        # inside ITK's valid region: it returns zero displacement there, which
+        # puts a full amplitude step in the field. This is not a corner case -
+        # the registration rebuilds the bspline domain as the voxel centre
+        # bounding box of its fixed image (see SetInitialTransformAsBSpline),
+        # so the outermost voxel centres land exactly on the edge every time.
+        # Compare strictly, with an epsilon, and treat on-edge as outside;
+        # replicating one extra layer where the domain does have a margin is
+        # harmless, whereas missing one leaves a fold.
+        edge_tol = 1e-3 * spacing[axis]
+        inside = np.flatnonzero(
+            (coordinates > domain_origin[axis] + edge_tol) &
+            (coordinates < domain_origin[axis] + domain_size[axis] - edge_tol)
+        )
+        if inside.size == 0:
+            # nothing to replicate from; a zero field is as good as anything
+            continue
+        low, high = inside[0], inside[-1]
+        if low > 0:
+            field[(slice(None),) * axis + (slice(None, low),)] = np.take(
+                field, [low], axis=axis)
+        if high < n - 1:
+            field[(slice(None),) * axis + (slice(high + 1, None),)] = np.take(
+                field, [high], axis=axis)
+    return field
 
 
 def transform_list_to_composite_transform(transform_list, spacing=None, origin=None):

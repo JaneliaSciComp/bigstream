@@ -11,6 +11,7 @@ from itertools import product
 from toolz import partition_all
 
 from .align import alignment_pipeline, deform_field_diagnostics
+from .deform_regularization import (DEFAULT_K, blend_safe_displacement_bound)
 from .distutils import validate_processing_block_size,ThrottledArraySliceReader
 from .image_data import (ImageData, as_image_data)
 from .ome_utils import get_spatial_values
@@ -393,6 +394,156 @@ def _compute_block_transform(compute_transform_params,
     return block_index, block_coords
 
 
+# jacobian determinant held in reserve for the blend term when deriving the
+# safe displacement ceiling. Shared by the computation and the messages so the
+# two cannot drift apart.
+BLEND_MIN_JACOBIAN = 0.1
+
+
+def _total_k(k, ndim):
+    """sum(k) with a scalar broadcast across axes, as coefficient_bounds does."""
+    return float(np.sum(np.broadcast_to(
+        np.atleast_1d(np.asarray(k, dtype=np.float64)), (ndim,))))
+
+
+def _blend_remedy(wanted, block_size, block_overlaps, spacing, k,
+                  min_jacobian=BLEND_MIN_JACOBIAN):
+    """
+    Spell out how to make a displacement bound of `wanted` legal on this lattice.
+
+    The ceiling is `(1 - sum(k) - min_jacobian) * L / (2*ndim)` with
+    `L = (2*overlap - 1) * spacing` the blend ramp length, so there are exactly
+    three levers: shorten the deformation (lower max_displacement), lengthen
+    the ramp (raise overlap_factor), or free jacobian budget (lower k). This
+    returns the concrete value each lever would need, so the message says what
+    to do rather than only what is wrong.
+    """
+    size = np.atleast_1d(np.asarray(block_size, dtype=np.float64))
+    overlaps = np.atleast_1d(np.asarray(block_overlaps, dtype=np.float64))
+    voxel = np.atleast_1d(np.asarray(spacing, dtype=np.float64))
+    ndim = overlaps.size
+    total_k = _total_k(k, ndim)
+
+    ramps = np.maximum(2.0 * overlaps - 1.0, 0.0) * voxel
+    axis = int(np.argmin(np.where(ramps > 0, ramps, np.inf)))
+    ramp = float(ramps[axis])
+
+    options = [f'lower max_displacement to <= the ceiling']
+
+    # lever 2: a longer ramp. L needed = 2*ndim*wanted / headroom
+    headroom = 1.0 - total_k - min_jacobian
+    if headroom > 0:
+        needed_ramp = 2.0 * ndim * wanted / headroom
+        needed_overlap = (needed_ramp / voxel[axis] + 1.0) / 2.0
+        factor = needed_overlap / size[axis]
+        if factor <= 0.5:
+            options.append(f'raise overlap_factor to ~{factor:.2f}')
+        else:
+            options.append(
+                f'raise overlap_factor (would need ~{factor:.2f}, above the '
+                '0.5 maximum, so this lever alone is not enough)')
+
+    # lever 3: a smaller k. sum(k) needed = 1 - m - 2*ndim*wanted/L
+    needed_total_k = 1.0 - min_jacobian - 2.0 * ndim * wanted / ramp
+    if needed_total_k > 0:
+        options.append(f'lower k to ~{needed_total_k / ndim:.3f}')
+    else:
+        options.append(
+            'lower k (no positive k works at this overlap_factor)')
+
+    return '; '.join(options)
+
+
+def _check_blend_safe_displacement(steps, block_size, block_overlaps,
+                                   fix_spacing,
+                                   error_when_check_fails=False):
+    """
+    Warn when a deform step's displacement bound is too loose for this lattice.
+
+    The per-block C4 constraint guarantees each block's own field does not
+    fold, but stitching adds a `grad(w) * (u_A - u_B)` term that C4 does not
+    bound - so two individually compliant blocks that fitted very different
+    displacements still fold where they are blended. The safe ceiling depends
+    on the blend ramp length, which only this function knows: the deform step
+    itself never sees the block lattice.
+
+    Every failing branch reports a concrete remedy. Which lever to reach for
+    depends on something this function cannot know - whether the configured
+    bound reflects a real deformation the data needs, or is simply too loose -
+    so it gives the numbers for all of them rather than picking one.
+    """
+    for step_name, step_args in steps:
+        if 'deform' not in step_name:
+            continue
+        constraint = step_args.get('control_point_constraint')
+        if not constraint:
+            continue
+        k = constraint.get('k')
+        k = DEFAULT_K if k is None else k
+        ndim = len(np.atleast_1d(block_overlaps))
+        ceiling = blend_safe_displacement_bound(
+            block_overlaps, fix_spacing, k,
+            min_jacobian=BLEND_MIN_JACOBIAN,
+        )
+        configured = constraint.get('max_displacement')
+
+        message = None
+        if ceiling == 0.0:
+            # no finite bound helps: the C4 allowance alone consumes the whole
+            # jacobian budget before blending contributes anything
+            k_max = (1.0 - BLEND_MIN_JACOBIAN) / ndim
+            # a concrete suggestion for this lattice, and what it actually buys
+            suggested_k = k_max / 2.0
+            suggested_ceiling = blend_safe_displacement_bound(
+                block_overlaps, fix_spacing, suggested_k,
+                min_jacobian=BLEND_MIN_JACOBIAN,
+            )
+            message = (
+                f"'{step_name}' k={k} leaves no jacobian headroom for "
+                f'blockwise blending (sum(k)={_total_k(k, ndim):.3g} plus the '
+                f'{BLEND_MIN_JACOBIAN} reserve is already >= 1), so no finite '
+                'max_displacement can keep the stitched field fold free. '
+                f'Lower k below {k_max:.3f}; at k={suggested_k:.3f} the ceiling '
+                f'becomes {suggested_ceiling:.4g} for this '
+                'blocksize/overlap/spacing, and max_displacement must be set '
+                'at or under whatever ceiling the chosen k yields.'
+            )
+        elif configured is None:
+            message = (
+                f"'{step_name}' sets no control_point_constraint."
+                'max_displacement, so a block that fits a large smooth '
+                'deformation can still fold the stitched field where it blends '
+                f'into a neighbour. Set max_displacement to <= {ceiling:.4g} '
+                '(same physical units as the spacing, i.e. expansion '
+                'corrected). If your blocks legitimately need more than that, '
+                'raise overlap_factor or lower k instead of raising the bound.'
+            )
+        elif np.any(np.atleast_1d(configured) > ceiling):
+            wanted = float(np.max(np.atleast_1d(configured)))
+            remedy = _blend_remedy(
+                wanted, block_size, block_overlaps, fix_spacing, k)
+            message = (
+                f"'{step_name}' control_point_constraint.max_displacement="
+                f'{configured} exceeds the blend safe ceiling {ceiling:.4g} '
+                'for this blocksize/overlap/spacing; the stitched field may '
+                f'fold where blocks disagree. To keep {wanted:.4g}: {remedy}. '
+                'Check the per block "max |c|" in the projection logs first: '
+                'if your blocks never reach the bound it is simply too loose '
+                'and lowering it costs nothing, but if they do then the '
+                'deformation is real and the ramp is what has to grow.'
+            )
+        else:
+            logger.info((
+                f"'{step_name}' max_displacement={configured} is within the "
+                f'blend safe ceiling {ceiling:.4g}'
+            ))
+
+        if message is not None:
+            if error_when_check_fails:
+                raise ValueError(message)
+            logger.warning(message)
+
+
 def _get_transform_weights(block_index,
                            block_size,
                            block_overlaps,
@@ -406,8 +557,39 @@ def _get_transform_weights(block_index,
     pad = tuple((max(2*y - 1, 0), max(2*y - 1, 0)) for y in block_overlaps)
     weights = np.pad(np.ones(core, dtype=np.float64), pad, mode='linear_ramp')
 
-    # rebalance if any neighbors are missing
-    if rebalance_for_missing_neighbors and not np.all(list(block_neighbors.values())):
+    # A neighbor can be absent for two reasons and they need opposite handling.
+    #
+    #   - It lies off the volume. Nothing exists beyond that face and this
+    #     block's footprint is clipped there, so absorbing the neighbor's share
+    #     of the blend is correct.
+    #   - It lies inside the volume but was never aligned - dropped as
+    #     background by fix_mask/foreground_percentage, or excluded by the roi.
+    #     That territory exists and nobody writes it. Absorbing the share there
+    #     would hold this block's displacement at full weight out to its last
+    #     voxel and then step to zero, which folds the stitched field in a
+    #     block aligned sheet along the mask boundary - outside the mask, where
+    #     the deformation was never constrained by any image data. Keeping the
+    #     linear ramp instead fades this block's deformation to identity as it
+    #     reaches into the unaligned region.
+    edge_neighbors, unaligned_neighbors = [], []
+    for neighbor, flag in block_neighbors.items():
+        if flag:
+            continue
+        neighbor_index = tuple(a + b for a, b in zip(block_index, neighbor))
+        if any(i < 0 or i >= n for i, n in zip(neighbor_index, nblocks)):
+            edge_neighbors.append(neighbor)
+        else:
+            unaligned_neighbors.append(neighbor)
+
+    if unaligned_neighbors:
+        logger.debug((
+            f'Block {block_index} keeps its blending ramp toward '
+            f'{len(unaligned_neighbors)} unaligned neighbors: '
+            f'{unaligned_neighbors}'
+        ))
+
+    # rebalance only for the neighbors that are off the volume
+    if rebalance_for_missing_neighbors and edge_neighbors:
         logger.debug(f'Rebalance transform {weights.shape} weights for {block_index}')
         # define overlap slices
         slices = {}
@@ -418,13 +600,12 @@ def _get_transform_weights(block_index,
         slices[1] = tuple(slice(s - 2*y, s) for y, s in zip(block_overlaps, weights.shape))
 
         missing_weights = np.zeros_like(weights)
-        for neighbor, flag in block_neighbors.items():
-            if not flag:
-                neighbor_region = tuple(slices[-1*b][a]
-                                        for a, b in enumerate(neighbor))
-                region = tuple(slices[b][a]
-                                for a, b in enumerate(neighbor))
-                missing_weights[region] += weights[neighbor_region]
+        for neighbor in edge_neighbors:
+            neighbor_region = tuple(slices[-1*b][a]
+                                    for a, b in enumerate(neighbor))
+            region = tuple(slices[b][a]
+                            for a, b in enumerate(neighbor))
+            missing_weights[region] += weights[neighbor_region]
 
         # rebalance the weights
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -470,6 +651,7 @@ def distributed_alignment_pipeline(
     max_cluster_jobs=0,
     rebalance_for_missing_neighbors=True,
     display_displacement_diagnostics=False,
+    error_if_displacement_check_fails=False,
     **kwargs,
 ):
     """
@@ -552,8 +734,16 @@ def distributed_alignment_pipeline(
         If True, when a block has a missing neighbor, it's linear blending weights
         are rebalanced to account for the missing neighbor. The ensures transforms
         aren't artificially dampened by missing neighbors, which have zero valued
-        displacement. However, if it is desired that the edges of masked regions
-        should more smoothly dampen into backgroun, then set this to false.
+        displacement.
+
+        This applies only to neighbors that lie off the volume. A neighbor that
+        is inside the volume but was never aligned - dropped as background by
+        `fix_mask`/`foreground_percentage`, or excluded by `roi` - always keeps
+        the linear ramp regardless of this flag, so the deformation fades to
+        identity as it reaches into the unaligned region. Rebalancing there
+        would instead hold the block's displacement at full weight out to its
+        last voxel and then step to zero, folding the stitched field along the
+        mask boundary.
 
     kwargs : any additional arguments
         Arguments that will apply to all alignment steps. These are overruled by
@@ -622,6 +812,10 @@ def distributed_alignment_pipeline(
         f'Partition {fix_spatial_dims} into {nblocks} using '
         f'{block_partition_size} blocksize and {overlaps} overlaps'
     ))
+    _check_blend_safe_displacement(steps, block_partition_size, overlaps,
+                                   fix_spatial_spacing,
+                                   error_when_check_fails=error_if_displacement_check_fails)
+
     fix_blocks_ids = []
     fix_blocks_coords = []
     fix_blocks_neighbors = []

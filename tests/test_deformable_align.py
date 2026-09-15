@@ -6,6 +6,7 @@ import pytest
 import SimpleITK as sitk
 
 from bigstream.align import deformable_align, alignment_pipeline
+from bigstream.deform_regularization import project_bspline_transform
 import bigstream.utility as ut
 import bigstream.transform as bst
 
@@ -352,7 +353,8 @@ def _interior_jacobian(field, spacing, margin=4):
     """
     disp = ut.numpy_to_sitk(field[..., ::-1].astype(np.float64), spacing, vector=True)
     jacobian = sitk.GetArrayFromImage(sitk.DisplacementFieldJacobianDeterminant(disp))
-    core = jacobian[margin:-margin, margin:-margin, margin:-margin]
+    trim = slice(margin, -margin if margin else None)
+    core = jacobian[trim, trim, trim]
     return float(core.min()), float((core <= 0).mean())
 
 
@@ -412,6 +414,120 @@ def test_constraint_removes_folding():
     assert constrained_min > 0.0
     # and it is still a real deformation, not a collapse to identity
     assert np.max(np.abs(constrained)) > 0.5
+
+
+def test_bspline_render_extends_past_the_transform_domain():
+    """
+    Voxels outside the bspline domain get the nearest in-domain displacement.
+
+    A bspline evaluates to zero outside its domain, so rendering it over a
+    larger grid used to put a step in the field there. The domain below covers
+    voxel centres 0..28 of a 32 voxel axis, leaving 3 voxels past the far face.
+    """
+    domain = sitk.Image([8] * 3, sitk.sitkUInt8)
+    domain.SetSpacing((4.0, 4.0, 4.0))
+    transform = sitk.BSplineTransformInitializer(domain, [2] * 3, order=3)
+    transform.SetTransformDomainOrigin((0.0, 0.0, 0.0))
+    transform.SetTransformDomainPhysicalDimensions((28.0, 28.0, 28.0))
+    params = np.array(transform.GetParameters())
+    params += np.random.default_rng(3).uniform(-2.0, 2.0, size=params.shape)
+    transform.SetParameters(params.tolist())
+
+    field = bst.bspline_to_displacement_field(
+        transform, SHAPE, spacing=SPACING, origin=np.zeros(3),
+    )
+
+    # the 3 voxels past the domain replicate the last in-domain slice
+    for axis in range(3):
+        last_inside = np.take(field, [28], axis=axis)
+        outside = np.take(field, [29, 30, 31], axis=axis)
+        np.testing.assert_allclose(
+            outside, np.repeat(last_inside, 3, axis=axis), rtol=0, atol=0)
+    # and the replicated region is not trivially zero
+    assert np.abs(np.take(field, [28], axis=0)).max() > 0
+
+    _, folded_fraction = _interior_jacobian(field, SPACING, margin=0)
+    assert folded_fraction == 0.0
+
+
+def test_voxel_centre_bbox_domain_does_not_leave_a_zero_face():
+    """
+    A domain equal to the voxel centre bounding box must still render fold free.
+
+    `SetInitialTransformAsBSpline` discards the initializer's domain and
+    rebuilds it from the registration's fixed image as the voxel centre
+    bounding box, `(size - 1) * spacing`. The outermost voxel centres then land
+    exactly ON the domain edge, where ITK does not consider them inside the
+    valid region and returns zero displacement - a full amplitude step in the
+    field, and a fold sheet one voxel thick on a block face.
+
+    Regression for a production block (2026-09-14) whose logs showed
+    `disp magnitude min=0.0`, `smoothness dy: max jump=10.40` against
+    `p99 jump=0.076`, and 80483 folded voxels that the diagnostics dismissed as
+    a boundary artifact.
+    """
+    shape = (48, 48, 48)
+    spacing = np.array([1.0905166, 0.64713602, 0.64754511])
+
+    image = sitk.Image([s for s in shape], sitk.sitkUInt8)
+    image.SetSpacing(tuple(float(s) for s in spacing[::-1]))
+    transform = sitk.BSplineTransformInitializer(image, [3] * 3, order=3)
+    # the domain the registration rebuilds, rather than the initializer's
+    transform.SetTransformDomainOrigin((0.0, 0.0, 0.0))
+    transform.SetTransformDomainPhysicalDimensions(
+        tuple(float(v) for v in ((np.array(shape) - 1) * spacing)[::-1]))
+    rng = np.random.default_rng(0)
+    transform.SetParameters(
+        rng.uniform(-16.0, 16.0, size=len(transform.GetParameters())).tolist())
+    # make the coefficients fold free in their own right, so anything this
+    # test catches is the boundary behaviour and not a C4 violation
+    project_bspline_transform(transform, k=0.2)
+
+    field = bst.bspline_to_displacement_field(
+        transform, shape, spacing=spacing, origin=None)
+
+    magnitude = np.linalg.norm(field, axis=-1)
+    assert not np.any(magnitude == 0), (
+        f'{int((magnitude == 0).sum())} voxels render to exactly zero '
+        'displacement - the bspline evaluated outside its valid region'
+    )
+    # no single voxel step may dwarf the rest of the field
+    for axis in range(3):
+        jumps = np.linalg.norm(np.diff(field, axis=axis), axis=-1)
+        assert jumps.max() < 10 * np.percentile(jumps, 99), (
+            f'axis {axis}: max jump {jumps.max():.4f} against p99 '
+            f'{np.percentile(jumps, 99):.4f} - a discontinuity, not a gradient'
+        )
+    full_min, full_frac = _interior_jacobian(field, spacing, margin=0)
+    assert full_frac == 0.0, f'{100 * full_frac:.4f}% folded, min|J|={full_min}'
+
+
+def test_alignment_spacing_does_not_fold_at_the_domain_boundary():
+    """
+    A constrained fit must not fold anywhere, including at the block faces.
+
+    The bspline domain is built from the original fixed image grid rather than
+    from the skip sampled image the registration runs on. If it were built
+    from the skip sampled image the two would cover different physical
+    extents, the outermost rendered voxels would fall outside the domain where
+    a bspline evaluates to zero displacement, and the resulting step would
+    report folding there no matter how well constrained the coefficients are.
+    So this asserts over the whole field, with no boundary margin excluded.
+    """
+    fix, mov = _folding_pair()
+
+    for alignment_spacing in (None, 2.0, 4.0):
+        _, field = deformable_align(
+            fix, mov, SPACING, SPACING, 4.0, [1],
+            alignment_spacing=alignment_spacing,
+            control_point_constraint={'k': 0.32}, **FOLDING_KWARGS,
+        )
+        full_min, full_frac = _interior_jacobian(field, SPACING, margin=0)
+        assert full_frac == 0.0, (
+            f'alignment_spacing={alignment_spacing}: {100 * full_frac:.4f}% of '
+            f'voxels fold, min|J|={full_min:.4f}'
+        )
+        assert full_min > 0.0
 
 
 def test_constraint_rejects_bad_configuration():

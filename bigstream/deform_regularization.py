@@ -255,16 +255,96 @@ def chun_fessler_penalty(coefficients, knot_spacing, k=DEFAULT_K, K=None):
     return _scan(np.asarray(coefficients, dtype=np.float64), lo, hi)[3]
 
 
-def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
-                  max_sweeps=100, tol=1e-9):
+def blend_safe_displacement_bound(block_overlaps, spacing, k,
+                                  min_jacobian=0.1):
     """
-    Project a coefficient grid onto C4 by cyclic projection (POCS).
+    Largest per-component displacement that blockwise blending cannot fold.
 
-    Each constraint is a slab `{c : lo <= c[i+1] - c[i] <= hi}`, which is
+    `distributed_align` stitches per-block fields as a weighted sum with
+    linear-ramp weights. The derivative of that sum is
+
+        d/dr [w*u_A + (1-w)*u_B] = w*u_A' + (1-w)*u_B' + dw/dr * (u_A - u_B)
+
+    and the last term is bounded by nothing in C4 - two individually compliant
+    blocks that disagree strongly still fold where they are blended. Over a
+    linear ramp of physical length L the weight gradient is 1/L, so with
+    per-component displacements bounded by U the blend raises the effective
+    derivative bound for every component from k_q to k_q + 2U/L. Chun &
+    Fessler's Lemma 2 sums that over all ndim rows of the jacobian:
+
+        min|J| >= 1 - sum_q (k_q + 2U/L) = 1 - sum(k) - 2*ndim*U/L
+
+    so
+
+        U <= (1 - sum(k) - min_jacobian) * L / (2*ndim)
+
+    The `ndim` factor is easy to drop - every row picks up its own blend term,
+    not just one. Omitting it yields a bound that permits folding: measured on
+    a 5^3 block lattice with L=25 and one runaway block, folding begins at a
+    per-component U of 9.04, which `L/2 = 12.50` would have allowed and
+    `L/(2*ndim) = 4.17` correctly excludes. The bound is worst case (it assumes
+    every component maximally opposed and the weight gradient aligned with it),
+    so the true threshold sits above it - by ~2.2x in that measurement.
+
+    Parameters
+    ----------
+    block_overlaps : 1d array
+        Per-axis block overlap in voxels (zyx), as used to build the blending
+        weights.
+
+    spacing : 1d array
+        Physical voxel spacing (zyx).
+
+    k : float or 1d array (default: DEFAULT_K)
+        The C4 allowance the deform step is configured with.
+
+    min_jacobian : float (default: 0.1)
+        Jacobian determinant to keep in reserve for the blend.
+
+    Returns
+    -------
+    float
+        The bound, as a scalar over the tightest axis. `inf` when there is no
+        overlap to blend across, `0.0` when `k` leaves no headroom at all (in
+        which case no finite displacement is safe and `k` must be reduced).
+    """
+    overlaps = np.atleast_1d(np.asarray(block_overlaps, dtype=np.float64))
+    voxel = np.atleast_1d(np.asarray(spacing, dtype=np.float64))
+    ndim = overlaps.size
+    headroom = 1.0 - _as_per_axis(k, ndim, 'k').sum() - float(min_jacobian)
+    if headroom <= 0:
+        return 0.0
+    # the blending weights ramp linearly over 2*overlap - 1 voxels per axis
+    ramp = np.maximum(2.0 * overlaps - 1.0, 0.0) * voxel
+    if not np.any(ramp > 0):
+        return float('inf')
+    return float(np.min(ramp[ramp > 0]) * headroom / (2.0 * ndim))
+
+
+def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
+                  max_displacement=None, max_sweeps=100, tol=1e-9):
+    """
+    Project a coefficient grid onto C4 (and optionally a displacement bound).
+
+    Each C4 constraint is a slab `{c : lo <= c[i+1] - c[i] <= hi}`, which is
     convex, and the intersection is non-empty (any spatially constant grid is
     feasible), so cyclic projection converges to a feasible point. Pairs that
     already satisfy their bound are untouched - this is a dead-zone operator,
     not a smoother, so a compliant grid is returned unchanged.
+
+    `max_displacement` adds a second convex set, the box
+    `{c : |c^q| <= max_displacement[q]}`, whose projection is an elementwise
+    clip. Because the cubic b-spline basis is non-negative and a partition of
+    unity, the rendered displacement is a convex combination of nearby
+    coefficients, so bounding the coefficients bounds the displacement itself
+    over the whole continuous domain:
+
+        |d_q(r)| <= max|c^q| <= max_displacement[q]
+
+    (per component - the vector magnitude bound is `sqrt(ndim)` times that).
+    This is what C4 alone cannot give: C4 bounds derivatives, so a smooth but
+    huge displacement satisfies it while still folding once blended against a
+    neighbouring block. See `blend_safe_displacement_bound`.
 
     Parameters
     ----------
@@ -276,6 +356,10 @@ def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
         Physical knot spacing, zyx.
 
     k, K : see `coefficient_bounds`
+
+    max_displacement : float, 1d array or None (default: None)
+        Per-component displacement bound in physical units, zyx. None disables
+        the bound and leaves behavior identical to the C4-only projection.
 
     max_sweeps : int (default: 100)
         Maximum number of cyclic sweeps.
@@ -300,24 +384,45 @@ def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
     lo, hi = coefficient_bounds(knot_spacing, k, K)
     scales = np.maximum(np.abs(lo), np.abs(hi))
 
+    bound = (None if max_displacement is None
+             else _as_per_axis(max_displacement, ndim, 'max_displacement'))
+    max_coefficient_before = float(np.abs(c).max()) if c.size else 0.0
+    n_clamped = (0 if bound is None
+                 else int(np.count_nonzero(
+                     np.abs(c) > bound.reshape((ndim,) + (1,) * ndim))))
+
+    def clamp(grid):
+        """Projection onto the displacement box; a no-op when unbounded."""
+        if bound is None:
+            return 0.0
+        limits = bound.reshape((ndim,) + (1,) * ndim)
+        clipped = np.clip(grid, -limits, limits)
+        shift = float(np.abs(clipped - grid).max()) if grid.size else 0.0
+        grid[...] = clipped
+        return shift
+
     before = _scan(c, lo, hi, rtol=tol)
     sweeps_run = 0
-    max_shift = 0.0
+    max_shift = clamp(c)
 
-    # dead zone: a compliant grid is returned untouched
-    if before[1] == 0:
+    # dead zone: a grid that satisfies every constraint is returned untouched
+    if before[1] == 0 and n_clamped == 0:
         after, converged = before, True
     else:
         after, converged = None, False
         for _ in range(max_sweeps):
             absolute_shift, relative_shift = _sweep(c, lo, hi, scales)
+            # re-project onto the box each sweep: the C4 sweep can push a
+            # coefficient back outside it, and vice versa. POCS over the two
+            # convex sets converges to a point in their intersection.
+            clamp_shift = clamp(c)
             sweeps_run += 1
-            max_shift = max(max_shift, absolute_shift)
+            max_shift = max(max_shift, absolute_shift, clamp_shift)
             # a pair's residual excess is twice the correction it still needs,
             # so a sweep that corrects almost nothing is a candidate for
             # feasibility - but confirm it rather than infer it, since
             # projecting one slab can push a neighbouring one back out
-            if relative_shift <= 0.5 * tol:
+            if relative_shift <= 0.5 * tol and clamp_shift == 0.0:
                 after = _scan(c, lo, hi, rtol=tol)
                 if after[1] == 0:
                     converged = True
@@ -344,6 +449,10 @@ def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
         'penalty_after': after[3],
         'max_coefficient_shift': max_shift,
         'min_jacobian_bound': 1.0 - _as_per_axis(k, ndim, 'k').sum(),
+        'n_clamped': n_clamped,
+        'max_coefficient_before': max_coefficient_before,
+        'max_coefficient_after': float(np.abs(c).max()) if c.size else 0.0,
+        'max_displacement_bound': (None if bound is None else bound.tolist()),
     }
     return c, info
 
@@ -393,6 +502,7 @@ def set_bspline_coefficients(transform, coefficients):
 
 
 def project_bspline_transform(transform, k=DEFAULT_K, K=None,
+                              max_displacement=None,
                               max_sweeps=100, tol=1e-9, context=''):
     """
     Project a sitk.BSplineTransform's coefficients onto C4, in place.
@@ -401,21 +511,31 @@ def project_bspline_transform(transform, k=DEFAULT_K, K=None,
     is correct at any multi-resolution level without being told the control
     point spacing.
 
+    `max_displacement` additionally bounds the rendered displacement per
+    component - see `project_to_c4`.
+
     Returns the `info` dict from `project_to_c4`, with `knot_spacing` added.
     A compliant transform is left byte-identical.
     """
     coefficients, knot_spacing = bspline_coefficients(transform)
     projected, info = project_to_c4(
-        coefficients, knot_spacing, k=k, K=K, max_sweeps=max_sweeps, tol=tol,
+        coefficients, knot_spacing, k=k, K=K,
+        max_displacement=max_displacement, max_sweeps=max_sweeps, tol=tol,
     )
     info['knot_spacing'] = knot_spacing.tolist()
-    if info['n_violating_before'] > 0:
+    changed = info['n_violating_before'] > 0 or info['n_clamped'] > 0
+    if changed:
         set_bspline_coefficients(transform, projected)
         logger.info((
             f'{context} C4 projection: '
             f"{info['n_violating_before']}/{info['n_pairs']} coefficient pairs "
-            f"violated the constraint, projected in {info['sweeps_run']} sweeps "
+            f"violated the constraint, {info['n_clamped']} coefficients "
+            f"exceeded the displacement bound "
+            f"{info['max_displacement_bound']}, projected in "
+            f"{info['sweeps_run']} sweeps "
             f"(max shift {info['max_coefficient_shift']:.4g}, "
+            f"max |c| {info['max_coefficient_before']:.4g} -> "
+            f"{info['max_coefficient_after']:.4g}, "
             f"knot spacing {info['knot_spacing']}, "
             f"guaranteed min|J| >= {info['min_jacobian_bound']:.4g})"
         ))
@@ -423,13 +543,14 @@ def project_bspline_transform(transform, k=DEFAULT_K, K=None,
         logger.info((
             f'{context} C4 projection: no violations over '
             f"{info['n_pairs']} coefficient pairs, transform unchanged "
-            f"(guaranteed min|J| >= {info['min_jacobian_bound']:.4g})"
+            f"(max |c| {info['max_coefficient_before']:.4g}, "
+            f"guaranteed min|J| >= {info['min_jacobian_bound']:.4g})"
         ))
     return info
 
 
 SUPPORTED_MODES = ('final',)
-_CONFIG_KEYS = ('k', 'K', 'mode', 'max_sweeps', 'tol')
+_CONFIG_KEYS = ('k', 'K', 'mode', 'max_displacement', 'max_sweeps', 'tol')
 
 
 def validate_deform_regularization_params(config, ndim):
@@ -478,14 +599,26 @@ def validate_deform_regularization_params(config, ndim):
             f'supported modes are {list(SUPPORTED_MODES)}'
         )
 
-    max_sweeps = int(config.get('max_sweeps') or 100)
+    max_displacement = config.get('max_displacement')
+    if max_displacement is not None:
+        max_displacement = _as_per_axis(
+            max_displacement, ndim, 'max_displacement')
+
+    # POCS alternating between the C4 slabs and the displacement box converges
+    # noticeably slower than C4 alone (measured: ~15 sweeps vs ~150 on a grid
+    # clamped from +/-200 to +/-30), so give the combined projection a larger
+    # budget unless the caller asked for a specific one.
+    default_sweeps = 100 if max_displacement is None else 300
+    max_sweeps = int(config.get('max_sweeps') or default_sweeps)
     tol = float(config['tol']) if config.get('tol') is not None else 1e-9
     if max_sweeps < 1:
         raise ValueError(f'max_sweeps must be >= 1, got {max_sweeps}')
     if tol <= 0:
         raise ValueError(f'tol must be positive, got {tol}')
 
-    return {'k': k, 'K': K, 'mode': mode, 'max_sweeps': max_sweeps, 'tol': tol}
+    return {'k': k, 'K': K, 'mode': mode,
+            'max_displacement': max_displacement,
+            'max_sweeps': max_sweeps, 'tol': tol}
 
 
 def is_orientation_preserving(affine_matrix):

@@ -21,6 +21,7 @@ def generate_foreground_mask(image,
                              lambda2=10,
                              background=None,
                              percentile_thresh=None,
+                             normalize=False,
                              final_closing=(5,5,5),
                              final_dilation=(10,10,10)):
     subsampled_image = image[::image_subsampling[0], ::image_subsampling[1], ::image_subsampling[2]]
@@ -40,6 +41,19 @@ def generate_foreground_mask(image,
             f'lambda2: {lambda2}, '
             f'background: {background}, '
         ))
+
+        if normalize:
+            img_min = subsampled_image.min()
+            img_max = subsampled_image.max()
+            subsampled_image = _normalize_image(subsampled_image, shrink_factor=1, num_fitting_levels=2)
+            nimg_min = subsampled_image.min()
+            nimg_max = subsampled_image.max()
+
+            logger.info((
+                f'Normalized {subsampled_image.shape} image - '
+                f'min/max before normalize were {img_min}/{img_max}, after normalize {nimg_min}/{nimg_max}'
+            ))
+
         mask, background = level_set.foreground_segmentation(
             subsampled_image, subsampled_image_spacing,
             mask_smoothing=mask_smoothing,
@@ -77,6 +91,33 @@ def generate_foreground_mask(image,
     else:
         logger.warning(f'No foreground mask found for {image.shape} image')
     return mask, mask_spacing, background
+
+
+def _normalize_image(volume, shrink_factor=4, num_fitting_levels=4, mask=None):
+    import SimpleITK as sitk
+
+    vol = volume.astype(np.float32)
+    image = sitk.GetImageFromArray(vol)
+
+    if mask is None:
+        mask_image = sitk.OtsuThreshold(image, 0, 1, 200)
+    else:
+        mask_image = sitk.GetImageFromArray(mask.astype(np.uint8))
+
+    # Fit the bias field on a downsampled copy for speed...
+    shrunk_image = sitk.Shrink(image, [shrink_factor] * image.GetDimension())
+    shrunk_mask = sitk.Shrink(mask_image, [shrink_factor] * image.GetDimension())
+
+    corrector = sitk.N4BiasFieldCorrectionImageFilter()
+    corrector.SetMaximumNumberOfIterations([50] * num_fitting_levels)
+    _ = corrector.Execute(shrunk_image, shrunk_mask)
+ 
+    # ...then apply the fitted field at full resolution
+    log_bias_field = corrector.GetLogBiasFieldAsImage(image)
+    normalized_image = image / sitk.Exp(log_bias_field)
+ 
+    normalized = sitk.GetArrayFromImage(normalized_image)
+    return normalized
 
 
 def _mask_report(image, mask, background=0):

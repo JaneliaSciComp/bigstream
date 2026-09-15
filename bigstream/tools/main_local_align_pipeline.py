@@ -102,6 +102,9 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
                              type=int, default=1,
                              help='Number of cpus allocated to a dask worker')
+    args_parser.add_argument('--max-worker-threads-per-cpu', dest='max_worker_threads_per_cpu',
+                             type=int, default=1,
+                             help='Maximum number of threads to run on a worker')
     args_parser.add_argument('--max-cluster-jobs', '--max_cluster_jobs',
                              dest='max_cluster_jobs',
                              type=int, default=0,
@@ -164,8 +167,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          global_transform,
                          global_transform_spacing=None,
                          processing_size=None,
-                         processing_overlap=None,
-                         transform_overlap=0.1,
+                         processing_overlap_factor=None,
+                         transform_overlap_factor=0.1,
                          default_overlap=0.5,
                          inv_step=1.0,
                          inv_iterations=(10,),
@@ -178,6 +181,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          dask_config_file:str|None=None,
                          dask_workers:int|None=None,
                          worker_cpus=1,
+                         worker_threads_per_cpu=1,
                          logging_config:str|None=None,
                          compressor:str|None=None,
                          compressor_opts:dict={},
@@ -230,8 +234,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         blocksize=output_blocksize_zyx if shard_shape_zyx is None else None,
     )
 
-    if processing_overlap:
-        local_processing_overlap_factor = processing_overlap
+    if processing_overlap_factor:
+        local_processing_overlap_factor = processing_overlap_factor
     else:
         local_processing_overlap_factor = local_config.get('block_overlap', default_overlap)
     if (local_processing_overlap_factor <= 0 and
@@ -242,8 +246,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             'must be greater than 0 and less than 1 '
         ))
 
-    if transform_overlap:
-        local_transform_overlap_factor = transform_overlap
+    if transform_overlap_factor:
+        local_transform_overlap_factor = transform_overlap_factor
     else:
         local_transform_overlap_factor = local_config.get('transform_overlap', 0.125)
 
@@ -301,7 +305,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     # create worker plugin
     worker_config = ConfigureWorkerPlugin(logging_config,
                                           verbose,
-                                          worker_cpus=worker_cpus)
+                                          worker_cpus=worker_cpus,
+                                          worker_threads_per_cpu=worker_threads_per_cpu)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
     try:
         static_transforms, static_transforms_spacings = reg_args.get_static_transforms()
@@ -443,7 +448,7 @@ def _align_local_data(fix_image: ImageData,
             zarr_format=zarr_format,
             steps=steps,
             processsize=processing_size,
-            overlap=processing_overlap_factor,
+            overlap_factor=processing_overlap_factor,
             foreground_percentage=foreground_percentage,
             rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
         )
@@ -536,7 +541,7 @@ def _align_local_data(fix_image: ImageData,
             zarr_format=zarr_format,
             steps=steps,
             processsize=processing_size,
-            overlap=processing_overlap_factor,
+            overlap_factor=processing_overlap_factor,
             foreground_percentage=foreground_percentage,
             rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
         )
@@ -733,8 +738,8 @@ def main():
         global_transform,
         global_transform_spacing=global_transform_spacing,
         processing_size=reg_inputs.processing_size,
-        processing_overlap=reg_inputs.processing_overlap_factor,
-        transform_overlap=args.local_transform_overlap_factor,
+        processing_overlap_factor=reg_inputs.processing_overlap_factor,
+        transform_overlap_factor=args.local_transform_overlap_factor,
         inv_step=args.inv_step,
         inv_iterations=args.inv_iterations,
         inv_shrink_spacings=inv_shrink_spacings,
@@ -746,6 +751,7 @@ def main():
         dask_config_file=args.dask_config,
         dask_workers=args.local_dask_workers,
         worker_cpus=args.worker_cpus,
+        worker_threads_per_cpu=args.max_worker_threads_per_cpu,
         logging_config=args.logging_config,
         compressor=args.compressor,
         compressor_opts=args.compressor_opts,

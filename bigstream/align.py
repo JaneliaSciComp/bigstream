@@ -9,10 +9,12 @@ import bigstream.utility as ut
 
 from bigstream import features
 from bigstream.configure_irm import configure_irm
-from bigstream.deform_regularization import (
+from bigstream.align_constraints import (
     is_orientation_preserving,
     validate_deform_regularization_params,
     project_bspline_transform,
+    validate_affine_displacement_bound,
+    bound_affine_displacement,
 )
 from bigstream.metrics import patch_mutual_information
 from bigstream.metrics import local_correlation_coefficient
@@ -1127,6 +1129,7 @@ def affine_align(
     rigid=False,
     initial_condition=None,
     alignment_spacing=None,
+    max_displacement=None,
     fix_mask=None,
     mov_mask=None,
     fix_roi=None,
@@ -1177,6 +1180,30 @@ def affine_align(
         Fixed and moving images are skip sampled to a voxel spacing
         as close as possible to this value. Intended for very fast
         simple alignments (e.g. low amplitude motion correction)
+
+    max_displacement : float or zyx list (default: None)
+        Bound on the per-component displacement this affine may induce
+        relative to identity, in physical units, over the full extent of
+        `fix`. None (the default) disables it and leaves behavior unchanged.
+
+        An affine has no coefficient grid to constrain the way
+        `deformable_align`'s `control_point_constraint` does, so a degenerate
+        optimization (e.g. a block with too little foreground to anchor the
+        fit) can return an affine that is individually valid - invertible,
+        orientation-preserving - but wildly implausible: a large anisotropic
+        scale plus a large offset. That alone does not fold anything, but
+        `distributed_align` blends per-block transforms against their
+        neighbours, and an outlier affine folds there the same way an
+        unbounded deform amplitude does - see
+        `align_constraints.blend_safe_displacement_bound`. If the
+        deform step's own `max_displacement` is set, size this one with it
+        in mind: their contributions add when composed, so leave headroom
+        against whatever `blend_safe_displacement_bound` reports for the
+        run's block overlap and spacing.
+
+        When exceeded, the affine's deviation from identity is scaled down
+        uniformly (not clipped entry-by-entry) until the bound is met -
+        see `align_constraints.bound_affine_displacement`.
 
     fix_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
@@ -1239,6 +1266,13 @@ def affine_align(
         The affine or rigid transform matrix matching moving to fixed
     """
     logger.info(f'Affine align {context} -> {kwargs}')
+    # store initial fixed image shape/spacing and validate the displacement
+    # bound before any expensive work, same pattern deformable_align uses for
+    # control_point_constraint
+    initial_fix_shape = fix.shape
+    initial_fix_spacing = np.asarray(fix_spacing, dtype=np.float64)
+    max_displacement = validate_affine_displacement_bound(max_displacement, fix.ndim)
+
     # determine the correct default
     if default is None:
         default = np.eye(fix.ndim + 1)
@@ -1365,6 +1399,11 @@ def affine_align(
         return default
     else:
         affine_ndarray = bst.affine_transform_to_matrix(transform)
+        if max_displacement is not None:
+            extent = np.asarray(initial_fix_shape, dtype=np.float64) * initial_fix_spacing
+            affine_ndarray, _ = bound_affine_displacement(
+                affine_ndarray, extent, max_displacement, context=context,
+            )
         logger.info((
             f'{context} Affine align succeeded: '
             f'(initial_metric={initial_metric_value}, final_metric={final_metric_value}), '
@@ -1464,7 +1503,7 @@ def deformable_align(
                  while such a block does not fold on its own, it folds where
                  `distributed_align` blends it against a neighbour that fitted
                  something different. Use
-                 `deform_regularization.blend_safe_displacement_bound` to pick
+                 `align_constraints.blend_safe_displacement_bound` to pick
                  a value from the block overlap and voxel spacing.
             'max_sweeps': int (default 100, or 300 when 'max_displacement' is
                  set, since alternating between the two constraint sets

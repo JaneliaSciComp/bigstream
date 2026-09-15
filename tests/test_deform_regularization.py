@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import SimpleITK as sitk
 
-from bigstream.deform_regularization import (
+from bigstream.align_constraints import (
     bspline_coefficients,
     c4_violations,
     chun_fessler_penalty,

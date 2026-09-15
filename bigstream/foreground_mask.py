@@ -43,16 +43,8 @@ def generate_foreground_mask(image,
         ))
 
         if normalize:
-            img_min = subsampled_image.min()
-            img_max = subsampled_image.max()
             subsampled_image = _normalize_image(subsampled_image, shrink_factor=1, num_fitting_levels=2)
-            nimg_min = subsampled_image.min()
-            nimg_max = subsampled_image.max()
-
-            logger.info((
-                f'Normalized {subsampled_image.shape} image - '
-                f'min/max before normalize were {img_min}/{img_max}, after normalize {nimg_min}/{nimg_max}'
-            ))
+            logger.info(f'Normalized {subsampled_image.shape} image')
 
         mask, background = level_set.foreground_segmentation(
             subsampled_image, subsampled_image_spacing,
@@ -117,6 +109,7 @@ def _normalize_image(volume, shrink_factor=4, num_fitting_levels=4, mask=None):
     normalized_image = image / sitk.Exp(log_bias_field)
  
     normalized = sitk.GetArrayFromImage(normalized_image)
+
     return normalized
 
 

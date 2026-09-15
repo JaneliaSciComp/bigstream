@@ -133,6 +133,19 @@ local_align:
   steps: [] # no default local steps
   block_size: [128, 128, 128]
   block_overlap: 0.5
+  affine:
+  #  # optional bound on the per-component displacement this block's affine
+  #  # step may contribute, physical units, same frame as deform's
+  #  # control_point_constraint.max_displacement. None (default) disables it.
+  #  #
+  #  # A block with too little foreground to anchor the fit can still return
+  #  # an individually valid (invertible) but wildly implausible affine - a
+  #  # large anisotropic scale plus a large offset - that folds where
+  #  # distributed_align blends it against a better-behaved neighbour. Pick
+  #  # this jointly with the deform step's own max_displacement (their
+  #  # contributions add when composed) - see bound_affine_displacement and
+  #  # blend_safe_displacement_bound.
+  #  max_displacement: 16
   ransac:
     safeguard_exceptions: false
 

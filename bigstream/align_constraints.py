@@ -1,8 +1,8 @@
 """
-Local-invertibility regularization for B-spline deformable registration.
+Constraints that keep per-block align/deform steps blend-safe.
 
-Implements the sufficient condition for local invertibility of B-spline
-parameterized deformations from
+The bulk of this module implements the sufficient condition for local
+invertibility of B-spline parameterized deformations from
 
     S. Y. Chun and J. A. Fessler, "A simple regularizer for B-spline nonrigid
     image registration that encourages local invertibility", IEEE J. Sel.
@@ -30,15 +30,19 @@ Satisfying it guarantees
 
 everywhere on the continuous domain, not just at grid points.
 
-Everything here operates on a B-spline coefficient grid, so it applies to the
-`deform` step only - an affine transform has no coefficient grid, and is
-invertible iff its determinant is nonzero (see `is_orientation_preserving`).
+The C4 condition above operates on a B-spline coefficient grid, so it applies
+to the `deform` step only - an affine transform has no coefficient grid, and
+is invertible iff its determinant is nonzero (see
+`is_orientation_preserving`). An affine's only fold risk is amplitude, when
+`distributed_align` blends it against a neighbour that disagrees; see
+`bound_affine_displacement` for the bound that constrains that.
 
 All arrays use bigstream's zyx convention: `knot_spacing`, `k` and `K` are
 zyx, and coefficient arrays are indexed [component_zyx][z][y][x].
 """
 
 import logging
+from itertools import product
 
 import numpy as np
 import SimpleITK as sitk
@@ -634,3 +638,144 @@ def is_orientation_preserving(affine_matrix):
     if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
         raise ValueError(f'expected a square affine matrix, got {matrix.shape}')
     return bool(np.linalg.det(matrix[:-1, :-1]) > 0)
+
+
+def validate_affine_displacement_bound(max_displacement, ndim):
+    """
+    Validate and normalize a per-block affine `max_displacement` bound.
+
+    An affine transform has no coefficient grid, so the C4 condition above
+    does not apply to it (see the module docstring and
+    `is_orientation_preserving`). The only fold risk it carries is amplitude:
+    `distributed_align` blends per-block transforms together, and an affine
+    that disagrees strongly with its neighbour folds on blend regardless of
+    how "smooth" it is - see `blend_safe_displacement_bound` for the same
+    reasoning applied to the deform step. This bound exists to cap that
+    amplitude directly, the same way the deform step's `max_displacement`
+    caps its coefficients.
+
+    Parameters
+    ----------
+    max_displacement : None, float, or 1d array (zyx)
+        None (the default) disables the bound and leaves `affine_align`
+        behavior unchanged. Otherwise the per-component displacement bound,
+        in the same physical units as the block's voxel spacing.
+
+    ndim : int
+        Image dimensionality, used to broadcast a scalar bound.
+
+    Returns
+    -------
+    None if disabled, else a 1d array of length `ndim`.
+    """
+    if max_displacement is None:
+        return None
+    return _as_per_axis(max_displacement, ndim, 'max_displacement')
+
+
+def bound_affine_displacement(matrix, extent, max_displacement, context=''):
+    """
+    Scale an affine matrix's deviation from identity so the displacement it
+    induces over a block of given physical extent stays within
+    `max_displacement`, per component.
+
+    The displacement an affine `matrix` induces relative to identity is
+    `d(x) = (L - I)x + t`, affine in `x`, where `L` is the linear part and
+    `t` the translation. Being affine, its extrema over an axis-aligned box
+    `[0, extent]` are attained at the box's corners, so the per-component
+    worst case is found by evaluating there directly - no bound needs to be
+    conservative here, unlike the coefficient-grid case in `project_to_c4`.
+
+    If every component is already within bound, `matrix` is returned
+    unchanged (a dead-zone operator, same philosophy as `project_to_c4`).
+    Otherwise every component that violates its bound forces a single scalar
+    `alpha = min(1, max_displacement / max|d|)` (the tightest across
+    components), and the whole deviation from identity - both `L - I` and
+    `t` - is scaled by `alpha`. Scaling uniformly rather than clipping
+    individual matrix entries keeps the affine's relative shape (its
+    rotation/shear/anisotropy pattern) intact, just dialed back toward
+    identity, which is what "clamp into validity" should mean for a
+    transform that has no natural per-entry bound of its own.
+
+    Parameters
+    ----------
+    matrix : 2d array, (ndim+1, ndim+1)
+        Homogeneous affine matrix, zyx order.
+
+    extent : 1d array (zyx)
+        Physical size of the block this affine applies to
+        (`fix.shape * fix_spacing`), i.e. the box `[0, extent]` displacement
+        is bounded over.
+
+    max_displacement : float or 1d array (zyx)
+        Per-component displacement bound, physical units. Use
+        `validate_affine_displacement_bound` first to normalize/validate a
+        user-supplied value.
+
+    context : str (default: '')
+        Prefix for log messages.
+
+    Returns
+    -------
+    (matrix, info) : 2d array and dict
+        `info` carries `max_displacement_before`, `max_displacement_bound`,
+        `alpha`, `clamped`, and (only when clamped) `max_displacement_after`
+        and `orientation_preserved`.
+    """
+    matrix = np.asarray(matrix, dtype=np.float64)
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError(f'expected a square affine matrix, got {matrix.shape}')
+    ndim = matrix.shape[0] - 1
+    bound = _as_per_axis(max_displacement, ndim, 'max_displacement')
+    extent = np.atleast_1d(np.asarray(extent, dtype=np.float64))
+    if extent.size != ndim:
+        raise ValueError(f'extent must have {ndim} values (zyx), got {extent}')
+
+    linear = matrix[:ndim, :ndim]
+    translation = matrix[:ndim, ndim]
+    deviation = linear - np.eye(ndim)
+
+    # d(x) = deviation @ x + translation is affine in x, so its extrema over
+    # the box [0, extent] are attained at the box's corners
+    corners = np.array(list(product(*[(0.0, e) for e in extent])))
+    displacements_at_corners = corners @ deviation.T + translation
+    max_abs = np.abs(displacements_at_corners).max(axis=0)
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ratios = np.where(max_abs > 0, bound / max_abs, np.inf)
+    alpha = float(min(1.0, ratios.min()))
+
+    info = {
+        'max_displacement_before': max_abs.tolist(),
+        'max_displacement_bound': bound.tolist(),
+        'alpha': alpha,
+        'clamped': alpha < 1.0,
+    }
+
+    if alpha >= 1.0:
+        logger.info((
+            f'{context} Affine displacement bound: '
+            f'max |d|={max_abs.tolist()} within bound {bound.tolist()} '
+            f'over extent {extent.tolist()}, transform unchanged'
+        ))
+        return matrix, info
+
+    new_matrix = matrix.copy()
+    new_matrix[:ndim, :ndim] = np.eye(ndim) + alpha * deviation
+    new_matrix[:ndim, ndim] = alpha * translation
+    info['max_displacement_after'] = (alpha * max_abs).tolist()
+    info['orientation_preserved'] = is_orientation_preserving(new_matrix)
+    if not info['orientation_preserved']:
+        logger.error((
+            f'{context} Affine displacement bound: scaling the deviation '
+            f'from identity by alpha={alpha:.4g} produced a non '
+            f'orientation-preserving affine (unexpected) - '
+            f'det={np.linalg.det(new_matrix[:ndim, :ndim])}'
+        ))
+    logger.info((
+        f'{context} Affine displacement bound: '
+        f'max |d|={max_abs.tolist()} exceeded bound {bound.tolist()} '
+        f'over extent {extent.tolist()}, scaled deviation from identity by '
+        f'alpha={alpha:.4g} (max |d| after={info["max_displacement_after"]})'
+    ))
+    return new_matrix, info

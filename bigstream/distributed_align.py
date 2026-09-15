@@ -11,7 +11,7 @@ from itertools import product
 from toolz import partition_all
 
 from .align import alignment_pipeline, deform_field_diagnostics
-from .deform_regularization import (DEFAULT_K, blend_safe_displacement_bound)
+from .align_constraints import (DEFAULT_K, blend_safe_displacement_bound)
 from .distutils import validate_processing_block_size,ThrottledArraySliceReader
 from .image_data import (ImageData, as_image_data)
 from .ome_utils import get_spatial_values

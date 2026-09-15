@@ -13,7 +13,7 @@ import pytest
 import SimpleITK as sitk
 
 import bigstream.transform as bst
-from bigstream.deform_regularization import (
+from bigstream.align_constraints import (
     blend_safe_displacement_bound,
     c4_violations,
     project_to_c4,
@@ -82,7 +82,7 @@ def test_bound_holds_on_the_rendered_displacement():
     params += rng.uniform(-300.0, 300.0, size=params.shape)
     transform.SetParameters(params.tolist())
 
-    from bigstream.deform_regularization import project_bspline_transform
+    from bigstream.align_constraints import project_bspline_transform
     info = project_bspline_transform(transform, k=0.2, max_displacement=U)
     assert info['n_clamped'] > 0, 'test setup no longer exceeds the bound'
     assert info['max_coefficient_after'] <= U + 1e-9

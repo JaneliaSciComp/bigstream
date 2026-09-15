@@ -98,6 +98,10 @@ def _define_args():
                              dest='mask_thresh_percentile',
                              type=int,
                              help='Intensity percentile used for finding the foreground threshold; when set, uses a simple threshold cutoff instead of the MorphACWE method')
+    args_parser.add_argument('--normalize',
+                             dest='normalize',
+                             action='store_true',
+                             help='Normalize image before trying to get the foreground mask')
 
     args_parser.add_argument('--output',
                              dest='output',
@@ -228,6 +232,7 @@ def _generate_foreground_mask(args):
         shrink_factors=mask_shrink_factors,
         background=args.background,
         percentile_thresh=args.mask_thresh_percentile,
+        normalize=args.normalize,
         final_dilation=mask_dilation,
     )
     logger.info(f'Write {mask.shape} mask to {args.output}:{args.output_subpath} with spacing: {mask_spacing}')

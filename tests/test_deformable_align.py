@@ -6,7 +6,7 @@ import pytest
 import SimpleITK as sitk
 
 from bigstream.align import deformable_align, alignment_pipeline
-from bigstream.deform_regularization import project_bspline_transform
+from bigstream.align_constraints import project_bspline_transform
 import bigstream.utility as ut
 import bigstream.transform as bst
 

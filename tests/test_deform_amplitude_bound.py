@@ -115,14 +115,19 @@ def test_bound_and_c4_hold_simultaneously():
 
 
 def test_combined_projection_gets_a_larger_default_sweep_budget():
+    """
+    max_displacement is deformable_align's own parameter, not a
+    bspline_constraints key - so it is deformable_align's job to pick 100 or
+    300 based on whether its own max_displacement is set, and pass that
+    through as default_sweeps.
+    """
     assert validate_deform_regularization_params(
-        {'k': 0.2}, NDIM)['max_sweeps'] == 100
+        {'k': 0.2}, NDIM, default_sweeps=100)['max_sweeps'] == 100
     assert validate_deform_regularization_params(
-        {'k': 0.2, 'max_displacement': 40.0}, NDIM)['max_sweeps'] == 300
+        {'k': 0.2}, NDIM, default_sweeps=300)['max_sweeps'] == 300
     # an explicit value always wins
     assert validate_deform_regularization_params(
-        {'k': 0.2, 'max_displacement': 40.0, 'max_sweeps': 42},
-        NDIM)['max_sweeps'] == 42
+        {'k': 0.2, 'max_sweeps': 42}, NDIM, default_sweeps=300)['max_sweeps'] == 42
 
 
 def test_anisotropic_bound_is_per_component():
@@ -212,17 +217,18 @@ def test_blend_safe_bound_is_infinite_without_overlap():
         [0, 0, 0], [1.0, 1.0, 1.0], 0.2) == float('inf')
 
 
-def test_config_accepts_and_normalizes_max_displacement():
-    cfg = validate_deform_regularization_params(
-        {'k': 0.2, 'max_displacement': 40.0}, NDIM)
-    np.testing.assert_allclose(cfg['max_displacement'], [40.0] * NDIM)
+def test_max_displacement_is_not_a_bspline_constraints_key():
+    """
+    max_displacement moved out to be deformable_align's own parameter -
+    nesting it under bspline_constraints (the old control_point_constraint
+    shape) must fail loudly rather than silently do nothing.
+    """
+    with pytest.raises(ValueError, match='unknown bspline_constraints keys'):
+        validate_deform_regularization_params(
+            {'k': 0.2, 'max_displacement': 40.0}, NDIM)
 
     cfg = validate_deform_regularization_params({'k': 0.2}, NDIM)
-    assert cfg['max_displacement'] is None
-
-    with pytest.raises(ValueError, match='max_displacement'):
-        validate_deform_regularization_params(
-            {'max_displacement': [1.0, 2.0]}, NDIM)
+    assert set(cfg) == {'k', 'K', 'max_sweeps', 'tol'}
 
 
 # ---------------------------------------------------------------------------

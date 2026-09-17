@@ -29,13 +29,17 @@ def deform_field_diagnostics(field, spacing, context=''):
 
     # build a sitk displacement field image (xyz vector order) from the
     # numpy field (zyx order, components in zyx)
+    # float32 rather than float64: the jacobian determinant comes out
+    # identical, and this is a logging-only check that was otherwise one of
+    # the largest single allocations in a block's alignment
     disp = ut.numpy_to_sitk(
-        field[..., ::-1].astype(np.float64),
+        np.ascontiguousarray(field[..., ::-1], dtype=np.float32),
         spacing, vector=True,
     )
     # Jacobian determinant: det(I + grad(u)); values <= 0 indicate folding
     jac = sitk.DisplacementFieldJacobianDeterminant(disp)
-    jac_arr = sitk.GetArrayFromImage(jac)
+    del disp
+    jac_arr = sitk.GetArrayViewFromImage(jac)
     n_folded = int(np.count_nonzero(jac_arr <= 0))
     logger.info((
         f'{context} Deform align jacobian determinant: '
@@ -78,25 +82,37 @@ def deform_field_diagnostics(field, spacing, context=''):
                 'a step at the domain boundary'
             ))
 
-    # field sanity and displacement magnitude statistics
+    del jac_arr, jac
+
+    # field sanity and displacement magnitude statistics. The overwhelmingly
+    # common case is an all-finite field, so establish that with a single
+    # temporary and only pay for the NaN/Inf breakdown when there is actually
+    # something to break down.
     u = field
+    if np.isfinite(u).all():
+        has_nan = has_inf = False
+    else:
+        has_nan = bool(np.isnan(u).any())
+        has_inf = bool(np.isinf(u).any())
     mag = np.linalg.norm(u, axis=-1)
     logger.info((
         f'{context} Deform align field stats: '
-        f'has NaN={bool(np.isnan(u).any())}, has Inf={bool(np.isinf(u).any())}, '
+        f'has NaN={has_nan}, has Inf={has_inf}, '
         f'disp magnitude min={mag.min()}, max={mag.max()}, '
         f'mean={mag.mean()}, p99={np.percentile(mag, 99)}'
     ))
+    del mag
 
-    # crude discontinuity check in voxel index space
-    gx = np.linalg.norm(np.diff(u, axis=2), axis=-1)
-    gy = np.linalg.norm(np.diff(u, axis=1), axis=-1)
-    gz = np.linalg.norm(np.diff(u, axis=0), axis=-1)
-    for name, g in [("dx", gx), ("dy", gy), ("dz", gz)]:
+    # crude discontinuity check in voxel index space, one axis at a time: the
+    # diff of a vector field is nearly as large as the field itself, so
+    # holding dx, dy and dz at once tripled the footprint of this check.
+    for name, axis in (("dx", 2), ("dy", 1), ("dz", 0)):
+        g = np.linalg.norm(np.diff(u, axis=axis), axis=-1)
         logger.info((
             f'{context} Deform align field smoothness {name}: '
             f'max jump={g.max()}, p99 jump={np.percentile(g, 99)}'
         ))
+        del g
 
 
 def dice_score(a, b, background=0):

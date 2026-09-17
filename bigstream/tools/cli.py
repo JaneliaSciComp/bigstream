@@ -46,6 +46,15 @@ def floattuple(arg):
         return ()
 
 
+def floatortuple(arg):
+    """A single float, or a comma-separated per-axis (x,y,z) tuple of floats."""
+    if arg is None or not arg.strip():
+        return None
+    if ',' in arg:
+        return floattuple(arg)
+    return float(arg)
+
+
 def stringlist(arg):
     if arg is not None and arg.strip():
         return list(filter(lambda x: x, [s.strip() for s in arg.split(',')]))
@@ -274,9 +283,11 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       help='Output blocksize')
     args.add_argument(args_descriptor.argflag('processing-overlap-factor'),
                       dest=args_descriptor.argdest('processing_overlap_factor'),
-                      type=float,
-                      default=0.,
-                      help='Processing overlap factor - a fractional number between 0 and 1 that specifies the percentage overlap')
+                      type=floatortuple,
+                      default=None,
+                      help='Processing overlap factor - a fractional number between 0 and 1 '
+                           'that specifies the percentage overlap, or a comma-separated x,y,z '
+                           'tuple of such fractions to set the overlap per axis')
 
     args.add_argument(args_descriptor.argflag('output-blocksize'),
                       dest=args_descriptor.argdest('output_blocksize'),

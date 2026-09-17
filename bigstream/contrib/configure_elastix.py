@@ -62,11 +62,6 @@ def build_elastix_parameter_object(
     # never write result images to disk from within a worker
     pm['WriteResultImage'] = ['false']
 
-    if control_grid_spacing is not None:
-        pm['FinalGridSpacingInPhysicalUnits'] = _as_str_list(
-            [float(v) for v in control_grid_spacing]
-        )
-
     # Use non-smoothing (shrinking) image pyramids instead of the elastix
     # default (FixedSmoothingImagePyramid/MovingSmoothingImagePyramid). The
     # smoothing pyramid runs RecursiveGaussianImageFilter at every level along
@@ -78,6 +73,11 @@ def build_elastix_parameter_object(
     # of slightly noisier coarse levels -- a better tradeoff than a hard crash.
     pm['FixedImagePyramid'] = ['FixedShrinkingImagePyramid']
     pm['MovingImagePyramid'] = ['MovingShrinkingImagePyramid']
+
+    if control_grid_spacing is not None:
+        pm['FinalGridSpacingInPhysicalUnits'] = _as_str_list(
+            [float(v) for v in control_grid_spacing]
+        )
 
     # verbatim overrides last
     for k, v in align_args.items():

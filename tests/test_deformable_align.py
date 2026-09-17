@@ -341,7 +341,7 @@ def test_return_tuple_consistency():
 
 
 # ---------------------------------------------------------------------------
-# 10. Local invertibility constraint (control_point_constraint)
+# 10. Local invertibility constraint (bspline_constraints) and max_displacement
 # ---------------------------------------------------------------------------
 
 def _interior_jacobian(field, spacing, margin=4):
@@ -389,7 +389,7 @@ def test_constraint_disabled_by_default():
     )
     _, explicit_none = deformable_align(
         fix, mov, SPACING, SPACING, 4.0, [1],
-        control_point_constraint=None, **FOLDING_KWARGS,
+        bspline_constraints=None, **FOLDING_KWARGS,
     )
     np.testing.assert_array_equal(omitted, explicit_none)
 
@@ -407,7 +407,7 @@ def test_constraint_removes_folding():
 
     _, constrained = deformable_align(
         fix, mov, SPACING, SPACING, 4.0, [1],
-        control_point_constraint={'k': 0.32}, **FOLDING_KWARGS,
+        bspline_constraints={'k': 0.32}, **FOLDING_KWARGS,
     )
     constrained_min, constrained_frac = _interior_jacobian(constrained, SPACING)
     assert constrained_frac == 0.0
@@ -520,7 +520,7 @@ def test_alignment_spacing_does_not_fold_at_the_domain_boundary():
         _, field = deformable_align(
             fix, mov, SPACING, SPACING, 4.0, [1],
             alignment_spacing=alignment_spacing,
-            control_point_constraint={'k': 0.32}, **FOLDING_KWARGS,
+            bspline_constraints={'k': 0.32}, **FOLDING_KWARGS,
         )
         full_min, full_frac = _interior_jacobian(field, SPACING, margin=0)
         assert full_frac == 0.0, (
@@ -536,18 +536,55 @@ def test_constraint_rejects_bad_configuration():
     with pytest.raises(ValueError, match='sum'):
         deformable_align(
             fix, mov, SPACING, SPACING, 4.0, [1],
-            control_point_constraint={'k': [0.4, 0.4, 0.4]}, **FOLDING_KWARGS,
-        )
-    with pytest.raises(ValueError, match='mode'):
-        deformable_align(
-            fix, mov, SPACING, SPACING, 4.0, [1],
-            control_point_constraint={'mode': 'iteration'}, **FOLDING_KWARGS,
+            bspline_constraints={'k': [0.4, 0.4, 0.4]}, **FOLDING_KWARGS,
         )
     with pytest.raises(ValueError, match='unknown'):
         deformable_align(
             fix, mov, SPACING, SPACING, 4.0, [1],
-            control_point_constraint={'kk': 0.3}, **FOLDING_KWARGS,
+            bspline_constraints={'kk': 0.3}, **FOLDING_KWARGS,
         )
+    # max_displacement is deformable_align's own parameter now, not a
+    # bspline_constraints key - nesting it there must fail loudly
+    with pytest.raises(ValueError, match='unknown bspline_constraints keys'):
+        deformable_align(
+            fix, mov, SPACING, SPACING, 4.0, [1],
+            bspline_constraints={'max_displacement': 16}, **FOLDING_KWARGS,
+        )
+
+
+def test_max_displacement_bounds_the_rendered_field_independently():
+    """
+    max_displacement is independent of bspline_constraints: it must still
+    project (and bound the field) even when bspline_constraints is left
+    disabled, using the default k rather than being silently skipped.
+    """
+    fix, mov = _folding_pair()
+    U = 3.0
+
+    _, field = deformable_align(
+        fix, mov, SPACING, SPACING, 4.0, [1],
+        max_displacement=U, **FOLDING_KWARGS,
+    )
+    assert np.abs(field).max() <= U + 1e-6, (
+        f'rendered displacement {np.abs(field).max()} exceeds bound {U}'
+    )
+    # and it is still a real deformation, not a collapse to identity
+    assert np.max(np.abs(field)) > 0.0
+
+
+def test_max_displacement_combines_with_bspline_constraints():
+    """Both knobs at once still bound the field and keep it fold free."""
+    fix, mov = _folding_pair()
+    U = 4.0
+
+    _, field = deformable_align(
+        fix, mov, SPACING, SPACING, 4.0, [1],
+        bspline_constraints={'k': 0.2}, max_displacement=U, **FOLDING_KWARGS,
+    )
+    assert np.abs(field).max() <= U + 1e-6
+    min_jac, folded_frac = _interior_jacobian(field, SPACING)
+    assert folded_frac == 0.0
+    assert min_jac > 0.0
 
 
 def test_constrained_metric_is_reevaluated_after_projection(caplog):
@@ -565,7 +602,7 @@ def test_constrained_metric_is_reevaluated_after_projection(caplog):
     with caplog.at_level(logging.INFO, logger='bigstream.align'):
         deformable_align(
             fix, mov, SPACING, SPACING, 4.0, [1],
-            control_point_constraint={'k': 0.32}, **FOLDING_KWARGS,
+            bspline_constraints={'k': 0.32}, **FOLDING_KWARGS,
         )
 
     lines = [r.message for r in caplog.records

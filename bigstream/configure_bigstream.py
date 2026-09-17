@@ -90,25 +90,33 @@ deform: &deform_args
   # optional local invertibility constraint (Chun & Fessler 2009):
   # guarantees the deformation does not fold, at some cost in metric value.
   # omit or leave null to disable (default)
-  control_point_constraint:
+  bspline_constraints:
   #  k: 0.1             # scalar or [kz, ky, kx]; sum(k) < 1, min|J| >= 1-sum(k)
   #  K:                 # optional expansion allowance, defaults to k
-  #  mode: final
-  #  # Bound on the per-component displacement, in the same physical units as
-  #  # the spacing the pipeline runs at - note that is voxel_spacing divided by
-  #  # the expansion factor, not the raw value recorded in the zarr.
-  #  #
-  #  # 'k' bounds derivatives, not amplitude, so without this a smooth but huge
-  #  # displacement is C4 compliant yet still folds where distributed_align
-  #  # blends it against a neighbour that fitted something different. The safe
-  #  # ceiling is (1 - sum(k) - 0.1) * L / (2 * ndim) with L the blend ramp
-  #  # length, so it depends on blocksize/overlap/spacing - leave this unset
-  #  # and the local align step logs the ceiling it computed for your lattice.
-  #  #
-  #  # Prefer a small k with a larger max_displacement over the reverse: k=0.1
-  #  # still guarantees min|J| >= 0.7 per block, and spends the freed jacobian
-  #  # budget on amplitude, which is what actually binds.
-  #  max_displacement: 16
+  #
+  # max_displacement is a sibling of bspline_constraints, not a key inside
+  # it - it is independent of k/K and still applies even when
+  # bspline_constraints above is left disabled.
+  #
+  # max_displacement: bound on the per-component displacement, in the same
+  #  physical units as the spacing the pipeline runs at - note that is
+  #  voxel_spacing divided by the expansion factor, not the raw value
+  #  recorded in the zarr.
+  #
+  #  'k' bounds derivatives, not amplitude, so without this a smooth but huge
+  #  displacement is C4 compliant yet still folds where distributed_align
+  #  blends it against a neighbour that fitted something different (this
+  #  includes another step's own max_displacement in the same pipeline, e.g.
+  #  an 'affine' step run before this 'deform' step - they share one ceiling).
+  #  The safe ceiling is (1 - sum(k) - 0.1) * L / (2 * ndim) with L the blend
+  #  ramp length, so it depends on blocksize/overlap/spacing - leave this
+  #  unset and the local align step logs the ceiling it computed for your
+  #  lattice.
+  #
+  #  Prefer a small k with a larger max_displacement over the reverse: k=0.1
+  #  still guarantees min|J| >= 0.7 per block, and spends the freed jacobian
+  #  budget on amplitude, which is what actually binds.
+  # max_displacement: 16
 
 elastix_deform: &elastix_deform_args
   align_method: bspline
@@ -135,8 +143,8 @@ local_align:
   block_overlap: 0.5
   affine:
   #  # optional bound on the per-component displacement this block's affine
-  #  # step may contribute, physical units, same frame as deform's
-  #  # control_point_constraint.max_displacement. None (default) disables it.
+  #  # step may contribute, physical units, same frame as deform's own
+  #  # max_displacement. None (default) disables it.
   #  #
   #  # A block with too little foreground to anchor the fit can still return
   #  # an individually valid (invertible) but wildly implausible affine - a

@@ -202,7 +202,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
 
     logger.info(f'Run local registration with: {reg_args}, {local_steps}')
 
-    (fix_image, fix_mask, mov_image, mov_mask, roi, fix_mask_roi, mov_mask_roi) = get_input_images(reg_args)
+    (fix_image, fix_mask, mov_image, mov_mask, roi, _, _) = get_input_images(reg_args)
     if mov_image.ndim != fix_image.ndim:
         # only check for ndim and not shape because as it happens 
         # the test data has different shape for fix.highres and mov.highres
@@ -235,11 +235,29 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     )
 
     if processing_overlap_factor:
-        local_processing_overlap_factor = processing_overlap_factor
+        if isinstance(processing_overlap_factor, (tuple, list)):
+            # overlap factor is defined as x,y,z so I am reversing it to z,y,x
+            local_processing_overlap_factor = tuple(processing_overlap_factor)[::-1]
+            logger.info((
+                f'Set processing overlap factor to {local_processing_overlap_factor} '
+                f'(from overlap factor arg: {processing_overlap_factor})'
+            ))
+        else:
+            local_processing_overlap_factor = processing_overlap_factor
     else:
         local_processing_overlap_factor = local_config.get('block_overlap', default_overlap)
-    if (local_processing_overlap_factor <= 0 and
-        local_processing_overlap_factor >= 1):
+
+    if isinstance(local_processing_overlap_factor, (tuple, list)):
+        if len(local_processing_overlap_factor) != fix_image.spatial_ndim:
+            raise ValueError((
+                'Invalid block overlap value '
+                f'{local_processing_overlap_factor} '
+                f'must have exactly {fix_image.spatial_ndim} values (one per axis)'
+            ))
+        overlap_values = local_processing_overlap_factor
+    else:
+        overlap_values = (local_processing_overlap_factor,)
+    if any(v <= 0 or v >= 1 for v in overlap_values):
         raise ValueError((
             'Invalid block overlap value '
             f'{local_processing_overlap_factor} '
@@ -447,6 +465,9 @@ def _align_local_data(fix_image: ImageData,
             dataset_transformations=deformfield_coord_transforms,
             zarr_format=zarr_format,
             steps=steps,
+            roi=roi,
+            voxel_scaling=list(fix_image.voxel_spacing),
+            volume_expansion=fix_image.expansion_factor,
             processsize=processing_size,
             overlap_factor=processing_overlap_factor,
             foreground_percentage=foreground_percentage,
@@ -540,6 +561,9 @@ def _align_local_data(fix_image: ImageData,
             dataset_transformations=deformfield_coord_transforms,
             zarr_format=zarr_format,
             steps=steps,
+            roi=roi,
+            voxel_scaling=list(fix_image.voxel_spacing),
+            volume_expansion=fix_image.expansion_factor,
             processsize=processing_size,
             overlap_factor=processing_overlap_factor,
             foreground_percentage=foreground_percentage,

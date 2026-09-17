@@ -9,8 +9,10 @@ import traceback
 from dask.distributed import as_completed, MultiLock
 from itertools import product
 from toolz import partition_all
+from typing import Tuple
 
-from .align import alignment_pipeline, deform_field_diagnostics
+from .align import alignment_pipeline
+from .diagnostics import deform_field_diagnostics
 from .align_constraints import (DEFAULT_K, blend_safe_displacement_bound)
 from .distutils import validate_processing_block_size,ThrottledArraySliceReader
 from .image_data import (ImageData, as_image_data)
@@ -454,94 +456,149 @@ def _blend_remedy(wanted, block_size, block_overlaps, spacing, k,
     return '; '.join(options)
 
 
+def _max_displacement_contributions(steps):
+    """
+    Every step's own `max_displacement` (`affine_align`/`deformable_align`'s
+    bound - see `align_constraints.bound_affine_displacement` and
+    `project_bspline_transform`), keyed by step name. Both are top-level
+    parameters of their respective functions, not nested under
+    `bspline_constraints` (which only carries the deform step's C4 k/K).
+
+    `alignment_pipeline` composes every step in `steps` into one field before
+    `distributed_align` blends it, so these are not independent budgets -
+    all of them land in the same stitched field and must share one ceiling.
+    """
+    return [(step_name, step_args['max_displacement'])
+            for step_name, step_args in steps
+            if step_args.get('max_displacement') is not None]
+
+
 def _check_blend_safe_displacement(steps, block_size, block_overlaps,
                                    fix_spacing,
                                    error_when_check_fails=False):
     """
-    Warn when a deform step's displacement bound is too loose for this lattice.
+    Warn when the configured displacement bounds are too loose for this lattice.
 
     The per-block C4 constraint guarantees each block's own field does not
     fold, but stitching adds a `grad(w) * (u_A - u_B)` term that C4 does not
     bound - so two individually compliant blocks that fitted very different
     displacements still fold where they are blended. The safe ceiling depends
-    on the blend ramp length, which only this function knows: the deform step
-    itself never sees the block lattice.
+    on the blend ramp length, which only this function knows: neither the
+    affine nor the deform step sees the block lattice.
+
+    Critically, that ceiling is shared and single: `alignment_pipeline`
+    composes every step of a block into one field before it is blended, so
+    each step's own `max_displacement` is not an independent budget - their
+    sum is what has to stay under the one ceiling, even though each one
+    individually looks fine. Only a deform step's `bspline_constraints`
+    affects what that ceiling actually is (via its `k`, the C4 allowance);
+    `max_displacement` itself, on any step, only ever adds to the numerator.
+    This assumes at most one step sets `bspline_constraints`, which matches
+    every pipeline this is called from today.
 
     Every failing branch reports a concrete remedy. Which lever to reach for
     depends on something this function cannot know - whether the configured
     bound reflects a real deformation the data needs, or is simply too loose -
     so it gives the numbers for all of them rather than picking one.
     """
+    ndim = len(np.atleast_1d(block_overlaps))
+
+    # only a deform step ever sets bspline_constraints (meaningless for
+    # affine/rigid/ransac/random) - its k decides how much jacobian headroom
+    # is left over for blending, i.e. the one ceiling every step shares.
+    constrained_step_name, constraints = None, None
     for step_name, step_args in steps:
-        if 'deform' not in step_name:
-            continue
-        constraint = step_args.get('control_point_constraint')
-        if not constraint:
-            continue
-        k = constraint.get('k')
+        candidate = step_args.get('bspline_constraints')
+        if candidate:
+            constrained_step_name, constraints = step_name, candidate
+            break
+
+    contributions = _max_displacement_contributions(steps)
+    if constraints is None and not contributions:
+        return  # nothing opted into blend-safety bookkeeping
+
+    if constraints is not None:
+        k = constraints.get('k')
         k = DEFAULT_K if k is None else k
-        ndim = len(np.atleast_1d(block_overlaps))
-        ceiling = blend_safe_displacement_bound(
-            block_overlaps, fix_spacing, k,
+    else:
+        # no deform C4 step is consuming any jacobian headroom, so whatever
+        # sets max_displacement (e.g. an affine step alone) gets the full
+        # budget - see blend_safe_displacement_bound's k~0 case
+        k = 1e-12
+    ceiling = blend_safe_displacement_bound(
+        block_overlaps, fix_spacing, k, min_jacobian=BLEND_MIN_JACOBIAN,
+    )
+    total_configured = sum(
+        float(np.max(np.atleast_1d(bound))) for _, bound in contributions)
+    contributor_names = ', '.join(f"'{name}'" for name, _ in contributions)
+
+    logger.info(f'Configured max displacements: {contributions} totaling {total_configured:.4g}')
+
+    message = None
+    if constraints is not None and ceiling == 0.0:
+        # no finite bound helps: the C4 allowance alone consumes the whole
+        # jacobian budget before blending contributes anything
+        k_max = (1.0 - BLEND_MIN_JACOBIAN) / ndim
+        # a concrete suggestion for this lattice, and what it actually buys
+        suggested_k = k_max / 2.0
+        suggested_ceiling = blend_safe_displacement_bound(
+            block_overlaps, fix_spacing, suggested_k,
             min_jacobian=BLEND_MIN_JACOBIAN,
         )
-        configured = constraint.get('max_displacement')
+        message = (
+            f"'{constrained_step_name}' bspline_constraints k={k} leaves no "
+            f'jacobian headroom for blockwise blending (sum(k)='
+            f'{_total_k(k, ndim):.3g} plus the {BLEND_MIN_JACOBIAN} reserve '
+            'is already >= 1), so no finite max_displacement can keep the '
+            f'stitched field fold free. Lower k below {k_max:.3f}; at '
+            f'k={suggested_k:.3f} the ceiling becomes {suggested_ceiling:.4g} '
+            'for this blocksize/overlap/spacing, and max_displacement must '
+            'be set at or under whatever ceiling the chosen k yields.'
+        )
+    elif (constraints is not None
+          and constrained_step_name not in dict(contributions)):
+        # this deform step opted into blend-safety bookkeeping (it set
+        # bspline_constraints) but never bounded its own amplitude - that
+        # alone can fold the blend no matter what any other step contributes
+        shared_note = (
+            f' (would share the ceiling with {contributor_names} totaling '
+            f'{total_configured:.4g})' if contributions else ''
+        )
+        message = (
+            f"'{constrained_step_name}' sets bspline_constraints but no "
+            'max_displacement, so a block that fits a large smooth '
+            'deformation can still fold the stitched field where it blends '
+            f'into a neighbour. Set max_displacement to <= {ceiling:.4g}'
+            f'{shared_note} (same physical units as the spacing, i.e. '
+            'expansion corrected). If your blocks legitimately need more '
+            'than that, raise overlap_factor or lower k instead of raising '
+            'the bound.'
+        )
+    elif total_configured > ceiling:
+        remedy = _blend_remedy(
+            total_configured, block_size, block_overlaps, fix_spacing, k)
+        message = (
+            f'configured max_displacement totals {total_configured:.4g} '
+            f'across {contributor_names}, which exceeds the blend safe '
+            f'ceiling {ceiling:.4g} for k={k}; the '
+            'stitched field may fold where blocks disagree. To keep '
+            f'{total_configured:.4g} total: {remedy}. Check the per block '
+            '"max |c|"/displacement bound logs first: if your blocks never '
+            'reach the configured bounds they are simply too loose and '
+            'lowering them costs nothing, but if they do then the '
+            'deformation is real and the ramp is what has to grow.'
+        )
+    else:
+        logger.info((
+            f'configured max_displacement totals {total_configured:.4g} '
+            f'across {contributor_names or "(none)"}, within the blend safe '
+            f'ceiling {ceiling:.4g}'
+        ))
 
-        message = None
-        if ceiling == 0.0:
-            # no finite bound helps: the C4 allowance alone consumes the whole
-            # jacobian budget before blending contributes anything
-            k_max = (1.0 - BLEND_MIN_JACOBIAN) / ndim
-            # a concrete suggestion for this lattice, and what it actually buys
-            suggested_k = k_max / 2.0
-            suggested_ceiling = blend_safe_displacement_bound(
-                block_overlaps, fix_spacing, suggested_k,
-                min_jacobian=BLEND_MIN_JACOBIAN,
-            )
-            message = (
-                f"'{step_name}' k={k} leaves no jacobian headroom for "
-                f'blockwise blending (sum(k)={_total_k(k, ndim):.3g} plus the '
-                f'{BLEND_MIN_JACOBIAN} reserve is already >= 1), so no finite '
-                'max_displacement can keep the stitched field fold free. '
-                f'Lower k below {k_max:.3f}; at k={suggested_k:.3f} the ceiling '
-                f'becomes {suggested_ceiling:.4g} for this '
-                'blocksize/overlap/spacing, and max_displacement must be set '
-                'at or under whatever ceiling the chosen k yields.'
-            )
-        elif configured is None:
-            message = (
-                f"'{step_name}' sets no control_point_constraint."
-                'max_displacement, so a block that fits a large smooth '
-                'deformation can still fold the stitched field where it blends '
-                f'into a neighbour. Set max_displacement to <= {ceiling:.4g} '
-                '(same physical units as the spacing, i.e. expansion '
-                'corrected). If your blocks legitimately need more than that, '
-                'raise overlap_factor or lower k instead of raising the bound.'
-            )
-        elif np.any(np.atleast_1d(configured) > ceiling):
-            wanted = float(np.max(np.atleast_1d(configured)))
-            remedy = _blend_remedy(
-                wanted, block_size, block_overlaps, fix_spacing, k)
-            message = (
-                f"'{step_name}' control_point_constraint.max_displacement="
-                f'{configured} exceeds the blend safe ceiling {ceiling:.4g} '
-                'for this blocksize/overlap/spacing; the stitched field may '
-                f'fold where blocks disagree. To keep {wanted:.4g}: {remedy}. '
-                'Check the per block "max |c|" in the projection logs first: '
-                'if your blocks never reach the bound it is simply too loose '
-                'and lowering it costs nothing, but if they do then the '
-                'deformation is real and the ramp is what has to grow.'
-            )
-        else:
-            logger.info((
-                f"'{step_name}' max_displacement={configured} is within the "
-                f'blend safe ceiling {ceiling:.4g}'
-            ))
-
-        if message is not None:
-            if error_when_check_fails:
-                raise ValueError(message)
-            logger.warning(message)
+    if message is not None:
+        if error_when_check_fails:
+            raise ValueError(message)
+        logger.warning(message)
 
 
 def _get_transform_weights(block_index,
@@ -639,7 +696,7 @@ def distributed_alignment_pipeline(
     steps,
     blocksize,
     cluster_client,
-    overlap_factor=0.5,
+    overlap_factor:float|Tuple[float]=0.5,
     fix_mask=None,
     mov_mask=None,
     roi=None,
@@ -690,8 +747,11 @@ def distributed_alignment_pipeline(
     cluster_client : Dask cluster client proxy
         the cluster must exists before this method is invoked
 
-    overlap_factor : float in range [0, 1] (default: 0.5)
-        Block overlap size as a percentage of block size
+    overlap_factor : float or zyx tuple of float, each in range [0, 1] (default: 0.5)
+        Block overlap size as a percentage of block size, either the same
+        for every axis or given per axis. Already in zyx order here - any
+        xyz-order CLI/user input must be reversed before it reaches this
+        function (see `bigstream.tools.main_local_align_pipeline`).
 
     fix_mask : ImageData or function (default: None)
         A mask limiting metric evaluation region of the fixed image.

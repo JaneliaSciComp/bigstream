@@ -553,13 +553,12 @@ def project_bspline_transform(transform, k=DEFAULT_K, K=None,
     return info
 
 
-SUPPORTED_MODES = ('final',)
-_CONFIG_KEYS = ('k', 'K', 'mode', 'max_displacement', 'max_sweeps', 'tol')
+_CONFIG_KEYS = ('k', 'K', 'max_sweeps', 'tol')
 
 
-def validate_deform_regularization_params(config, ndim):
+def validate_deform_regularization_params(config, ndim, default_sweeps=300):
     """
-    Validate and normalize a `control_point_constraint` configuration.
+    Validate and normalize a `bspline_constraints` configuration.
 
     Called before any expensive work so a bad configuration fails fast rather
     than after an optimization has run.
@@ -568,26 +567,36 @@ def validate_deform_regularization_params(config, ndim):
     ----------
     config : None or dict
         See `bigstream.align.deformable_align` for the accepted keys. A falsy
-        value (None, {}, False) disables the constraint.
+        value (None, {}, False) disables the constraint. Note that
+        `max_displacement` is a sibling parameter of `deformable_align`, not
+        a key of this dict - it shares no state with C4 and is validated
+        separately by `validate_affine_displacement_bound`.
 
     ndim : int
         Image dimensionality, used to broadcast scalar `k`/`K`.
 
+    default_sweeps : int (default: 300)
+        `max_sweeps` to use when the config does not set one explicitly. The
+        caller decides this - `deformable_align` picks 300 when its own
+        `max_displacement` is set (POCS against both constraint sets
+        converges slower than C4 alone) and 100 otherwise.
+
     Returns
     -------
-    None if disabled, else a dict with normalized k, K, mode, max_sweeps, tol.
+    None if disabled, else a dict with normalized k, K, max_sweeps, tol.
     """
     if not config:
         return None
     if not isinstance(config, dict):
         raise ValueError(
-            f'control_point_constraint must be a dict or None, got {config!r}'
+            f'bspline_constraints must be a dict or None, got {config!r}'
         )
     unknown = set(config) - set(_CONFIG_KEYS)
     if unknown:
         raise ValueError(
-            f'unknown control_point_constraint keys {sorted(unknown)}, '
-            f'supported keys are {list(_CONFIG_KEYS)}'
+            f'unknown bspline_constraints keys {sorted(unknown)}, '
+            f'supported keys are {list(_CONFIG_KEYS)}. max_displacement is '
+            "no longer one of them - it's deformable_align's own parameter."
         )
 
     k = _as_per_axis(
@@ -595,24 +604,6 @@ def validate_deform_regularization_params(config, ndim):
     K = k if config.get('K') is None else _as_per_axis(config['K'], ndim, 'K')
     # validates sum(k) < 1; the knot spacing is irrelevant to that check
     coefficient_bounds(np.ones(ndim), k, K)
-
-    mode = config.get('mode') or 'final'
-    if mode not in SUPPORTED_MODES:
-        raise ValueError(
-            f"unsupported control_point_constraint mode '{mode}', "
-            f'supported modes are {list(SUPPORTED_MODES)}'
-        )
-
-    max_displacement = config.get('max_displacement')
-    if max_displacement is not None:
-        max_displacement = _as_per_axis(
-            max_displacement, ndim, 'max_displacement')
-
-    # POCS alternating between the C4 slabs and the displacement box converges
-    # noticeably slower than C4 alone (measured: ~15 sweeps vs ~150 on a grid
-    # clamped from +/-200 to +/-30), so give the combined projection a larger
-    # budget unless the caller asked for a specific one.
-    default_sweeps = 100 if max_displacement is None else 300
     max_sweeps = int(config.get('max_sweeps') or default_sweeps)
     tol = float(config['tol']) if config.get('tol') is not None else 1e-9
     if max_sweeps < 1:
@@ -620,9 +611,7 @@ def validate_deform_regularization_params(config, ndim):
     if tol <= 0:
         raise ValueError(f'tol must be positive, got {tol}')
 
-    return {'k': k, 'K': K, 'mode': mode,
-            'max_displacement': max_displacement,
-            'max_sweeps': max_sweeps, 'tol': tol}
+    return {'k': k, 'K': K, 'max_sweeps': max_sweeps, 'tol': tol}
 
 
 def is_orientation_preserving(affine_matrix):

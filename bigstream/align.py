@@ -10,6 +10,7 @@ import bigstream.utility as ut
 from bigstream import features
 from bigstream.configure_irm import configure_irm
 from bigstream.align_constraints import (
+    DEFAULT_K,
     is_orientation_preserving,
     validate_deform_regularization_params,
     project_bspline_transform,
@@ -18,7 +19,6 @@ from bigstream.align_constraints import (
 )
 from bigstream.metrics import patch_mutual_information
 from bigstream.metrics import local_correlation_coefficient
-from bigstream.diagnostics import deform_field_diagnostics
 
 from fishspot.filter import apply_foreground_mask
 
@@ -1012,8 +1012,10 @@ def random_affine_search(
     static_transform_origin = b
 
     # realize masks as arrays
-    fix_mask = realize_mask(fix, fix_mask, roi=fix_roi)
-    mov_mask = realize_mask(mov, mov_mask)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
+    logger.debug(f'Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
+    logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip sample and determine mask spacings
     X = apply_alignment_spacing(
@@ -1187,7 +1189,7 @@ def affine_align(
         `fix`. None (the default) disables it and leaves behavior unchanged.
 
         An affine has no coefficient grid to constrain the way
-        `deformable_align`'s `control_point_constraint` does, so a degenerate
+        `deformable_align`'s `bspline_constraints` does, so a degenerate
         optimization (e.g. a block with too little foreground to anchor the
         fit) can return an affine that is individually valid - invertible,
         orientation-preserving - but wildly implausible: a large anisotropic
@@ -1266,9 +1268,6 @@ def affine_align(
         The affine or rigid transform matrix matching moving to fixed
     """
     logger.info(f'Affine align {context} -> {kwargs}')
-    # store initial fixed image shape/spacing and validate the displacement
-    # bound before any expensive work, same pattern deformable_align uses for
-    # control_point_constraint
     initial_fix_shape = fix.shape
     initial_fix_spacing = np.asarray(fix_spacing, dtype=np.float64)
     max_displacement = validate_affine_displacement_bound(max_displacement, fix.ndim)
@@ -1419,8 +1418,9 @@ def deformable_align(
     mov_spacing,
     control_point_spacing,
     control_point_levels,
-    control_point_constraint=None,
+    bspline_constraints=None,
     alignment_spacing=None,
+    max_displacement=None,
     fix_mask=None,
     mov_mask=None,
     fix_roi=None,
@@ -1475,7 +1475,7 @@ def deformable_align(
         points spacing, then optimize again at 200.0 units, then again
         at the requested 100.0 units control point spacing.
 
-    control_point_constraint : dict (default: None)
+    bspline_constraints : dict (default: None)
         If given, constrain the optimized control point coefficients to
         guarantee the deformation is locally invertible (no folding), using
         the sufficient condition of Chun & Fessler 2009. The coefficients are
@@ -1494,26 +1494,29 @@ def deformable_align(
                  allowance for local expansion along the same axis. Set larger
                  than 'k' to permit acute expansion while still forbidding
                  collapse.
-            'mode': 'final' (default and currently the only supported value),
-                 project once after optimization.
-            'max_displacement': float or zyx list (default None), bound on the
-                 per-component displacement in physical units. None disables
-                 it. 'k' bounds derivatives, not amplitude, so without this a
-                 smooth but very large displacement is fully C4 compliant - and
-                 while such a block does not fold on its own, it folds where
-                 `distributed_align` blends it against a neighbour that fitted
-                 something different. Use
-                 `align_constraints.blend_safe_displacement_bound` to pick
-                 a value from the block overlap and voxel spacing.
-            'max_sweeps': int (default 100, or 300 when 'max_displacement' is
-                 set, since alternating between the two constraint sets
-                 converges more slowly), projection iteration budget.
+            'max_sweeps': int (default 100, or 300 when `max_displacement`
+                 below is set, since alternating between the C4 slabs and
+                 the displacement box converges more slowly), projection
+                 iteration budget.
             'tol': float (default 1e-9), projection convergence tolerance.
 
     alignment_spacing : float (default: None)
         Fixed and moving images are skip sampled to a voxel spacing
         as close as possible to this value. Intended for very fast
         simple alignments (e.g. low amplitude motion correction)
+
+    max_displacement : float or zyx list (default: None)
+        Bound on the per-component displacement the projected bspline field
+        may have, in physical units. None disables it. Independent of
+        `bspline_constraints` - it still projects (using the default k) even
+        when `bspline_constraints` is left disabled, and is not silently
+        skipped. 'k' bounds derivatives, not amplitude, so without this a
+        smooth but very large displacement is fully C4 compliant - and
+        while such a block does not fold on its own, it folds where
+        `distributed_align` blends it against a neighbour that fitted
+        something different. Use
+        `align_constraints.blend_safe_displacement_bound` to pick a value
+        from the block overlap and voxel spacing.
 
     fix_mask : ndarray, tuple of floats, or function (default: None)
         A mask limiting metric evaluation region of the fixed image
@@ -1587,8 +1590,14 @@ def deformable_align(
     initial_fix_spacing = fix_spacing
 
     # validate the local invertibility configuration before any expensive work
-    control_point_constraint = validate_deform_regularization_params(
-        control_point_constraint, fix.ndim)
+    max_displacement = validate_affine_displacement_bound(max_displacement, fix.ndim)
+    # alternating between the C4 slabs and the displacement box converges
+    # noticeably slower than C4 alone (measured: ~15 sweeps vs ~150 on a grid
+    # clamped from +/-200 to +/-30), so give the combined projection a larger
+    # default budget - an explicit max_sweeps in bspline_constraints still wins
+    default_sweeps = 300 if max_displacement is not None else 100
+    bspline_constraints = validate_deform_regularization_params(
+        bspline_constraints, fix.ndim, default_sweeps=default_sweeps)
 
     # format static transform data explicitly
     a, b = format_static_transform_data(
@@ -1692,18 +1701,24 @@ def deformable_align(
         initial_metric_value = irm.MetricEvaluate(fix, mov)
         irm.Execute(fix, mov)
         final_metric_value = irm.MetricEvaluate(fix, mov)
-        if control_point_constraint is not None:
+        if bspline_constraints is not None or max_displacement is not None:
             # project the optimized control points onto the local
-            # invertibility constraint set, then re-evaluate the metric so the
-            # value checked below belongs to the transform actually returned
+            # invertibility constraint set and/or the displacement bound,
+            # then re-evaluate the metric so the value checked below belongs
+            # to the transform actually returned. bspline_constraints (the
+            # C4 k/K/sweeps/tol) and max_displacement are independent knobs -
+            # max_displacement alone (no bspline_constraints) still projects,
+            # using the default k, so the amplitude bound is not silently
+            # skipped when the C4 constraint is left disabled.
+            constraint = bspline_constraints or {}
             pre_projection_metric_value = final_metric_value
             projection_info = project_bspline_transform(
                 transform,
-                k=control_point_constraint['k'],
-                K=control_point_constraint['K'],
-                max_displacement=control_point_constraint['max_displacement'],
-                max_sweeps=control_point_constraint['max_sweeps'],
-                tol=control_point_constraint['tol'],
+                k=constraint.get('k', DEFAULT_K),
+                K=constraint.get('K'),
+                max_displacement=max_displacement,
+                max_sweeps=constraint.get('max_sweeps', default_sweeps),
+                tol=constraint.get('tol', 1e-9),
                 context=context,
             )
             if (projection_info['n_violating_before'] > 0
@@ -1757,9 +1772,6 @@ def deformable_align(
             spacing=initial_fix_spacing, origin=fix_origin,
             direction=np.eye(fix.GetDimension()),
         )
-
-        # diagnostics: check the deformation field for folding and discontinuities
-        deform_field_diagnostics(field, initial_fix_spacing, context=context)
 
         logger.info((
             f'{context} Deform align succeeded: '

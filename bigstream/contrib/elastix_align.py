@@ -12,7 +12,6 @@ from bigstream.align import (
     apply_alignment_spacing,
     images_to_sitk,
     format_static_transform_data,
-    deform_field_diagnostics,
 )
 from .configure_elastix import (
     build_elastix_parameter_object, configure_elastix_threads,
@@ -62,7 +61,13 @@ def _robust_normalize(arr, stats=None, p_low=1.0, p_high=99.0):
     else:
         lo, hi = stats
     denom = max(float(hi - lo), 1e-6)
-    return np.clip((arr - lo) / denom, 0.0, 1.0)
+    # float32 throughout: this feeds a mean-of-squares comparison between two
+    # [0, 1] images, where float32 is far more precision than the decision
+    # needs, and a float64 temporary of a whole block is a large part of this
+    # function's peak memory.
+    out = np.subtract(arr, lo, dtype=np.float32)
+    out /= denom
+    return np.clip(out, 0.0, 1.0, out=out)
 
 
 def elastix_affine_align(
@@ -180,6 +185,7 @@ def elastix_affine_align(
         # a linear transform is fully described by its parameter map; no
         # transformix densification into a displacement field is needed.
         result_transform_maps = elastix.GetTransformParameterMaps()
+        del elastix
     except Exception as e:
         logger.error(f'{context} Registration failed due to elastix exception: {e}')
         logger.info(f'{context} Returning default')
@@ -235,8 +241,8 @@ def elastix_affine_align(
     # final metric check on the skip-sampled grid (SSD, lower is better); images
     # are independently, robustly normalized first (see _robust_normalize).
     if final_metric_check:
-        fix_arr = sitk.GetArrayViewFromImage(fix).astype(np.float64)
-        mov_arr = sitk.GetArrayViewFromImage(mov).astype(np.float64)
+        fix_arr = sitk.GetArrayViewFromImage(fix)
+        mov_arr = sitk.GetArrayViewFromImage(mov)
         # mov may live on its own grid (different shape/spacing than fix) unless
         # it was pre-warped onto the fix grid by the static transforms above --
         # e.g. an affine step with no static transforms. Resample it onto the
@@ -244,7 +250,7 @@ def elastix_affine_align(
         # the same grid as fix (and as the warped "after" image below); a direct
         # fix_arr - mov_arr would otherwise raise a shape-broadcast error.
         mov_on_fix = sitk.Resample(mov, fix, identity_tx, sitk.sitkLinear, 0.0)
-        mov_on_fix_arr = sitk.GetArrayViewFromImage(mov_on_fix).astype(np.float64)
+        mov_on_fix_arr = sitk.GetArrayViewFromImage(mov_on_fix)
         fix_norm = _robust_normalize(fix_arr)
         # normalize with mov's own full-extent dynamic range (raw mov, no resample
         # padding), applied consistently to both the before and after images
@@ -252,7 +258,7 @@ def elastix_affine_align(
         mov_norm = _robust_normalize(mov_on_fix_arr, stats=mov_stats)
         initial_metric_value = float(np.mean((fix_norm - mov_norm) ** 2))
         warped = sitk.Resample(mov, fix, sitk_transform, sitk.sitkLinear, 0.0)
-        warped_arr = sitk.GetArrayViewFromImage(warped).astype(np.float64)
+        warped_arr = sitk.GetArrayViewFromImage(warped)
         warped_norm = _robust_normalize(warped_arr, stats=mov_stats)
         final_metric_value = float(np.mean((fix_norm - warped_norm) ** 2))
         if final_metric_value > initial_metric_value:
@@ -407,19 +413,22 @@ def elastix_deformable_align(
         elastix.SetOutputDirectory(log_dir)
         elastix.LogToConsoleOn()
         elastix.Execute()
+        resultTransformParameters = elastix.GetTransformParameterMaps()
+        del elastix
 
         # densify the result transform to a displacement field on the
         # (skip-sampled) fixed grid; the output domain follows the transform
         # parameter map's own captured Size/Spacing/Origin/Direction (the fix
         # grid used above), regardless of the moving image passed in here.
         transformix = sitk.TransformixImageFilter()
-        transformix.SetTransformParameterMaps(elastix.GetTransformParameterMaps())
+        transformix.SetTransformParameterMaps(resultTransformParameters)
         transformix.SetMovingImage(fix)
         transformix.ComputeDeformationFieldOn()
         transformix.SetOutputDirectory(log_dir)
         transformix.LogToConsoleOn()
         transformix.Execute()
         disp = transformix.GetDeformationField()
+        del transformix
     except Exception as e:
         logger.error(f'{context} Registration failed due to elastix exception: {e}')
         logger.info(f'{context} Returning default')
@@ -442,8 +451,8 @@ def elastix_deformable_align(
     # resample of mov) share mov's own stats so "before" and "after" use one
     # consistent scale.
     if final_metric_check:
-        fix_arr = sitk.GetArrayViewFromImage(fix).astype(np.float64)
-        mov_arr = sitk.GetArrayViewFromImage(mov).astype(np.float64)
+        fix_arr = sitk.GetArrayViewFromImage(fix)
+        mov_arr = sitk.GetArrayViewFromImage(mov)
         # mov may live on its own grid (different shape/spacing than fix) unless
         # it was pre-warped onto the fix grid by the static transforms above --
         # e.g. an affine step with no static transforms. Resample it onto the
@@ -451,20 +460,25 @@ def elastix_deformable_align(
         # the same grid as fix (and as the warped "after" image below); a direct
         # fix_arr - mov_arr would otherwise raise a shape-broadcast error.
         mov_on_fix = sitk.Resample(mov, fix, identity_tx, sitk.sitkLinear, 0.0)
-        mov_on_fix_arr = sitk.GetArrayViewFromImage(mov_on_fix).astype(np.float64)
+        mov_on_fix_arr = sitk.GetArrayViewFromImage(mov_on_fix)
         fix_norm = _robust_normalize(fix_arr)
         # normalize with mov's own full-extent dynamic range (raw mov, no resample
         # padding), applied consistently to both the before and after images
         mov_stats = tuple(np.percentile(mov_arr, [1.0, 99.0]))
         mov_norm = _robust_normalize(mov_on_fix_arr, stats=mov_stats)
         initial_metric_value = float(np.mean((fix_norm - mov_norm) ** 2))
+        del mov_norm
         disp_tx = sitk.DisplacementFieldTransform(
             sitk.Cast(sitk.Image(disp), sitk.sitkVectorFloat64)
         )
         warped = sitk.Resample(mov, fix, disp_tx, sitk.sitkBSpline, 0.0)
-        warped_arr = sitk.GetArrayViewFromImage(warped).astype(np.float64)
+        del disp_tx
+        warped_arr = sitk.GetArrayViewFromImage(warped)
         warped_norm = _robust_normalize(warped_arr, stats=mov_stats)
         final_metric_value = float(np.mean((fix_norm - warped_norm) ** 2))
+        # release the whole-block temporaries before the field is densified
+        # onto the full fix grid below, so the two peaks do not overlap
+        del warped, warped_arr, warped_norm, fix_norm, mov_on_fix, mov_on_fix_arr
         if final_metric_value > initial_metric_value:
             logger.warning((
                 f'{context} Elastix deform optimization failed to improve metric '
@@ -492,16 +506,24 @@ def elastix_deformable_align(
         np.asarray(initial_fix_spacing, dtype=np.float64),
         ref_origin,
     )
+    # resample straight to float32: the field is returned as float32 anyway, so
+    # a float64 intermediate here cost 24 bytes/voxel for nothing
     disp_full = sitk.Resample(
-        disp, ref, identity_tx, sitk.sitkLinear, 0.0, sitk.sitkVectorFloat64,
+        disp, ref, identity_tx, sitk.sitkLinear, 0.0, sitk.sitkVectorFloat32,
     )
+    del disp, ref
 
     # convert from ITK/SITK xyz vector components to bigstream zyx convention
-    field = sitk.GetArrayFromImage(disp_full).astype(np.float32)[..., ::-1]
-    params = field.ravel().astype(np.float32)
-
-    # diagnostics: check the deformation field for folding and discontinuities
-    deform_field_diagnostics(field, initial_fix_spacing, context=context)
+    field = np.ascontiguousarray(
+        sitk.GetArrayViewFromImage(disp_full)[..., ::-1], dtype=np.float32,
+    )
+    del disp_full
+    # `field` is contiguous, so this reshape is a view: unlike the bspline
+    # coefficient vector `deformable_align` returns, a densified field has no
+    # compact parameterization, and materializing a second flat copy of the
+    # whole field doubled what this function returns for no caller (the
+    # alignment_pipeline uses element [1]).
+    params = field.reshape(-1)
 
     logger.info(f'{context} Elastix deform align succeeded')
     return params, field

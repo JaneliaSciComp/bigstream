@@ -57,7 +57,6 @@ global_prealign:
         num_sigma_max: 5
         point_matches_threshold: 25
 
-
 global_align:
     affine:
         alignment_spacing: 1.0

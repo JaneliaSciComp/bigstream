@@ -324,7 +324,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
     # deliberately not rounded up to the chunk or shard: writes are locked on
     # the write unit, so the block geometry is free
 
-    (fix_image, fix_mask, mov_image, mov_mask, roi, _, _) = get_input_images(reg_args)
+    (fix_image, fix_mask, mov_image, mov_mask, roi) = get_input_images(reg_args)
     if mov_image.ndim != fix_image.ndim:
         raise ValueError(f'{mov_image} is expected to have the same ndim as '
                          f'{fix_image}')

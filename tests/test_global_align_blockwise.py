@@ -66,7 +66,7 @@ def _align(images, monkeypatch, **kwargs):
     # the global tool keeps and this file does not exercise
     transform, _aligned = gap._align_global_data(
         fix, None, mov, None,
-        None, None, None,
+        None,                            # no roi
         [],                              # no prealign steps
         [('deform', {})],                # the global steps
         kwargs.pop('processing_size', (16, 16, 16)),

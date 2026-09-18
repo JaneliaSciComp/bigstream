@@ -22,8 +22,8 @@ from bigstream.distributed_align import (MAX_WRITE_LOCKS,
 from bigstream.io_utility import read_block
 from bigstream.level_set import estimate_background
 from bigstream.image_data import (ImageData,
-                                  calc_full_voxel_resolution_attr, calc_downsampling_attr,
-                                  clip_arr_to_roi)
+                                  calc_full_voxel_resolution_attr,
+                                  calc_downsampling_attr)
 from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 from bigstream.transform import (apply_transform,
                                  invert_displacement_vector_field)
@@ -201,7 +201,7 @@ def _run_global_align(reg_args:RegistrationInputs,
         logger.info('Skip global alignment because no global steps were specified.')
         return None
 
-    fix, fix_mask, mov, mov_mask, roi, fix_mask_roi, mov_mask_roi = get_input_images(reg_args)
+    fix, fix_mask, mov, mov_mask, roi = get_input_images(reg_args)
     if fix.has_data() and mov.has_data():
         # compose mov origin transform from user affine + OME translations
         mov_origin_transform = compose_origin_transform(
@@ -216,7 +216,6 @@ def _run_global_align(reg_args:RegistrationInputs,
         transform, aligned = _align_global_data(fix, fix_mask,
                                                 mov, mov_mask,
                                                 roi,
-                                                fix_mask_roi, mov_mask_roi,
                                                 prealign_steps,
                                                 global_steps,
                                                 reg_args.processing_size,
@@ -311,7 +310,6 @@ def _align_global_data(
         fix_image, fix_mask_arg,
         mov_image, mov_mask_arg,
         roi,
-        fix_mask_roi, mov_mask_roi,
         prealign_steps,
         steps,
         processing_size,
@@ -328,20 +326,12 @@ def _align_global_data(
     logger.info('Read image data for global alignment')
     if isinstance(fix_mask_arg, ImageData):
         logger.info(f'Alignment fix mask: {fix_mask_arg}')
-        if fix_mask_roi:
-            logger.info(f'Clip fix mask to roi: {fix_mask_roi}')
-            fix_mask = clip_arr_to_roi(fix_mask_arg.image_array[...], fix_mask_roi)
-        else:
-            fix_mask = fix_mask_arg.image_array[...]
+        fix_mask = fix_mask_arg.image_array[...]
     else:
         fix_mask = fix_mask_arg
     if isinstance(mov_mask_arg, ImageData):
         logger.info(f'Alignment mov mask: {mov_mask_arg}')
-        if mov_mask_roi:
-            logger.info(f'Clip mov mask to roi: {mov_mask_roi}')
-            mov_mask = clip_arr_to_roi(mov_mask_arg.image_array[...], mov_mask_roi)
-        else:
-            mov_mask = mov_mask_arg.image_array[...]
+        mov_mask = mov_mask_arg.image_array[...]
     else:
         mov_mask = mov_mask_arg
 
@@ -580,7 +570,7 @@ def _apply_global_transform(reg_args:RegistrationInputs,
                             compressor_opts,
                             zarr_format,
                             sharding_factor=None):
-    (fix_image, _, mov_image, _, _, _, _) = get_input_images(reg_args)
+    (fix_image, _, mov_image, _, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
         full_image_coords = tuple(slice(None) for _ in range(fix_image.spatial_ndim))
         fix_image_array = read_block(

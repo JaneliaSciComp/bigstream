@@ -167,20 +167,6 @@ def define_registration_input_args(args, args_descriptor: CliArgsHelper):
                       help='Registration ROI on the fixed image, a tuple of 6 values '
                            'representing min and max physical coordinates (xyz). '
                            'Restricts the region that is actually registered.')
-    args.add_argument(args_descriptor.argflag('fix-mask-roi'),
-                      dest=args_descriptor.argdest('fix_mask_roi'),
-                      type=floattuple,
-                      metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
-                      help='Fix mask ROI as a tuple of 6 values '
-                           'representing min and max voxel coordinates (xyz). '
-                           'Restricts the fix image mask for the initial transformation.')
-    args.add_argument(args_descriptor.argflag('mov-mask-roi'),
-                      dest=args_descriptor.argdest('mov_mask_roi'),
-                      type=floattuple,
-                      metavar="xmin,ymin,zmin[,xmax,ymax,zmax]",
-                      help='Moving mask ROI as a tuple of 6 values '
-                           'representing min and max voxel coordinates (xyz). '
-                           'Restricts the moving image mask for the initial transformation.')
     args.add_argument(args_descriptor.argflag('foreground-percentage'),
                       dest=args_descriptor.argdest('foreground_percentage'),
                       type=float,
@@ -365,8 +351,6 @@ def extract_registration_input_args(args, args_descriptor: CliArgsHelper) -> Reg
     _extract_arg(args, args_descriptor, 'fix_mask', registration_args)
     _extract_arg(args, args_descriptor, 'fix_mask_subpath', registration_args)
     _extract_arg(args, args_descriptor, 'roi', registration_args)
-    _extract_arg(args, args_descriptor, 'fix_mask_roi', registration_args)
-    _extract_arg(args, args_descriptor, 'mov_mask_roi', registration_args)
     _extract_arg(args, args_descriptor, 'foreground_percentage', registration_args)
     _extract_arg(args, args_descriptor, 'mov', registration_args)
     _extract_arg(args, args_descriptor, 'mov_subpath', registration_args)
@@ -427,8 +411,6 @@ def _roi_to_zyx(roi):
 def get_input_images(reg_args: RegistrationInputs) -> Tuple[ImageData, Optional[ImageData], # fix, fix_mask
                                                             ImageData, Optional[ImageData], # mov, mov_mask
                                                             Optional[Tuple[float]], # roi
-                                                            Optional[Tuple[float]], # fix_mask_roi
-                                                            Optional[Tuple[float]], # mov_mask_roi
                                                             ]:
     # Read the global inputs
     fix = ImageData(
@@ -481,19 +463,7 @@ def get_input_images(reg_args: RegistrationInputs) -> Tuple[ImageData, Optional[
     else:
         roi = None
 
-    if reg_args.fix_mask_roi is not None:
-        fix_mask_roi = _roi_to_zyx(reg_args.fix_mask_roi)
-        logger.info(f'Using fix mask ROI {reg_args.fix_mask_roi} (xyz) -> {fix_mask_roi} (zyx)')
-    else:
-        fix_mask_roi = None
-
-    if reg_args.mov_mask_roi is not None:
-        mov_mask_roi = _roi_to_zyx(reg_args.mov_mask_roi)
-        logger.info(f'Using fix mask ROI {reg_args.mov_mask_roi} (xyz) -> {mov_mask_roi} (zyx)')
-    else:
-        mov_mask_roi = None
-
-    return fix, fix_mask, mov, mov_mask, roi, fix_mask_roi, mov_mask_roi
+    return fix, fix_mask, mov, mov_mask, roi
 
 
 def get_transforms(transforms_locations, expansion_factor=1):

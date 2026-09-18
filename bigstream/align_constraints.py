@@ -325,6 +325,62 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
     return float(np.min(ramp[ramp > 0]) * headroom / (2.0 * ndim))
 
 
+def neighbor_disagreement_bound(block_overlaps, spacing, k,
+                                min_jacobian=0.1):
+    """
+    Largest neighbour *disagreement* that blockwise blending cannot fold.
+
+    Same derivation as `blend_safe_displacement_bound`, stopped one step
+    earlier. The quantity the blend term actually depends on is
+
+        delta = |u_A - u_B|     the disagreement between two overlapping
+                                blocks where they are blended
+
+    and Chun & Fessler's Lemma 2 over a ramp of physical length L gives
+
+        min|J| >= 1 - sum(k) - ndim*delta/L
+        delta  <= (1 - sum(k) - min_jacobian) * L / ndim
+
+    `blend_safe_displacement_bound` reaches its `U` by substituting the worst
+    case `delta <= 2U`, because a block cannot observe its neighbours and so
+    has nothing but its own amplitude to bound with. That substitution is what
+    makes the amplitude ceiling so tight: `U` bounds *absolute motion*, which
+    is naturally large - it is the deformation being measured - while `delta`
+    bounds *neighbour disagreement*, which is naturally small, because
+    overlapping blocks see mostly the same tissue.
+
+    Bounding `delta` directly (see `blockwise_alignment_pipeline`'s
+    `delta_max`, which clamps every block toward a shared neighbourhood
+    estimate) gives the identical fold guarantee while leaving absolute
+    displacement free. It collapses to `2 * blend_safe_displacement_bound`, as
+    it must.
+
+    Parameters
+    ----------
+    block_overlaps : 1d array
+        Per-axis block overlap in voxels (zyx), as used to build the blending
+        weights.
+
+    spacing : 1d array
+        Physical voxel spacing (zyx).
+
+    k : float or 1d array
+        The C4 allowance the deform step is configured with.
+
+    min_jacobian : float (default: 0.1)
+        Jacobian determinant to keep in reserve for the blend.
+
+    Returns
+    -------
+    float
+        The bound, as a scalar over the tightest axis. `inf` when there is no
+        overlap to blend across, `0.0` when `k` leaves no headroom at all.
+    """
+    bound = blend_safe_displacement_bound(block_overlaps, spacing, k,
+                                          min_jacobian=min_jacobian)
+    return bound * 2.0
+
+
 def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
                   max_displacement=None, max_sweeps=100, tol=1e-9):
     """

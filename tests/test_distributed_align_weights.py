@@ -10,7 +10,7 @@ NBLOCKS = (4, 4, 4)
 
 
 def _neighbors(block_index, nblocks, missing=()):
-    """Neighbor presence flags as distributed_alignment_pipeline builds them.
+    """Neighbor presence flags as the block partitioning builds them.
 
     Every offset whose target is off the volume is absent, plus any offset
     listed in `missing` (a block that exists but was dropped by the mask).

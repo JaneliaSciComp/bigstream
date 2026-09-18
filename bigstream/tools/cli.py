@@ -32,13 +32,6 @@ def inttuple(arg):
         return ()
 
 
-def intlist(arg):
-    if arg is not None and arg.strip():
-        return [int(d.strip()) for d in arg.split(',')]
-    else:
-        return []
-
-
 def floattuple(arg):
     if arg is not None and arg.strip():
         return tuple([float(d.strip()) for d in arg.split(',')])

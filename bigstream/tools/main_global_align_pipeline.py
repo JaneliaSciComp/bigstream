@@ -15,7 +15,10 @@ from bigstream.align import alignment_pipeline
 from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
 from bigstream.diagnostics import dice_score
-from bigstream.distributed_align import distributed_alignment_pipeline
+from bigstream.distributed_align import (MAX_WRITE_LOCKS,
+                                        AlignmentPass,
+                                        DisplacementDiagnostics,
+                                        blockwise_alignment_pipeline)
 from bigstream.io_utility import read_block
 from bigstream.level_set import estimate_background
 from bigstream.image_data import (ImageData,
@@ -33,7 +36,15 @@ from .cli import (CliArgsHelper, RegistrationInputs,
 from .utils import derive_shard_shape, get_zarr_format
 
 
-logger:logging.Logger
+# rebound to the configured root logger by main(); a real logger up
+# front so the module's functions can also be called directly
+logger = logging.getLogger(__name__)
+
+
+# Per-side halo, as a fraction of the block size, when the caller gives a
+# processing size but no overlap factor. Matches what the single-pass
+# pipeline used to default to.
+DEFAULT_GLOBAL_OVERLAP_FACTOR = 0.5
 
 
 def _define_args(args_descriptor):
@@ -89,6 +100,29 @@ def _define_args(args_descriptor):
                                   'sharding_factor (each factor must be a '
                                   'positive integer). Ignored when '
                                   '--output-zarr-format is not 3.')
+
+    args_parser.add_argument('--displacement-diagnostics',
+                             '--displacement_diagnostics',
+                             dest='displacement_diagnostics',
+                             choices=[m.value for m in DisplacementDiagnostics],
+                             default=None,
+                             help='When to run displacement field '
+                                  'diagnostics (jacobian folding statistics) '
+                                  'over the assembled global field. Global '
+                                  'alignment is a single blockwise pass, so '
+                                  'PER_STEP and FINAL_STEP both mean "once, '
+                                  'at the end". Omit for none. Only applies '
+                                  'when a processing size selects the '
+                                  'blockwise path; per-block diagnostics are '
+                                  'separate and always go to the debug log.')
+    args_parser.add_argument('--max-write-locks', '--max_write_locks',
+                             dest='max_write_locks',
+                             type=int, default=MAX_WRITE_LOCKS,
+                             help='Largest number of lock names one block '
+                                  'write may hold during a blockwise global '
+                                  'alignment. Writes are locked per output '
+                                  'chunk, so the processing size need not be '
+                                  'a multiple of it.')
 
     args_parser.add_argument('--cpus', dest='cpus',
                              type=int, default=0,
@@ -157,6 +191,8 @@ def _run_global_align(reg_args:RegistrationInputs,
                       sharding_factor=None,
                       save_composed_transform=False,
                       inv_transform_args=None,
+                      displacement_diagnostics=None,
+                      max_write_locks=MAX_WRITE_LOCKS,
                       local_workers=1):
     global_steps, _ = get_algorithm_parameters(align_config,
                                                'global_align',
@@ -190,6 +226,8 @@ def _run_global_align(reg_args:RegistrationInputs,
                                                 static_transforms,
                                                 static_transforms_spacings,
                                                 prealign_downsample=prealign_downsample,
+                                                displacement_diagnostics=displacement_diagnostics,
+                                                max_write_locks=max_write_locks,
                                                 local_workers=local_workers)
         if len(transform.shape) == 2:
             logger.info(f'Global affine transform: {transform}')
@@ -208,6 +246,8 @@ def _run_global_align(reg_args:RegistrationInputs,
             compressor_opts,
             zarr_format,
             sharding_factor,
+            prealign_steps=prealign_steps,
+            align_steps=global_steps,
         )
         # save the transform
         transform_subpath = reg_args.transform_subpath or reg_args.mov_subpath
@@ -281,6 +321,8 @@ def _align_global_data(
         static_transforms,
         static_transforms_spacings=(),
         prealign_downsample=1,
+        displacement_diagnostics=None,
+        max_write_locks=MAX_WRITE_LOCKS,
         local_workers=1,
 ):
     logger.info('Read image data for global alignment')
@@ -348,6 +390,13 @@ def _align_global_data(
     else:
         # if the processing_size is specified run a blockwise alignment using a
         block_zyx = tuple(int(s) for s in processing_size[::-1])
+        if processing_overlap_factor is None:
+            # a blockwise alignment has to blend, and there is no
+            # global_align config default to fall back on the way the local
+            # stage has one; without this the pass fails to resolve a halo
+            processing_overlap_factor = DEFAULT_GLOBAL_OVERLAP_FACTOR
+            logger.info('No processing overlap factor given, defaulting to '
+                        f'{processing_overlap_factor} per side')
         displacement_vector_ndim = int(fix_image.spatial_ndim)
         transform_tmp_dir = tempfile.TemporaryDirectory(prefix='.global_deform_',
                                                         dir=os.getcwd())
@@ -403,15 +452,25 @@ def _align_global_data(
                                              threads_per_worker=1,
                                              memory_limit=0,
                                              processes=False))
-        deform_ok = distributed_alignment_pipeline(
+        # Exactly one pass, at a zero lattice offset and with no neighbour
+        # clamp. Multi-pass cascading is a local-stage tool: it exists to
+        # split a large deformation across several budgets and to stagger
+        # block seams, and a global alignment fits neither - it runs on a
+        # downsampled volume looking for the low frequency part of the
+        # deformation, which one pass already carries. A second pass here
+        # would only refit its own residual at the same resolution.
+        #
+        # `processing_overlap_factor` and `processing_halo_factor` are the
+        # same quantity: a per-side halo as a fraction of the block size.
+        deform_ok = blockwise_alignment_pipeline(
             fix_image,
             fix_spacing / fix_image.expansion_factor,
             mov_image,
             mov_spacing / fix_image.expansion_factor,
-            steps,
-            block_zyx,
+            [AlignmentPass(alignment_steps=steps, name='global')],
             cluster_client,
-            overlap_factor=processing_overlap_factor,
+            processing_size=block_zyx,
+            processing_halo_factor=processing_overlap_factor,
             fix_mask=fix_mask,
             mov_mask=mov_mask,
             roi=roi,
@@ -419,6 +478,8 @@ def _align_global_data(
             mov_origin_transform=mov_origin_transform,
             static_transform_list=transforms_list,
             output_transform=transform,
+            max_write_locks=max_write_locks,
+            displacement_diagnostics=displacement_diagnostics,
         )
         logger.info((
             f'Finished computing the {transform.shape} deformation field '
@@ -781,7 +842,8 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          compressor,
                          compressor_opts,
                          zarr_format,
-                         sharding_factor=None):
+                         sharding_factor=None,
+                         **align_attrs):
     align_path = reg_args.align_path()
     # prepare global coordinate transform from reg_args.mov_origin_transform
     global_transformations = []
@@ -808,6 +870,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             dataset_transformations=dataset_transformations,
             global_transformations=global_transformations,
             zarr_format=zarr_format,
+            **align_attrs,
         )
         fix_shape = fix_image.shape
 
@@ -924,6 +987,8 @@ def main():
                           sharding_factor=args.output_sharding_factor,
                           save_composed_transform=args.save_composed_transform,
                           inv_transform_args=inv_transform_args,
+                          displacement_diagnostics=args.displacement_diagnostics,
+                          max_write_locks=args.max_write_locks,
                           local_workers=args.local_dask_workers)
     else:
         # global transform found -> just apply it

@@ -104,7 +104,7 @@ deform: &deform_args
   #  recorded in the zarr.
   #
   #  'k' bounds derivatives, not amplitude, so without this a smooth but huge
-  #  displacement is C4 compliant yet still folds where distributed_align
+  #  displacement is C4 compliant yet still folds where blockwise alignment
   #  blends it against a neighbour that fitted something different (this
   #  includes another step's own max_displacement in the same pipeline, e.g.
   #  an 'affine' step run before this 'deform' step - they share one ceiling).
@@ -116,6 +116,13 @@ deform: &deform_args
   #  Prefer a small k with a larger max_displacement over the reverse: k=0.1
   #  still guarantees min|J| >= 0.7 per block, and spends the freed jacobian
   #  budget on amplitude, which is what actually binds.
+  #
+  #  Better still, do not cap amplitude at all: see
+  #  local_align.neighbor_consistency below. That ceiling is only this tight
+  #  because a block cannot see its neighbours, so the bound has to assume
+  #  the worst case disagreement 2*max_displacement. What actually folds the
+  #  stitch is the disagreement, not the amplitude, and bounding it directly
+  #  gives the identical guarantee while leaving amplitude free.
   # max_displacement: 16
 
 elastix_deform: &elastix_deform_args
@@ -136,11 +143,91 @@ random:
 
 global_align:
   steps: [] # no default global steps
+  # Passing a processing size to the global tool switches it from a single
+  # whole-image fit to one blockwise pass over the volume. Always exactly
+  # one pass: multi-pass cascading is a local-stage tool, and a global
+  # alignment runs on a downsampled volume looking for the low frequency
+  # part of the deformation, which one pass already carries.
 
 local_align:
+  # A single flat list of steps is one alignment pass over the volume.
   steps: [] # no default local steps
+
+  # Block geometry, in VOXELS, zyx. These are the defaults every pass
+  # inherits when it does not set its own.
+  #
+  #   block_size     the block step: the distance between the origins of two
+  #                  adjacent blocks. Also spelled `processing_size`, which
+  #                  wins if both are present - so set one, not both.
+  #   block_overlap  the halo, as a fraction of the block size, PER SIDE. A
+  #                  block reads and writes block_size + 2*halo voxels; the
+  #                  halo is where it blends into its neighbours. Also
+  #                  spelled `processing_halo_factor` (or `overlap_factor`),
+  #                  which wins if both are present.
+  #
+  # Nothing requires these to be a multiple of the output chunk or shard:
+  # block writes are locked on the write unit, so any block geometry is
+  # safe. Blocks that land in a shared chunk are simply serialized.
   block_size: [128, 128, 128]
   block_overlap: 0.5
+
+  # Several passes over the volume, each on its own block lattice, each
+  # fitting only the residual its predecessors left, composed at the end.
+  # Total deformation capacity becomes the SUM of the per-pass budgets
+  # rather than one budget, and staggering `processing_offset` puts one
+  # pass's block seams in the next pass's block interiors, so no seam is
+  # ever reinforced. Replaces `steps` above when present.
+  #
+  # alignment_passes:
+  #   - processing_offset: [0, 0, 0]          # lattice phase, voxels zyx.
+  #                                           # Block origins sit at
+  #                                           # offset + n*block_size measured
+  #                                           # from voxel 0 of the WHOLE
+  #                                           # volume, never from the ROI or
+  #                                           # a chunk, so the same block is
+  #                                           # computed however the work is
+  #                                           # split.
+  #     processing_halo_factor: [0.2, 0.2, 0.2]
+  #     alignment_steps:                      # single-key dicts, in order
+  #       - ransac: {alignment_spacing: 4}
+  #       - affine: {alignment_spacing: 4.0}
+  #       - deform: {control_point_spacing: 128}
+  #   - processing_size: [384, 384, 384]      # restate it so the offset below
+  #                                           # is the intended 1/4 stagger
+  #     processing_offset: [96, 96, 96]
+  #     processing_halo_factor: [0.1, 0.1, 0.1]   # a smaller residual needs
+  #                                               # less reach
+  #     alignment_steps:
+  #       - deform: {control_point_spacing: 128}
+  #
+  # See configs/bigstream_config_prototype.yml for a complete example.
+
+  # Bound on how much two overlapping blocks may DISAGREE, in the same
+  # physical units as the voxel spacing (expansion corrected). Applies to
+  # every pass unless the pass overrides it.
+  #
+  # This is the alternative to capping deform.max_displacement, and the
+  # better one. `max_displacement` bounds absolute motion - naturally large,
+  # it is the deformation being measured. `delta_max` bounds neighbour
+  # disagreement - naturally small, because overlapping blocks see mostly
+  # the same tissue. Both give the same fold guarantee; only the second
+  # leaves the deformation free.
+  #
+  # Each block is clamped to within delta_max/2 of a smooth estimate
+  # reconstructed from the whole lattice, so two overlapping blocks differ
+  # by at most delta_max. A block that failed its metric check contributes
+  # nothing to that estimate and adopts it wholesale, instead of asserting
+  # a zero displacement it has no evidence for.
+  #
+  # Costs: the pass runs in two stages and the per-block fields stay
+  # resident in the cluster between them. Omit the section to disable it.
+  #
+  # neighbor_consistency:
+  #   delta_max: auto   # a number, or 'auto' to derive it from each pass's
+  #                     # own halo and spacing
+  #   sigma: 1.0        # reconstruction width, in lattice nodes
+  #   k: 0.32           # C4 allowance 'auto' assumes; match your deform step
+
   affine:
   #  # optional bound on the per-component displacement this block's affine
   #  # step may contribute, physical units, same frame as deform's own

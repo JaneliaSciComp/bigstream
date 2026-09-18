@@ -1,10 +1,4 @@
-import logging
 import os
-
-from math import ceil
-
-
-logger = logging.getLogger(__name__)
 
 
 def derive_shard_shape(sharding_factor_xyz, output_blocksize_zyx, zarr_format):
@@ -45,24 +39,6 @@ def derive_shard_shape(sharding_factor_xyz, output_blocksize_zyx, zarr_format):
             f'{sharding_factor_xyz}'
         )
     return tuple(b * f for b, f in zip(output_blocksize_zyx, factor))
-
-
-def get_processing_size(input_processing_size, shard_shape=None, blocksize=None):
-    """Round up processing_size_zyx to a multiple of the storage unit.
-
-    For zarr3 pass shard_shape_zyx; for zarr2 pass blocksize_zyx.
-    Returns final_processing_size.
-    """
-    unit = shard_shape if shard_shape is not None else blocksize
-    if unit is None:
-        return tuple(input_processing_size)
-    processing_size = tuple(int(ceil(p / s)) * s for p, s in zip(input_processing_size, unit))
-    logger.info(
-        f'Final processing size: {processing_size} '
-        f'based on processing unit size: {unit} and provided processing size: {input_processing_size} '
-    )
-
-    return processing_size
 
 
 def get_zarr_format(output_name, zarr_format):

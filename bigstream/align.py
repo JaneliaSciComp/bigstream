@@ -391,6 +391,7 @@ def feature_point_ransac_affine_align(
     blob_sizes,
     safeguard_exceptions=True,
     alignment_spacing=None,
+    max_displacement=None,
     num_sigma_max=15,
     cc_radius=12,
     nspots=5000,
@@ -487,6 +488,30 @@ def feature_point_ransac_affine_align(
         as close as possible to this value. Many alignments can be solved
         at far lower resolution than the collected data. This parameter
         can significantly speed up computation.
+
+    max_displacement : float or zyx list (default: None)
+        Bound on the per-component displacement this affine may induce
+        relative to identity, in physical units, over the full extent of
+        `fix`. None (the default) disables it and leaves behavior unchanged.
+
+        An affine has no coefficient grid to constrain the way
+        `deformable_align`'s `bspline_constraints` does, so a degenerate
+        optimization (e.g. a block with too little foreground to anchor the
+        fit) can return an affine that is individually valid - invertible,
+        orientation-preserving - but wildly implausible: a large anisotropic
+        scale plus a large offset. That alone does not fold anything, but
+        `distributed_align` blends per-block transforms against their
+        neighbours, and an outlier affine folds there the same way an
+        unbounded deform amplitude does - see
+        `align_constraints.blend_safe_displacement_bound`. If the
+        deform step's own `max_displacement` is set, size this one with it
+        in mind: their contributions add when composed, so leave headroom
+        against whatever `blend_safe_displacement_bound` reports for the
+        run's block overlap and spacing.
+
+        When exceeded, the affine's deviation from identity is scaled down
+        uniformly (not clipped entry-by-entry) until the bound is met -
+        see `align_constraints.bound_affine_displacement`.
 
     num_sigma_max : scalar int (default: 15)
         The maximum number of laplacians to use in the feature point LoG detector
@@ -599,8 +624,14 @@ def feature_point_ransac_affine_align(
     affine_matrix : 2d array 4x4
         An affine matrix matching the moving image to the fixed image
     """
+    logger.info(f'Ransac affine align {context} -> {kwargs}')
+    initial_fix_shape = fix.shape
+    initial_fix_spacing = np.asarray(fix_spacing, dtype=np.float64)
+    max_displacement = validate_affine_displacement_bound(max_displacement, fix.ndim)
+
     # establish default
-    if default is None: default = np.eye(fix.ndim + 1)
+    if default is None:
+        default = np.eye(fix.ndim + 1)
 
     # realize masks
     fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
@@ -832,6 +863,12 @@ def feature_point_ransac_affine_align(
     # augment matrix and return
     affine = np.eye(fix.ndim + 1)
     affine[:fix.ndim, :] = Aff
+    if max_displacement is not None:
+        extent = np.asarray(initial_fix_shape, dtype=np.float64) * initial_fix_spacing
+        affine, _ = bound_affine_displacement(
+            affine, extent, max_displacement, context=context,
+        )
+
     logger.debug(f'{context} - RANSAC successful affine: {Aff}')
     return affine
 

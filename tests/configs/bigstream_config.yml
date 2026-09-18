@@ -1,0 +1,149 @@
+# Example config for the multi-pass blockwise alignment pipeline
+
+ransac:
+    blob_sizes: [6, 14]
+    nspots: 5000
+    num_sigma_max: 5
+    cc_radius: 15
+    match_threshold: 0.6
+    max_spot_match_distance:
+    point_matches_threshold: 50
+    align_threshold: 2.0
+    diagonal_constraint: 0.15
+    fix_spots_count_threshold: 50
+    fix_spot_detection_kwargs:
+        blob_method: log
+        background_subtract: false
+        threshold: 0.000001
+        threshold_rel: 0
+        winsorize_limits: [0.01, 0.01]
+    mov_spots_count_threshold: 50
+    mov_spot_detection_kwargs:
+        blob_method: log
+        background_subtract: false
+        threshold: 0.000001
+        threshold_rel: 0
+        winsorize_limits: [0.01, 0.01]
+
+affine:
+    alignment_spacing: 1.0
+    shrink_factors: [2]
+    smooth_sigmas: [2]
+    metric: MMI
+    optimizer: RSGD
+    optimizer_args:
+        learningRate: 0.25
+        minStep: 0.001
+        numberOfIterations: 4000
+
+deform:
+    sampling: NONE
+    sampling_percentage: 1.0
+    alignment_spacing: 1.0
+    control_point_spacing: 128
+    control_point_levels: [1]
+    control_point_constraint:
+        k: 0.32
+    shrink_factors: [1]
+    smooth_sigmas: [1.0]
+    metric: MMI
+    optimizer: RSGD
+    optimizer_args:
+        learningRate: 2
+        minStep: 0.001
+        numberOfIterations: 50
+
+global_align:
+    ransac:
+        # overriden parameters
+        num_sigma_max: 5
+        point_matches_threshold: 25
+    affine: {}
+
+
+#
+# All geometry here is in VOXELS, zyx order, like the rest of this config -
+# only the CLI takes xyz and reverses it before it gets this far.
+#
+# Terms, once:
+#   processing_size         B, the block step: the distance between the
+#                           origins of two adjacent blocks. Block cores tile
+#                           the volume with this period.
+#   processing_offset       the lattice phase. Block origins are at
+#                           offset + n*B measured from voxel 0 of the whole
+#                           volume, never from the ROI or a chunk, so the
+#                           same block is computed no matter how the work is
+#                           split. A later pass offsets its lattice so its
+#                           seams land in the previous pass's block interiors.
+#   processing_halo_factor  halo as a fraction of processing_size, PER SIDE.
+#                           A block reads and writes B + 2*halo voxels; the
+#                           halo is where it blends into its neighbours. This
+#                           is the same quantity the single-pass pipeline
+#                           calls overlap_factor.
+local_align:
+    # defaults for every pass; a pass may override either one
+    processing_size: [192,192,192]
+    processing_halo_factor: 0.5
+    processing_offset: [0, 0, 0]
+
+    # Bound on how much two overlapping blocks may disagree, in the same
+    # physical units as the voxel spacing (expansion corrected). This replaces
+    # capping max_displacement: 'U' bounds absolute motion, which is the
+    # deformation being measured and naturally large, while delta bounds
+    # neighbour disagreement, which is naturally small because overlapping
+    # blocks see mostly the same tissue. Both give the same fold guarantee.
+    # 'auto' derives it from each pass's own halo/spacing.
+    # Omit the whole section to disable the clamp.
+    # neighbor_consistency:
+    #     delta_max: auto
+    #     sigma: 1.0    # normalized convolution width, in lattice nodes
+
+    alignment_passes:
+        # pass 1 - coarse: full halo (0.2), inherits the default block size
+        - alignment_steps:
+            - ransac: {}
+            - affine:
+                alignment_spacing: 4.0
+                shrink_factors: [4]
+                smooth_sigmas: [4.0]
+                metric: MMI
+                optimizer: LBFGSB
+            - deform:
+                sampling: NONE
+                sampling_percentage: 1.0
+                alignment_spacing: 1.0
+                control_point_spacing: 128
+                control_point_levels: [1]
+                shrink_factors: [1]
+                smooth_sigmas: [1.0]
+                metric: MMI
+                optimizer: RSGD
+                optimizer_args:
+                    learningRate: 2
+                    minStep: 0.001
+                    numberOfIterations: 150
+
+        # pass 2 - refinement on the residual pass 1 left.
+        # processing_size is restated deliberately: it must match pass 1's for
+        # the [96,96,96] offset to be the intended quarter-block stagger.
+        # The halo shrinks 0.2 -> 0.1 because this pass fits a smaller
+        # residual and so needs less reach.
+        - processing_size: [128,128,128]
+          processing_offset: [32, 32 , 32]
+          processing_halo_factor: [0.1, 0.1, 0.1]
+          alignment_steps:
+            - affine: {}
+            - deform:
+                sampling: NONE
+                sampling_percentage: 1.0
+                alignment_spacing: 1.0
+                control_point_spacing: 128
+                control_point_levels: [1]
+                shrink_factors: [1]
+                smooth_sigmas: [1.0]
+                metric: MMI
+                optimizer: RSGD
+                optimizer_args:
+                    learningRate: 2
+                    minStep: 0.001
+                    numberOfIterations: 50

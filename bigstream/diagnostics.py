@@ -8,7 +8,8 @@ import bigstream.utility as ut
 logger = logging.getLogger(__name__)
 
 
-def deform_field_diagnostics(field, spacing, context=''):
+def deform_field_diagnostics(field, spacing, context='',
+                             level=logging.INFO):
     """
     Log diagnostics for a displacement vector field: jacobian determinant
     (folding), field sanity (NaN/Inf), displacement magnitude statistics, and
@@ -25,7 +26,22 @@ def deform_field_diagnostics(field, spacing, context=''):
 
     context : str (default: '')
         A prefix prepended to all log messages.
+
+    level : int (default: logging.INFO)
+        Level to log at. Below INFO the fold reports are demoted with
+        everything else, which is what a per-block call wants: a block's
+        field is not the field that ends up on disk - its overlap regions
+        only reach their final values once every neighbour has added its
+        weighted share - so a fold seen here is not yet a fold in the
+        result. The run on the assembled field is the one that decides.
+
+        Nothing is computed when the level is not enabled; the jacobian
+        determinant is one of the largest allocations in a block's
+        alignment.
     """
+    if not logger.isEnabledFor(level):
+        return
+    fold_level = logging.ERROR if level >= logging.INFO else level
 
     # build a sitk displacement field image (xyz vector order) from the
     # numpy field (zyx order, components in zyx)
@@ -41,7 +57,7 @@ def deform_field_diagnostics(field, spacing, context=''):
     del disp
     jac_arr = sitk.GetArrayViewFromImage(jac)
     n_folded = int(np.count_nonzero(jac_arr <= 0))
-    logger.info((
+    logger.log(level, (
         f'{context} Deform align jacobian determinant: '
         f'min={jac_arr.min()}, max={jac_arr.max()}, '
         f'mean={jac_arr.mean()}, '
@@ -63,19 +79,19 @@ def deform_field_diagnostics(field, spacing, context=''):
             folded, np.array(jac_arr.shape) - 1 - folded).min(axis=1)
         n_interior = int(np.count_nonzero(border_distance > 2))
         n_face = n_folded - n_interior
-        logger.info((
+        logger.log(level, (
             f'{context} Deform align folding location: '
             f'{n_face} within 2 voxels of a face, '
             f'{n_interior} in the interior '
             f'({100.0 * n_interior / jac_arr.size:.4f}% of the block)'
         ))
         if n_interior:
-            logger.error((
+            logger.log(fold_level, (
                 f'{context} Deform align has {n_interior} interior folded '
                 'voxels - the deformation is not locally invertible'
             ))
         if n_face:
-            logger.error((
+            logger.log(fold_level, (
                 f'{context} Deform align has {n_face} folded voxels at a block '
                 'face. These blend into neighbouring blocks, so they are not '
                 'self correcting; check the field smoothness maxima below for '
@@ -95,7 +111,7 @@ def deform_field_diagnostics(field, spacing, context=''):
         has_nan = bool(np.isnan(u).any())
         has_inf = bool(np.isinf(u).any())
     mag = np.linalg.norm(u, axis=-1)
-    logger.info((
+    logger.log(level, (
         f'{context} Deform align field stats: '
         f'has NaN={has_nan}, has Inf={has_inf}, '
         f'disp magnitude min={mag.min()}, max={mag.max()}, '
@@ -108,7 +124,7 @@ def deform_field_diagnostics(field, spacing, context=''):
     # holding dx, dy and dz at once tripled the footprint of this check.
     for name, axis in (("dx", 2), ("dy", 1), ("dz", 0)):
         g = np.linalg.norm(np.diff(u, axis=axis), axis=-1)
-        logger.info((
+        logger.log(level, (
             f'{context} Deform align field smoothness {name}: '
             f'max jump={g.max()}, p99 jump={np.percentile(g, 99)}'
         ))

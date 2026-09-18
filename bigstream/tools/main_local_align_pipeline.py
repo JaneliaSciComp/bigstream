@@ -1,97 +1,129 @@
+"""
+Compute a local deformation field with the multi-pass blockwise pipeline.
+
+This is the CLI for `bigstream.distributed_align` and it only computes the 
+transformation for the fine alignment.
+
+The registration is described by `local_align.alignment_passes` in the align
+config: several passes over the volume, each on its own block lattice, each
+fitting only the residual its predecessors left. A config that has no
+`alignment_passes` still works - its single `steps:` list is run as one pass.
+
+Note that the processing size does not have to be a multiple of the output
+chunk or shard. Writes are locked on the write unit rather than on the
+block, so any block geometry is safe - see `max_write_locks`.
+"""
+
 import argparse
 import logging
+
+from copy import deepcopy
+
 import numpy as np
-import os
-import bigstream.io_utility as io_utility
-import bigstream.utility as ut
+import pydantic.v1.utils as pu
+import yaml
 
 from dask.distributed import (Client, LocalCluster)
 
-from bigstream.configure_bigstream import (configure_logging)
-from bigstream.configure_dask import (ConfigureWorkerPlugin,
-                                      load_dask_config)
-from bigstream.distributed_align import distributed_alignment_pipeline
-from bigstream.distributed_transform import (distributed_apply_transform,
-        distributed_invert_displacement_vector_field)
+import bigstream.io_utility as io_utility
+
+from bigstream.configure_bigstream import (configure_logging,
+                                           default_bigstream_config_str)
+from bigstream.configure_dask import (ConfigureWorkerPlugin, load_dask_config)
+from bigstream.distributed_align import (
+    MAX_WRITE_LOCKS,
+    AlignmentPass,
+    DisplacementDiagnostics,
+    alignment_passes_from_config,
+    alignment_steps_from_config,
+    blockwise_alignment_pipeline,
+    default_pass_geometry_from_config,
+)
 from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
                                   calc_downsampling_attr)
 from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 
 from .cli import (CliArgsHelper, RegistrationInputs,
-                  define_registration_input_args, get_algorithm_parameters,
+                  define_registration_input_args,
                   extract_registration_input_args, get_input_images,
-                  get_transform, dictfromjson, inttuple, floattuple)
+                  get_transform, dictfromjson, inttuple)
 
-from .utils import derive_shard_shape, get_processing_size, get_zarr_format
+from .utils import derive_shard_shape, get_zarr_format
 
 
-logger:logging.Logger
+# rebound to the configured root logger by main(); a real logger up
+# front so the module's functions can also be called directly
+logger = logging.getLogger(__name__)
+
+
+# Arguments `define_registration_input_args` contributes that this tool does
+# not implement. They stay in the parser so the shared definition is not
+# forked, but they are hidden from --help and refused if actually passed -
+# silently ignoring an output the caller asked for would be worse.
+_INVERSE = ('this tool does not compute the inverse field; '
+            'use main_compute_local_inverse')
+_WARP = ('this tool does not warp the moving image; '
+         'use main_apply_local_transform')
+_UNSUPPORTED_ARGS = {
+    'inv_transform_name': _INVERSE,
+    'inv_transform_subpath': _INVERSE,
+    'inv_transform_blocksize': _INVERSE,
+    'align_dir': _WARP,
+    'align_name': _WARP,
+    'align_subpath': _WARP,
+    'align_timeindex': _WARP,
+    'align_channel': _WARP,
+    'align_blocksize': _WARP,
+    'persist_mov_origin_transform': _WARP,
+}
 
 
 def _define_args(local_descriptor):
-    args_parser = argparse.ArgumentParser(description='Registration pipeline')
+    args_parser = argparse.ArgumentParser(
+        description='Compute a local deformation field (multi-pass blockwise)')
 
     define_registration_input_args(
         args_parser.add_argument_group(
             description='Local registration input volumes'),
         local_descriptor,
     )
+    _hide_unsupported_args(args_parser, local_descriptor)
 
     args_parser.add_argument('--align-config',
                              dest='align_config',
-                             help='Align config file that contains registration algorithm parameters for fine tune up')
-    args_parser.add_argument('--global-transform','--global_transform',
-                             dest='global_transform',
-                             help='Global transform path')
-    args_parser.add_argument('--global-transform-subpath','--global_transform_subpath',
-                             dest='global_transform_subpath',
-                             help='Global transform subpath')
-    args_parser.add_argument('--local-transform-overlap-factor',
-                             dest='local_transform_overlap_factor',
-                             type=float,
-                             help='partition overlap when splitting the work for applying a transformation - a fractional number between 0 - 1')
+                             help='Align config file holding the '
+                                  'local_align.alignment_passes section')
+    args_parser.add_argument('--initial-transform', '--global-transform',
+                             dest='initial_transform',
+                             help='Initial transform path')
+    args_parser.add_argument('--initial-transform-subpath',
+                             '--global-transform-subpath',
+                             dest='initial_transform_subpath',
+                             help='Initial transform subpath')
 
-    args_parser.add_argument('--inv-step',
-                             dest='inv_step',
-                             type=float,
-                             default=1.0,
-                             help="Inverse transformation step")
-    args_parser.add_argument('--inv-iterations',
-                             dest='inv_iterations',
-                             type=inttuple,
-                             default=(10,),
-                             help="Number of iterations for the inverse transformation")
-    args_parser.add_argument('--inv-shrink-spacings',
-                             dest='inv_shrink_spacings',
-                             type=floattuple,
-                             default=None,
-                             help="Inverse shrink spacings")
-    args_parser.add_argument('--inv-smooth-sigmas',
-                             dest='inv_smooth_sigmas',
-                             type=floattuple,
-                             default=(0.,),
-                             help="Inverse smooth sigmas")
-    args_parser.add_argument('--inv-step-cut-factor',
-                             dest='inv_step_cut_factor',
-                             type=float,
-                             default=0.5,
-                             help="Inverse step cut factor")
-    args_parser.add_argument('--inv-pad',
-                             dest='inv_pad',
-                             type=float,
-                             default=0.1,
-                             help="Inverse pad value")
-    args_parser.add_argument('--inv-use-root',
-                             dest='inv_use_root',
-                             action='store_true',
-                             default=False,
-                             help="Use root for inverse displacement")
+    args_parser.add_argument('--pass-fields-path',
+                             dest='pass_fields_path',
+                             help='Container for the intermediate per-pass '
+                                  'fields (defaults to the transform '
+                                  'container). Only used when the config has '
+                                  'more than one pass. These are kept after '
+                                  'the run - they are what the per-pass '
+                                  'diagnostics are read from - and are never '
+                                  'deleted automatically.')
+    args_parser.add_argument('--max-write-locks', '--max_write_locks',
+                             dest='max_write_locks',
+                             type=int, default=MAX_WRITE_LOCKS,
+                             help='Largest number of lock names one block '
+                                  'write may hold. Block writes are locked '
+                                  'per output chunk (or shard), so the '
+                                  'processing size need not be a multiple of '
+                                  'either; a block much larger than the chunk '
+                                  'coarsens its lock grid to stay under this.')
 
     args_parser.add_argument('--dask-scheduler', dest='dask_scheduler',
                              type=str, default=None,
                              help='Run with distributed scheduler')
-
     args_parser.add_argument('--dask-config', dest='dask_config',
                              type=str, default=None,
                              help='YAML file containing dask configuration')
@@ -102,217 +134,215 @@ def _define_args(local_descriptor):
     args_parser.add_argument('--worker-cpus', dest='worker_cpus',
                              type=int, default=1,
                              help='Number of cpus allocated to a dask worker')
-    args_parser.add_argument('--max-worker-threads-per-cpu', dest='max_worker_threads_per_cpu',
+    args_parser.add_argument('--max-worker-threads-per-cpu',
+                             dest='max_worker_threads_per_cpu',
                              type=int, default=1,
                              help='Maximum number of threads to run on a worker')
     args_parser.add_argument('--max-cluster-jobs', '--max_cluster_jobs',
                              dest='max_cluster_jobs',
                              type=int, default=0,
-                             help='Maximum number of cluster jobs executed in parallel',
-                            )
-
+                             help='Maximum number of cluster jobs executed in parallel')
     args_parser.add_argument('--max-concurrent-zarr-reads',
                              dest='max_concurrent_zarr_reads',
                              type=int, default=0,
                              help='Maximum number of concurrent reads from a zarr array')
-    args_parser.add_argument('--with-displacement-diagnostics',
-                             '--with_displacement_diagnostics',
-                             dest='display_displacement_diagnostics',
+
+    args_parser.add_argument('--displacement-diagnostics',
+                             '--displacement_diagnostics',
+                             dest='displacement_diagnostics',
+                             choices=[m.value for m in DisplacementDiagnostics],
+                             default=None,
+                             help='When to run displacement field '
+                                  'diagnostics (jacobian folding statistics) '
+                                  'over a whole assembled field. PER_STEP: '
+                                  'after every alignment pass, and on the '
+                                  'composed result. FINAL_STEP: on the final '
+                                  'field only. Omit for none. Per-block '
+                                  'diagnostics are separate and always go to '
+                                  'the debug log.')
+    args_parser.add_argument('--error-if-displacement-check-fails',
+                             '--error_if_displacement_check_fails',
+                             dest='error_if_displacement_check_fails',
                              action='store_true',
-                             help='Run displacement field diagnostics (jacobian '
-                                  'folding statistics) on the fully-assembled '
-                                  'output transform after local alignment')
+                             help='Fail instead of warning when a pass '
+                                  'configures displacement bounds that are '
+                                  'too loose for its block lattice')
+
     args_parser.add_argument('--compression', '--compressor',
                              dest='compressor',
-                             default='zstd',
-                             type=str,
-                             help='Codec used for zarr arrays. ' +
-                             'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+                             default='zstd', type=str,
+                             help='Codec used for zarr arrays. '
+                                  'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
     args_parser.add_argument('--compression-opts', '--compressor-opts',
                              dest='compressor_opts',
-                             default={},
-                             type=dictfromjson,
+                             default={}, type=dictfromjson,
                              help='Zarr array compression options')
     args_parser.add_argument('--output-zarr-format', '--output_zarr_format',
                              dest='output_zarr_format',
                              type=int,
                              help='Zarr output format')
-    args_parser.add_argument('--output-sharding-factor', '--output_sharding_factor',
+    args_parser.add_argument('--output-sharding-factor',
+                             '--output_sharding_factor',
                              dest='output_sharding_factor',
-                             default=None,
-                             type=inttuple,
+                             default=None, type=inttuple,
                              help='Zarr v3 sharding factor in xyz order, '
-                                  'e.g. 8,8,4. Applied to each output chunk '
-                                  'shape (deformfield, inv-deformfield, '
-                                  'aligned volume) to derive its absolute '
-                                  'shard shape. When sharding is enabled and '
-                                  '--local-processing-size is not set, the '
-                                  'processing block size defaults to the '
-                                  'shard spatial shape. Ignored when '
+                                  'e.g. 8,8,4, applied to the deformfield '
+                                  'chunk shape. Ignored when '
                                   '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
-                             type=str,
-                             help='Logging configuration')
-    args_parser.add_argument('--verbose',
-                             dest='verbose',
+                             type=str, help='Logging configuration')
+    args_parser.add_argument('--verbose', dest='verbose',
                              action='store_true',
                              help='Set logging level to verbose')
 
     return args_parser
 
 
+def _hide_unsupported_args(args_parser, args_descriptor: CliArgsHelper):
+    """
+    Keep the shared input args but hide the ones this tool cannot honour.
+
+    Reaches into `_actions` because argparse has no public way to drop an
+    argument someone else added; the alternative is forking two hundred
+    lines of shared input definitions, which would drift.
+    """
+    unsupported = {args_descriptor.argdest(name)
+                   for name in _UNSUPPORTED_ARGS}
+    for action in args_parser._actions:
+        if action.dest in unsupported:
+            action.help = argparse.SUPPRESS
+
+
+def _reject_unsupported_args(args_parser, args,
+                             args_descriptor: CliArgsHelper):
+    """
+    Fail on any `_UNSUPPORTED_ARGS` the caller actually passed.
+
+    "Actually passed" means "differs from the parser default", not "is
+    truthy": channel 0 and time index 0 are real values and both are falsy,
+    so a truthiness test lets exactly the arguments most likely to be typed
+    slip through and be silently ignored.
+    """
+    given = []
+    for name, reason in _UNSUPPORTED_ARGS.items():
+        dest = args_descriptor.argdest(name)
+        if not hasattr(args, dest):
+            continue
+        if getattr(args, dest) != args_parser.get_default(dest):
+            given.append(f'{args_descriptor.argflag(name.replace("_", "-"))} '
+                         f'({reason})')
+    if given:
+        raise SystemExit(
+            'These options are not supported by this tool, which only '
+            'computes the deformation field:\n  ' + '\n  '.join(given)
+        )
+
+
+def _load_align_config(config_filename):
+    """The bigstream defaults with the user's config layered on top."""
+    config = yaml.safe_load(default_bigstream_config_str)
+    if config_filename:
+        with open(config_filename) as f:
+            external_config = yaml.safe_load(f)
+        logger.info(f'Read external config from {config_filename}')
+        config = pu.deep_update(config, external_config)
+    return config
+
+
+def _get_alignment_passes(config, registration_steps, context='local_align'):
+    """
+    The passes to run, from `local_align.alignment_passes`.
+
+    A config written for the older single-pass pipeline has no
+    `alignment_passes`, only a flat `steps:` list. Rather than refuse it, run
+    it as one pass - which is exactly what the multi-pass pipeline reduces to
+    at one pass and a zero lattice offset, so such a config keeps its old
+    meaning.
+    """
+    passes = alignment_passes_from_config(config, context)
+    if passes:
+        return passes
+
+    context_config = config.get(context) or {}
+    steps = registration_steps or context_config.get('steps') or []
+    if not steps:
+        return []
+    logger.info(f'No {context}.alignment_passes in the config; running the '
+                f'single steps list {steps} as one pass')
+    # mirror get_algorithm_parameters' precedence: global per-step defaults,
+    # then the local_align overrides for that step. deep_update writes into
+    # its first argument, so copy rather than edit the config in place
+    step_defaults = {name: pu.deep_update(deepcopy(config.get(name) or {}),
+                                          deepcopy(context_config.get(name) or {}))
+                     for name in steps}
+    return [AlignmentPass(
+        alignment_steps=alignment_steps_from_config(list(steps),
+                                                     step_defaults=step_defaults),
+        name='pass1',
+    )]
+
+
 def _run_local_alignment(reg_args: RegistrationInputs,
                          align_config,
-                         global_transform,
-                         global_transform_spacing=None,
-                         processing_size=None,
-                         processing_overlap_factor=None,
-                         transform_overlap_factor=0.1,
-                         default_overlap=0.5,
-                         inv_step=1.0,
-                         inv_iterations=(10,),
-                         inv_shrink_spacings=(None,),
-                         inv_smooth_sigmas=(0.,),
-                         inv_step_cut_factor=0.5,
-                         inv_pad:float=0.1,
-                         inv_use_root:bool=True,
-                         dask_scheduler_address:str|None=None,
-                         dask_config_file:str|None=None,
-                         dask_workers:int|None=None,
+                         initial_transform,
+                         pass_fields_path=None,
+                         max_write_locks=MAX_WRITE_LOCKS,
+                         dask_scheduler_address=None,
+                         dask_config_file=None,
+                         dask_workers=None,
                          worker_cpus=1,
                          worker_threads_per_cpu=1,
-                         logging_config:str|None=None,
-                         compressor:str|None=None,
-                         compressor_opts:dict={},
-                         zarr_format:int=3,
+                         logging_config=None,
+                         compressor=None,
+                         compressor_opts={},
+                         zarr_format=3,
                          sharding_factor=None,
                          verbose=False,
-                         foreground_percentage=0,
                          max_concurrent_zarr_reads=0,
                          max_cluster_jobs=0,
-                         display_displacement_diagnostics=False,
-                         ):
-    local_steps, local_config = get_algorithm_parameters(align_config,
-                                                         'local_align',
-                                                         reg_args.registration_steps)
-    if len(local_steps) == 0:
-        logger.info('Skip local alignment because no local steps were specified.')
-        return None
+                         displacement_diagnostics=None,
+                         error_if_displacement_check_fails=False):
+    config = _load_align_config(align_config)
+    alignment_passes = _get_alignment_passes(config, reg_args.registration_steps)
+    if not alignment_passes:
+        logger.info('Skip local alignment: no alignment passes and no steps.')
+        return True
 
-    logger.info(f'Run local registration with: {reg_args}, {local_steps}')
+    default_size, default_halo_factor, default_consistency = \
+        default_pass_geometry_from_config(config)
+
+    if reg_args.processing_size:
+        # the CLI takes xyz, everything below here is zyx
+        default_size = tuple(reg_args.processing_size)[::-1]
+        logger.info(f'Default processing size {default_size} (zyx) from '
+                    f'--local-processing-size {reg_args.processing_size} (xyz)')
+    if reg_args.processing_overlap_factor:
+        default_halo_factor = reg_args.processing_overlap_factor
+        if isinstance(default_halo_factor, (tuple, list)):
+            default_halo_factor = tuple(default_halo_factor)[::-1]
+    # deliberately not rounded up to the chunk or shard: writes are locked on
+    # the write unit, so the block geometry is free
 
     (fix_image, fix_mask, mov_image, mov_mask, roi, _, _) = get_input_images(reg_args)
     if mov_image.ndim != fix_image.ndim:
-        # only check for ndim and not shape because as it happens 
-        # the test data has different shape for fix.highres and mov.highres
-        raise Exception(f'{mov_image} expected to have ',
-                        f'the same ndim as {fix_image}')
+        raise ValueError(f'{mov_image} is expected to have the same ndim as '
+                         f'{fix_image}')
+    if not (fix_image.has_data() and mov_image.has_data()):
+        raise ValueError('Either the fixed or the moving image has no data')
 
-    # Compute storage unit once; used both for default and alignment check below
-    output_blocksize_zyx = reg_args.output_blocksize[::-1]
-    shard_shape_zyx = derive_shard_shape(sharding_factor, output_blocksize_zyx, zarr_format)
-
-    if processing_size:
-        # block are defined as x,y,z so I am reversing it to z,y,x
-        local_processing_size = processing_size[::-1]
-        logger.info(f'Set processing size to {local_processing_size} (from process size arg: {processing_size})')
-    else:
-        # when sharding is on, default the processing size to the shard shape
-        # so each worker processes one shard
-        default_processing_size = shard_shape_zyx if shard_shape_zyx is not None else output_blocksize_zyx
-        local_processing_size = local_config.get('block_size', default_processing_size)
-        logger.info((
-            f'Set processing size to {local_processing_size} '
-            f'from blocksize: {output_blocksize_zyx} and sharding factor: {sharding_factor} '
-        ))
-
-    # Round up to storage boundary (shard for zarr3, blocksize for zarr2)
-    local_processing_size = get_processing_size(
-        local_processing_size,
-        shard_shape=shard_shape_zyx,
-        blocksize=output_blocksize_zyx if shard_shape_zyx is None else None,
-    )
-
-    if processing_overlap_factor:
-        if isinstance(processing_overlap_factor, (tuple, list)):
-            # overlap factor is defined as x,y,z so I am reversing it to z,y,x
-            local_processing_overlap_factor = tuple(processing_overlap_factor)[::-1]
-            logger.info((
-                f'Set processing overlap factor to {local_processing_overlap_factor} '
-                f'(from overlap factor arg: {processing_overlap_factor})'
-            ))
-        else:
-            local_processing_overlap_factor = processing_overlap_factor
-    else:
-        local_processing_overlap_factor = local_config.get('block_overlap', default_overlap)
-
-    if isinstance(local_processing_overlap_factor, (tuple, list)):
-        if len(local_processing_overlap_factor) != fix_image.spatial_ndim:
-            raise ValueError((
-                'Invalid block overlap value '
-                f'{local_processing_overlap_factor} '
-                f'must have exactly {fix_image.spatial_ndim} values (one per axis)'
-            ))
-        overlap_values = local_processing_overlap_factor
-    else:
-        overlap_values = (local_processing_overlap_factor,)
-    if any(v <= 0 or v >= 1 for v in overlap_values):
-        raise ValueError((
-            'Invalid block overlap value '
-            f'{local_processing_overlap_factor} '
-            'must be greater than 0 and less than 1 '
-        ))
-
-    if transform_overlap_factor:
-        local_transform_overlap_factor = transform_overlap_factor
-    else:
-        local_transform_overlap_factor = local_config.get('transform_overlap', 0.125)
-
-    apply_deform_steps, _ = get_algorithm_parameters(align_config,
-                                                     'apply_deform',
-                                                     ['map_coordinates'])
-    transform_coords_args = {}
-    for step, step_args in apply_deform_steps:
-        if step == 'map_coordinates':
-            transform_coords_args.update(step_args)
-
-    if reg_args.transform_subpath:
-        deformfield_subpath = reg_args.transform_subpath
-    else:
-        deformfield_subpath = reg_args.mov_subpath
-
+    deformfield_path = reg_args.transform_path()
+    if not deformfield_path:
+        raise SystemExit('No transform output was given; this tool only '
+                         'computes the deformation field, so there is '
+                         'nothing to do. Set --local-transform-name.')
+    deformfield_subpath = reg_args.transform_subpath or reg_args.mov_subpath
     if reg_args.transform_blocksize:
-        # block chunks are define as x,y,z so I am reversing it to z,y,x
-        deformfield_chunksize = reg_args.transform_blocksize[::-1]
+        deformfield_chunksize = tuple(reg_args.transform_blocksize)[::-1]
     else:
-        # default to processing
-        deformfield_chunksize = reg_args.output_blocksize[::-1]
+        deformfield_chunksize = tuple(reg_args.output_blocksize)[::-1]
 
-    if reg_args.inv_transform_subpath:
-        inv_deformfield_subpath = reg_args.inv_transform_subpath
-    else:
-        inv_deformfield_subpath = deformfield_subpath
-
-    if reg_args.inv_transform_blocksize:
-        # block chunks are define as x,y,z so I am reversing it to z,y,x
-        inv_deformfield_chunksize = reg_args.inv_transform_blocksize[::-1]
-    else:
-        # default to output_chunk_size
-        inv_deformfield_chunksize = deformfield_chunksize
-
-    align_subpath = reg_args.align_dataset()
-
-    if reg_args.align_blocksize:
-        # block chunks are define as x,y,z so I am reversing it to z,y,x
-        align_chunksize = reg_args.align_blocksize[::-1]
-    else:
-        # default to output_chunk_size
-        align_chunksize = deformfield_chunksize
-
-    # start a dask client
     load_dask_config(dask_config_file)
-
     if dask_scheduler_address:
         logger.info(f'Use dask scheduler at: {dask_scheduler_address}')
         cluster_client = Client(address=dask_scheduler_address)
@@ -320,457 +350,230 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         logger.info(f'Use a local dask with {dask_workers} local workers')
         cluster_client = Client(LocalCluster(n_workers=dask_workers,
                                              threads_per_worker=worker_cpus))
-    # create worker plugin
-    worker_config = ConfigureWorkerPlugin(logging_config,
-                                          verbose,
+    worker_config = ConfigureWorkerPlugin(logging_config, verbose,
                                           worker_cpus=worker_cpus,
                                           worker_threads_per_cpu=worker_threads_per_cpu)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
     try:
-        static_transforms, static_transforms_spacings = reg_args.get_static_transforms()
-        if global_transform is not None:
-            # append the global transform and its (possibly different-scale) spacing
-            static_transforms = static_transforms + [ global_transform, ]
-            static_transforms_spacings = static_transforms_spacings + (global_transform_spacing,)
-        # compose mov origin transform from user affine + OME translations
+        static_transforms, _ = reg_args.get_static_transforms()
+        if initial_transform is not None:
+            static_transforms = static_transforms + [initial_transform,]
         mov_origin_transform = compose_origin_transform(
             reg_args.get_mov_origin_transform(),
             mov_image.get_attr('globalCoordinateTransformations'),
         )
-        _align_local_data(
-            fix_image,
-            fix_mask,
-            mov_image,
-            mov_mask,
-            roi,
-            local_steps,
-            local_processing_size,
-            local_processing_overlap_factor,
+        return _compute_deform_field(
+            fix_image, fix_mask, mov_image, mov_mask, roi,
+            alignment_passes,
+            default_size,
+            default_halo_factor,
+            default_consistency,
             mov_origin_transform,
             static_transforms,
-            static_transforms_spacings,
-            reg_args.persist_mov_origin_transform,
-            reg_args.transform_path(),
+            deformfield_path,
             deformfield_subpath,
             deformfield_chunksize,
-            reg_args.inv_transform_path(),
-            inv_deformfield_subpath,
-            inv_deformfield_chunksize,
-            reg_args.align_path(),
-            align_subpath,
-            reg_args.align_timeindex,
-            reg_args.align_channel,
-            align_chunksize,
-            local_transform_overlap_factor,
-            transform_coords_args,
-            inv_step,
-            inv_iterations,
-            inv_shrink_spacings,
-            inv_smooth_sigmas,
-            inv_step_cut_factor,
-            inv_pad,
-            inv_use_root,
+            pass_fields_path or deformfield_path,
             cluster_client,
             compressor,
             compressor_opts,
             zarr_format,
             sharding_factor,
-            foreground_percentage,
+            reg_args.foreground_percentage,
             max_concurrent_zarr_reads,
             max_cluster_jobs,
-            display_displacement_diagnostics,
+            max_write_locks,
+            displacement_diagnostics,
+            error_if_displacement_check_fails,
             not reg_args.norebalance_missing_neighbors,
         )
     finally:
         cluster_client.close()
 
 
-def _align_local_data(fix_image: ImageData,
-                      fix_mask: ImageData|None,
-                      mov_image: ImageData,
-                      mov_mask: ImageData|None,
-                      roi,
-                      steps,
-                      processing_size,
-                      processing_overlap_factor,
-                      mov_origin_transform,
-                      static_transforms,
-                      static_transforms_spacings,
-                      persist_mov_origin_transform,
-                      deformfield_path,
-                      deformfield_subpath,
-                      deformfield_chunksize,
-                      inv_deformfield_path,
-                      inv_deformfield_subpath,
-                      inv_deformfield_chunksize,
-                      align_path,
-                      align_subpath,
-                      align_timeindex,
-                      align_channel,
-                      align_chunksize,
-                      transform_overlap_factor,
-                      transform_coords_args,
-                      inv_step,
-                      inv_iterations,
-                      inv_shrink_spacings,
-                      inv_smooth_sigmas,
-                      inv_step_cut_factor,
-                      inv_pad,
-                      inv_use_root,
-                      cluster_client,
-                      compressor,
-                      compressor_opts,
-                      zarr_format,
-                      sharding_factor,
-                      foreground_percentage,
-                      max_concurrent_zarr_reads,
-                      max_cluster_jobs,
-                      display_displacement_diagnostics,
-                      rebalance_for_missing_neighbors):
-    logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
-                f'using {ut.get_number_of_cores()} cpus')
+def _compute_deform_field(fix_image: ImageData,
+                          fix_mask,
+                          mov_image: ImageData,
+                          mov_mask,
+                          roi,
+                          alignment_passes,
+                          default_processing_size,
+                          default_halo_factor,
+                          default_neighbor_consistency,
+                          mov_origin_transform,
+                          static_transforms,
+                          deformfield_path,
+                          deformfield_subpath,
+                          deformfield_chunksize,
+                          pass_fields_path,
+                          cluster_client,
+                          compressor,
+                          compressor_opts,
+                          zarr_format,
+                          sharding_factor,
+                          foreground_percentage,
+                          max_concurrent_zarr_reads,
+                          max_cluster_jobs,
+                          max_write_locks,
+                          displacement_diagnostics,
+                          error_if_displacement_check_fails,
+                          rebalance_for_missing_neighbors):
+    logger.info(f'Compute the deformation field aligning {mov_image} to '
+                f'{fix_image} over {len(alignment_passes)} pass(es)')
 
-    transform_downsampling = tuple(get_spatial_values(fix_image.voxel_downsampling)) + (1,)
-    logger.info(f'Transform downsampling: {transform_downsampling}')
-    transform_voxel_spacing = tuple(get_spatial_values(fix_image.voxel_spacing)) + (1,)
-    logger.info(f'Transform voxel spacing: {transform_voxel_spacing}')
-    deformfield_shape = tuple(fix_image.spatial_dims) + (len(fix_image.spatial_dims),)
-    logger.info(f'Transform shape: {fix_image.spatial_dims} => {deformfield_shape}')
+    deformfield_shape = (tuple(fix_image.spatial_dims)
+                         + (len(fix_image.spatial_dims),))
+    create_field = _deformfield_factory(
+        fix_image, roi, alignment_passes, deformfield_chunksize,
+        compressor, compressor_opts, zarr_format, sharding_factor,
+        foreground_percentage, rebalance_for_missing_neighbors,
+    )
 
-    if deformfield_path:
-        # transform shape
-        deformfield_axes = get_spatial_values(fix_image.get_attr('axes'))
-        if deformfield_axes is not None:
-            deformfield_axes.append({
-                'name': 'd',
-                'type': 'displacement',
-                'discrete': True,
-            })
-        deformfield_coord_transforms = fix_image.get_attr('coordinateTransformations')
-        if deformfield_coord_transforms is not None:
-            new_transforms = []
-            for ct in deformfield_coord_transforms:
-                cttype = ct['type']
-                tx = ct[cttype]
-                chtx = tx[1]
-                new_transforms.append({
-                    'type': cttype,
-                    ct['type']: get_spatial_values(tx) + [chtx],
-                })
-            deformfield_coord_transforms = new_transforms
-        deformfield_attrs = io_utility.prepare_parent_group_attrs(
-            deformfield_path,
-            deformfield_subpath,
-            axes=deformfield_axes,
-            dataset_transformations=deformfield_coord_transforms,
-            zarr_format=zarr_format,
-            steps=steps,
-            roi=roi,
-            voxel_scaling=list(fix_image.voxel_spacing),
-            volume_expansion=fix_image.expansion_factor,
-            processsize=processing_size,
-            overlap_factor=processing_overlap_factor,
-            foreground_percentage=foreground_percentage,
-            rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
-        )
-        deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
-        deformfield_output_chunksize = deformfield_spatial_chunksize + (len(deformfield_spatial_chunksize),)
-        # factor applies to spatial axes only; vector axis is never sharded
-        deformfield_spatial_shard = derive_shard_shape(
-            sharding_factor,
-            deformfield_spatial_chunksize,
-            zarr_format,
-        )
-        if deformfield_spatial_shard is not None:
-            deformfield_output_shardsize = tuple(deformfield_spatial_shard) + (deformfield_output_chunksize[-1],)
-        else:
-            deformfield_output_shardsize = None
-        deformfield = io_utility.create_dataset_array(
-            deformfield_path,
-            deformfield_subpath,
-            deformfield_shape,
-            deformfield_output_chunksize,
-            np.float32,
-            overwrite=True,
-            compressor=compressor,
-            compression_opts=compressor_opts,
-            parent_attrs=deformfield_attrs,
-            pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
-                                                            transform_downsampling),
-            downsamplingFactors=calc_downsampling_attr(transform_downsampling),
-            zarr_format=zarr_format,
-            shard_shape=deformfield_output_shardsize,
-        )
+    deformfield = create_field(deformfield_path, deformfield_subpath,
+                               deformfield_shape)
+
+    def pass_output_factory(pass_index, shape):
+        # only called when there is more than one pass; each pass's own
+        # (residual) field is kept so the pass over pass diagnostics the
+        # multi-pass design depends on can be read back afterwards
+        subpath = f'{deformfield_subpath}_passes/pass{pass_index + 1}'
+        logger.info(f'Create pass {pass_index + 1} field at '
+                    f'{pass_fields_path}:{subpath}')
+        return create_field(pass_fields_path, subpath, shape)
+
+    deform_ok = blockwise_alignment_pipeline(
+        fix_image,
+        np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor,
+        mov_image,
+        np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor,
+        alignment_passes,
+        cluster_client,
+        processing_size=default_processing_size,
+        processing_halo_factor=default_halo_factor,
+        neighbor_consistency=default_neighbor_consistency,
+        fix_mask=fix_mask,
+        mov_mask=mov_mask,
+        roi=roi,
+        foreground_percentage=foreground_percentage,
+        mov_origin_transform=mov_origin_transform,
+        static_transform_list=static_transforms,
+        output_transform=deformfield,
+        pass_output_factory=pass_output_factory,
+        max_concurrent_reads=max_concurrent_zarr_reads,
+        max_cluster_jobs=max_cluster_jobs,
+        max_write_locks=max_write_locks,
+        rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
+        displacement_diagnostics=displacement_diagnostics,
+        error_if_displacement_check_fails=error_if_displacement_check_fails,
+    )
+    if deform_ok:
+        logger.info(f'Wrote the deformation field to '
+                    f'{deformfield_path}:{deformfield_subpath}')
     else:
-        deformfield = None
-        deformfield_axes = None
+        logger.error('Some blocks failed; the deformation field at '
+                     f'{deformfield_path}:{deformfield_subpath} is incomplete')
+    return bool(deform_ok)
 
-    logger.info((
-        f'Calculate transformation {deformfield_path} '
-        f'for the local alignment of {mov_image} '
-        f'to {fix_image} '
-    ))
-    if fix_image.has_data() and mov_image.has_data():
-        deform_ok = distributed_alignment_pipeline(
-            fix_image,
-            np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor,
-            mov_image,
-            np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor,
-            steps,
-            processing_size, # parallelize on processing size
-            cluster_client,
-            overlap_factor=processing_overlap_factor,
-            fix_mask=fix_mask,
-            mov_mask=mov_mask,
-            roi=roi,
-            mov_origin_transform=mov_origin_transform,
-            static_transform_list=static_transforms,
-            output_transform=deformfield,
-            foreground_percentage=foreground_percentage,
-            max_concurrent_reads=max_concurrent_zarr_reads,
-            max_cluster_jobs=max_cluster_jobs,
-            display_displacement_diagnostics=display_displacement_diagnostics,
-            rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
-        )
-        logger.info((
-            'Finished computing the deformation field '
-            f'{deformfield_path} for the local alignment of '
-            f'{mov_image} to {fix_image} '
-        ))
-    else:
-        deform_ok = False
-        logger.warning('Either the fix or moving image has no data or the distributed alignment failed')
 
-    if deform_ok and deformfield and inv_deformfield_path:
-        logger.info(f'Create inverse deform field container {inv_deformfield_path}')
-        if len(inv_iterations) == 0:
-            raise ValueError(f'Invalid inverse iterations: {inv_iterations}')
-        
-        if (len(inv_iterations) != len(inv_shrink_spacings) and
-            len(inv_iterations) != len(inv_smooth_sigmas)):
-            raise ValueError((
-                'Inverse iterations, inverse shrink spacings '
-                'and inverse smooth sigmas must all have the same length '
-                f'{inv_iterations} vs {inv_shrink_spacings} vs {inv_smooth_sigmas} '
-            ))
+def _deformfield_factory(fix_image, roi, alignment_passes, chunksize,
+                         compressor, compressor_opts, zarr_format,
+                         sharding_factor, foreground_percentage,
+                         rebalance_for_missing_neighbors):
+    """
+    Build the maker for a displacement field array on the fixed image grid.
 
-        inv_deformfield_attrs = io_utility.prepare_parent_group_attrs(
-            inv_deformfield_path,
-            inv_deformfield_subpath,
-            axes=deformfield_axes,
-            dataset_transformations=deformfield_coord_transforms,
-            zarr_format=zarr_format,
-            steps=steps,
-            roi=roi,
-            voxel_scaling=list(fix_image.voxel_spacing),
-            volume_expansion=fix_image.expansion_factor,
-            processsize=processing_size,
-            overlap_factor=processing_overlap_factor,
-            foreground_percentage=foreground_percentage,
-            rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
-        )
-        inv_deformfield_spatial_chunksize = tuple(get_spatial_values(deformfield_chunksize))
-        inv_deformfield_output_chunksize = inv_deformfield_spatial_chunksize + (len(inv_deformfield_spatial_chunksize),)
-        inv_deformfield_spatial_shard = derive_shard_shape(
-            sharding_factor,
-            inv_deformfield_spatial_chunksize,
-            zarr_format,
-        )
-        if inv_deformfield_spatial_shard is not None:
-            inv_deformfield_output_shardsize = tuple(inv_deformfield_spatial_shard) + (inv_deformfield_output_chunksize[-1],)
-        else:
-            inv_deformfield_output_shardsize = None
-        inv_deformfield = io_utility.create_dataset_array(
-            inv_deformfield_path,
-            inv_deformfield_subpath,
-            deformfield_shape,
-            inv_deformfield_output_chunksize,
-            np.float32,
-            overwrite=True,
-            compressor=compressor,
-            compression_opts=compressor_opts,
-            parent_attrs=inv_deformfield_attrs,
-            pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
-                                                            transform_downsampling),
-            downsamplingFactors=calc_downsampling_attr(transform_downsampling),
-            zarr_format=zarr_format,
-            shard_shape=inv_deformfield_output_shardsize,
-        )
+    The per-pass fields and the composed output all have the same shape,
+    chunking and metadata, so they are all created through this.
+    """
+    downsampling = tuple(get_spatial_values(fix_image.voxel_downsampling)) + (1,)
+    voxel_spacing = tuple(get_spatial_values(fix_image.voxel_spacing)) + (1,)
 
-        deform_field_spacing = get_spatial_values(fix_image.voxel_spacing)
+    axes = get_spatial_values(fix_image.get_attr('axes'))
+    if axes is not None:
+        axes = list(axes) + [{'name': 'd', 'type': 'displacement',
+                              'discrete': True}]
+    coord_transforms = fix_image.get_attr('coordinateTransformations')
+    if coord_transforms is not None:
+        coord_transforms = [
+            {'type': ct['type'],
+             ct['type']: get_spatial_values(ct[ct['type']]) + [ct[ct['type']][1]]}
+            for ct in coord_transforms
+        ]
 
-        # each worker must own a whole shard, not just a chunk
-        inv_processing_size = get_processing_size(
-            inv_deformfield_chunksize,
-            shard_shape=inv_deformfield_spatial_shard,
-            blocksize=inv_deformfield_chunksize if inv_deformfield_spatial_shard is None else None,
-        )
+    spatial_chunks = tuple(get_spatial_values(chunksize))
+    output_chunks = spatial_chunks + (len(spatial_chunks),)
+    # the factor applies to the spatial axes only; the vector axis is never sharded
+    spatial_shard = derive_shard_shape(sharding_factor, spatial_chunks, zarr_format)
+    output_shards = (tuple(spatial_shard) + (output_chunks[-1],)
+                     if spatial_shard is not None else None)
 
-        logger.info((
-            'Calculate inverse transformation '
-            f'{inv_deformfield_path}:{inv_deformfield_subpath} '
-            f'from {deformfield_path}:{deformfield_subpath} '
-            f'for local alignment of {mov_image} '
-            f'to reference {fix_image} '
-            f'deform field spacing is {deform_field_spacing}, expansion factor {fix_image.expansion_factor} '
-        ))
-        distributed_invert_displacement_vector_field(
-            deformfield,
-            deform_field_spacing / fix_image.expansion_factor,
-            inv_processing_size, # shard-sized block for partitioning the work
-            inv_deformfield,
-            cluster_client,
-            overlap_factor=transform_overlap_factor,
-            step=inv_step,
-            iterations=inv_iterations,
-            shrink_spacings=inv_shrink_spacings,
-            smooth_sigmas=inv_smooth_sigmas,
-            step_cut_factor=inv_step_cut_factor,
-            pad=inv_pad,
-            use_root=inv_use_root,
-        )
-        del inv_deformfield
-    else:
-        if not inv_deformfield_path:
-            logger.info('Skip the inverse because it is not set')
+    passes_description = [
+        {'name': p.name,
+         'processing_size': p.processing_size,
+         'processing_offset': p.processing_offset,
+         'processing_halo_factor': p.processing_halo_factor,
+         'processing_halo': p.processing_halo,
+         'steps': [name for name, _ in p.alignment_steps]}
+        for p in alignment_passes
+    ]
 
-    if (deform_ok or len(static_transforms) > 0) and align_path:
-        axes = mov_image.get_attr('axes')
-        # prepare global coordinate transform from mov_origin_transform
-        global_transformations = []
-        if mov_origin_transform is not None and persist_mov_origin_transform:
-            spatial_translation = mov_origin_transform[:3, 3].tolist()
-            # prepend 0 for each non-spatial axis (time, channel)
-            non_spatial_count = sum(
-                1
-                for a in (axes or []) if a.get('type') != 'space'
-            )
-            translation = [0,] * non_spatial_count + spatial_translation
-            global_transformations.append({
-                'type': 'translation',
-                'translation': translation,
-            })
-
-        # Apply local transformation only if 
-        # highres aligned output name is set
-        align_attrs = io_utility.prepare_parent_group_attrs(
-            align_path,
-            align_subpath,
+    def create(container_path, subpath, shape):
+        attrs = io_utility.prepare_parent_group_attrs(
+            container_path, subpath,
             axes=axes,
-            dataset_transformations=fix_image.get_attr('coordinateTransformations'),
-            global_transformations=global_transformations,
+            dataset_transformations=coord_transforms,
             zarr_format=zarr_format,
+            alignment_passes=passes_description,
+            roi=roi,
+            voxel_scaling=list(fix_image.voxel_spacing),
+            volume_expansion=fix_image.expansion_factor,
+            foreground_percentage=foreground_percentage,
+            rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
         )
-        align_shape = fix_image.shape
-        if len(align_chunksize) < len(align_shape):
-            # align_blocksize is not set, so use default block size
-            align_chunk_size = (1,) * (len(align_shape)-len(align_chunksize)) + tuple(get_spatial_values(align_chunksize))
-        else:
-            align_chunk_size = tuple(get_spatial_values(align_chunksize))
-        align_shard_size = derive_shard_shape(
-            sharding_factor, align_chunk_size, zarr_format
-        )
-        align = io_utility.create_dataset_array(
-            align_path,
-            align_subpath,
-            align_shape,
-            align_chunk_size,
-            fix_image.dtype,
-            overwrite=False,
+        return io_utility.create_dataset_array(
+            container_path, subpath, shape, output_chunks, np.float32,
+            overwrite=True,
             compressor=compressor,
             compression_opts=compressor_opts,
-            for_timeindex=align_timeindex,
-            for_channel=align_channel,
-            parent_attrs=align_attrs,
-            pixelResolution=calc_full_voxel_resolution_attr(mov_image.voxel_spacing,
-                                                            mov_image.voxel_downsampling),
-            downsamplingFactors=calc_downsampling_attr(mov_image.voxel_downsampling),
+            parent_attrs=attrs,
+            pixelResolution=calc_full_voxel_resolution_attr(voxel_spacing,
+                                                            downsampling),
+            downsamplingFactors=calc_downsampling_attr(downsampling),
             zarr_format=zarr_format,
-            shard_shape=align_shard_size,
+            shard_shape=output_shards,
         )
-        # each worker must own a whole shard, not just a chunk, to avoid
-        # unsynchronized writes into a shard shared with another worker
-        align_processing_size = getattr(align, 'shards', None) or align_chunk_size
-        logger.info(f'Apply static transforms {static_transforms}' +
-                    f'and local transform {deformfield_path}:{deformfield_subpath}' +
-                    f'to warp {mov_image} -> {align_path}:{align_subpath}')
-        if deform_ok:
-            deform_transforms = [deformfield]
-        else:
-            deform_transforms = []
-        transform_list = static_transforms + deform_transforms
-        fix_deform_spacing = get_spatial_values(fix_image.voxel_spacing) / fix_image.expansion_factor
-        # the static transforms carry their own spacings (from get_transforms - a
-        # global deform may have been generated at a different scale); the local
-        # deform is on the current fixed grid. Affine transforms have None spacing.
-        transforms_spacings = tuple(static_transforms_spacings) + tuple(
-            fix_deform_spacing for _ in deform_transforms
-        )
-        logger.info(f'Transforms spacings: {transforms_spacings}, transform map coordinates args: {transform_coords_args}')
 
-        distributed_apply_transform(
-            fix_image,
-            np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor,
-            mov_image,
-            np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor,
-            align_processing_size, # shard-sized block for distributing work
-            transform_list,
-            cluster_client,
-            overlap_factor=transform_overlap_factor,
-            aligned_data=align,
-            aligned_data_timeindex=align_timeindex,
-            aligned_data_channel=align_channel,
-            transform_spacing=transforms_spacings,
-            **transform_coords_args,
-        )
-    else:
-        align = None
-        if not align_path:
-            logger.info('Align arg is not set, so no deformation is applied')
-
-    return deformfield, align
+    return create
 
 
 def main():
     local_descriptor = CliArgsHelper('local')
     args_parser = _define_args(local_descriptor)
     args = args_parser.parse_args()
-    # prepare logging
+
     global logger
     logger = configure_logging(args.logging_config, args.verbose)
 
-    logger.info(f'Local registration: {args}')
+    _reject_unsupported_args(args_parser, args, local_descriptor)
+    logger.info(f'Local deformation field: {args}')
 
     reg_inputs = extract_registration_input_args(args, local_descriptor)
 
-    # read the global transform (affine matrix or deformation field) together with
-    # its spacing; get_transform returns (None, None) when no path is given
-    global_transform, global_transform_spacing = get_transform(
-        args.global_transform, args.global_transform_subpath,
+    # the spacing `get_transform` reports is only needed to *apply* a field;
+    # the block machinery derives a static field's spacing from its shape
+    # relative to the fixed image, so it is dropped here
+    initial_transform, _ = get_transform(
+        args.initial_transform, args.initial_transform_subpath,
         expansion_factor=reg_inputs.fix_expansion_factor,
     )
-
-    inv_shrink_spacings = (args.inv_shrink_spacings 
-                            if (args.inv_shrink_spacings is not None and
-                                len(args.inv_shrink_spacings) > 0)
-                            else (None,) * len(args.inv_iterations))
     output_zarr_format = get_zarr_format(reg_inputs.transform_path(),
                                          args.output_zarr_format)
-    _run_local_alignment(
+    ok = _run_local_alignment(
         reg_inputs,
         args.align_config,
-        global_transform,
-        global_transform_spacing=global_transform_spacing,
-        processing_size=reg_inputs.processing_size,
-        processing_overlap_factor=reg_inputs.processing_overlap_factor,
-        transform_overlap_factor=args.local_transform_overlap_factor,
-        inv_step=args.inv_step,
-        inv_iterations=args.inv_iterations,
-        inv_shrink_spacings=inv_shrink_spacings,
-        inv_smooth_sigmas=args.inv_smooth_sigmas,
-        inv_step_cut_factor=args.inv_step_cut_factor,
-        inv_pad=args.inv_pad,
-        inv_use_root=args.inv_use_root,
+        initial_transform,
+        pass_fields_path=args.pass_fields_path,
+        max_write_locks=args.max_write_locks,
         dask_scheduler_address=args.dask_scheduler,
         dask_config_file=args.dask_config,
         dask_workers=args.local_dask_workers,
@@ -782,11 +585,13 @@ def main():
         zarr_format=output_zarr_format,
         sharding_factor=args.output_sharding_factor,
         verbose=args.verbose,
-        foreground_percentage=reg_inputs.foreground_percentage,
         max_concurrent_zarr_reads=args.max_concurrent_zarr_reads,
         max_cluster_jobs=args.max_cluster_jobs,
-        display_displacement_diagnostics=args.display_displacement_diagnostics,
+        displacement_diagnostics=args.displacement_diagnostics,
+        error_if_displacement_check_fails=args.error_if_displacement_check_fails,
     )
+    if not ok:
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':

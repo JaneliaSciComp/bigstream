@@ -1,27 +1,35 @@
 """
 Tests for the multi-pass blockwise alignment pipeline.
 
-The load bearing one is `test_single_pass_matches_distributed_alignment`:
-with one pass, a zero lattice offset and no neighbour clamp,
-`blockwise_alignment_pipeline` must reproduce `distributed_alignment_pipeline`
-exactly. Everything else in the multi-pass machinery is built on top of that
-equivalence, so it is the regression guard for the whole refactor.
+Historical note: this file used to carry
+`test_single_pass_matches_distributed_alignment`, which asserted that at one
+pass, a zero lattice offset and no neighbour clamp the pipeline reproduced
+the older `distributed_alignment_pipeline` bit for bit. That guard passed,
+and the old implementation has since been removed - there is no second
+implementation left to compare against, so the test went with it. What it
+covered indirectly is still pinned here by
+`test_blending_weights_are_a_partition_of_unity`,
+`test_block_cores_tile_the_volume_exactly` and
+`test_explicit_clips_reproduce_the_index_derived_crop`.
 """
+
+import logging
+import re
+
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
 import yaml
 
 import bigstream.distributed_align as da
-import bigstream.distributed_align_prototype as dap
 
 from bigstream.align_constraints import (blend_safe_displacement_bound,
                                          neighbor_disagreement_bound)
-from bigstream.distributed_align import (
-    _get_transform_weights as _legacy_transform_weights)
 from bigstream.distutils import validate_processing_block_size
-from bigstream.distributed_align_prototype import (
+from bigstream.distributed_align import (
     AlignmentPass,
+    DisplacementDiagnostics,
     blockwise_alignment_pipeline,
     _BlockLattice,
     _NeighborhoodEstimate,
@@ -35,8 +43,9 @@ from bigstream.distributed_align_prototype import (
     _get_transform_weights,
     _is_abstaining_block,
     _neighborhood_estimate,
+    _lock_cell_keys,
     _overlapping_block_lock_keys,
-    _storage_unit_lock_keys,
+    _parse_displacement_diagnostics,
     _storage_write_unit,
     _write_lock_grid,
 )
@@ -74,31 +83,46 @@ def test_alignment_steps_rejects_multi_key_entries():
         alignment_steps_from_config([{'affine': {}, 'deform': {}}])
 
 
-def test_prototype_config_parses_into_two_passes():
-    with open('configs/bigstream_config_prototype.yml') as f:
+def test_config_parses_into_two_passes():
+    with open('tests/configs/bigstream_config.yml') as f:
         config = yaml.safe_load(f)
     size, halo_factor, _ = default_pass_geometry_from_config(config)
     passes = alignment_passes_from_config(config)
 
     assert len(passes) == 2
-    assert size == [384, 384, 384]
-    assert halo_factor == 0.2
+    assert size == [192, 192, 192]
+    assert halo_factor == 0.5
 
     first = passes[0].resolved(3, default_processing_size=size,
                                default_halo_factor=halo_factor)
     second = passes[1].resolved(3, default_processing_size=size,
                                 default_halo_factor=halo_factor)
     # pass 1 omits processing_size and inherits the top level default
-    assert first.processing_size == (384, 384, 384)
+    assert first.processing_size == (192, 192, 192)
     assert first.processing_offset == (0, 0, 0)
-    assert first.processing_halo == (77, 77, 77)  # 0.2 * 384, per side
-    # pass 2 restates the size so its 96 offset is the intended 1/4 stagger
-    assert second.processing_size == (384, 384, 384)
-    assert second.processing_offset == (96, 96, 96)
-    assert second.processing_halo == (38, 38, 38)
-    assert [name for name, _ in first.alignment_steps] == [
-        'ransac', 'affine', 'deform']
-    assert [name for name, _ in second.alignment_steps] == ['affine', 'deform']
+    assert first.processing_halo == (96, 96, 96)  # 0.5 * 192, per side
+    # pass 2 restates the size
+    assert second.processing_halo_factor == [0.1, 0.1, 0.1]
+    assert second.processing_size == (128, 128, 128)
+    assert second.processing_offset == (32, 32, 32)
+    assert second.processing_halo == (13, 13, 13)
+
+    first_step_configs = {name: value for name, value in first.alignment_steps }
+    second_step_configs = {name: value for name, value in second.alignment_steps }
+
+    assert list(first_step_configs.keys()) == [
+        'ransac', 'affine', 'deform'
+    ]
+
+    assert first_step_configs['ransac']['blob_sizes'] == [6, 14]
+    assert first_step_configs['affine']['alignment_spacing'] == 4.0
+    assert first_step_configs['affine']['optimizer'] == 'LBFGSB'
+
+    assert list(second_step_configs.keys()) == [
+        'affine', 'deform'
+    ]
+    assert second_step_configs['affine']['alignment_spacing'] == 1.0
+    assert second_step_configs['affine']['optimizer'] == 'RSGD'
 
 
 def test_pass_without_a_block_size_is_an_error():
@@ -117,11 +141,6 @@ def test_explicit_halo_wins_over_the_factor():
                              processing_halo_factor=0.2,
                              processing_halo=(7, 8, 9)).resolved(3)
     assert resolved.processing_halo == (7, 8, 9)
-
-
-# --------------------------------------------------------------------------
-# phase 2 - global anchored partitioning
-# --------------------------------------------------------------------------
 
 
 def test_zero_offset_lattice_matches_the_old_partition():
@@ -204,14 +223,14 @@ def test_blending_weights_are_a_partition_of_unity(offset):
     np.testing.assert_allclose(total, 1.0, rtol=0, atol=1e-6)
 
 
-def test_explicit_clips_reproduce_the_legacy_index_derived_crop():
+def test_explicit_clips_reproduce_the_index_derived_crop():
     """
-    The zero-offset lattice's clip amounts must reproduce exactly what
-    `distributed_align._get_transform_weights` derives from the block index
-    on its own. The prototype carries its own copy that takes the crop
-    explicitly, because an offset lattice has partial blocks at both ends;
-    at offset 0 the two must still agree exactly, or the single-pass
-    equivalence below is comparing two different weightings.
+    `_get_transform_weights` crops its weight array by the amounts the
+    caller passes, and falls back to deriving them from the block index when
+    it gets none. That fallback is only right for a lattice anchored at
+    voxel 0 - an offset lattice has partial blocks at both ends - but there
+    the two must agree exactly, because that is the case the retired
+    single-pass pipeline ran and the case every existing config expects.
     """
     extent = (40, 44, 48)
     block, halo = (16, 16, 16), (4, 4, 4)
@@ -221,26 +240,26 @@ def test_explicit_clips_reproduce_the_legacy_index_derived_crop():
     for index in lattice.indices():
         neighbors = {tuple(o): tuple(a + b for a, b in zip(index, o)) in selected
                      for o in np.array(list(np.ndindex(*(3,) * 3))) - 1}
-        legacy = _legacy_transform_weights(index, np.array(block),
-                                           np.array(halo), neighbors,
-                                           nblocks, True)
+        derived = _get_transform_weights(index, np.array(block),
+                                         np.array(halo), neighbors,
+                                         nblocks, True)
         before, after = lattice.clip_amounts(index)
         explicit = _get_transform_weights(index, np.array(block),
                                           np.array(halo), neighbors, nblocks,
                                           True, clip_before=before,
                                           clip_after=after)
-        # the legacy crop only removes one halo at the far face, so on a
+        # the derived crop only removes one halo at the far face, so on a
         # volume that is not a whole number of blocks it leaves the weights
         # longer than the data; `_write_block_transform` trims that remainder
         # against the block shape, which is what the lattice computes up front
         assert explicit.shape == tuple(
             s.stop - s.start for s in lattice.footprint_slices(index))
-        trimmed = legacy[tuple(slice(0, s) for s in explicit.shape)]
+        trimmed = derived[tuple(slice(0, s) for s in explicit.shape)]
         assert np.array_equal(trimmed, explicit)
 
 
 # --------------------------------------------------------------------------
-# phase 3 - equivalence with the single pass pipeline
+# phase 3 - the single pass path
 # --------------------------------------------------------------------------
 
 
@@ -268,16 +287,8 @@ def _fake_alignment_pipeline(fix, mov, fix_spacing, mov_spacing, steps,
 
 
 def _patch_alignment_pipeline(monkeypatch, replacement):
-    """
-    Swap the per-block fit in both pipelines.
-
-    `distributed_align_prototype` carries its own copy of the block
-    machinery - it must not depend on `distributed_align`, which is on its
-    way out - so each module imported `alignment_pipeline` separately and
-    each one has to be patched.
-    """
+    """Swap the per-block fit for a local, deterministic stand-in."""
     monkeypatch.setattr(da, 'alignment_pipeline', replacement)
-    monkeypatch.setattr(dap, 'alignment_pipeline', replacement)
 
 
 @pytest.fixture(scope='module')
@@ -295,7 +306,7 @@ def cluster_client():
 
 @pytest.fixture(scope='module')
 def cluster_client_mt():
-    """Several workers, so concurrent writes into one storage unit really
+    """Several workers, so concurrent writes into one write unit really
     can collide and the locking has something to do."""
     distributed = pytest.importorskip('dask.distributed')
     cluster = distributed.LocalCluster(n_workers=4, threads_per_worker=1,
@@ -314,37 +325,6 @@ def synthetic_volumes():
     mov = rng.random(shape, dtype=np.float32)
     return (ImageData(image_arraydata=fix, read_attrs=False),
             ImageData(image_arraydata=mov, read_attrs=False))
-
-
-def test_single_pass_matches_distributed_alignment(cluster_client,
-                                                   synthetic_volumes,
-                                                   monkeypatch):
-    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
-    fix_image, mov_image = synthetic_volumes
-    shape = tuple(fix_image.spatial_dims)
-    spacing = np.array([1.0, 1.0, 1.0])
-    block_size = (16, 16, 16)
-    overlap_factor = 0.25
-    steps = [('deform', {})]
-
-    reference = np.zeros(shape + (3,), dtype=np.float32)
-    assert da.distributed_alignment_pipeline(
-        fix_image, spacing, mov_image, spacing, steps, block_size,
-        cluster_client, overlap_factor=overlap_factor,
-        output_transform=reference,
-    )
-
-    candidate = np.zeros(shape + (3,), dtype=np.float32)
-    assert blockwise_alignment_pipeline(
-        fix_image, spacing, mov_image, spacing,
-        [AlignmentPass(alignment_steps=steps)], cluster_client,
-        processing_size=block_size,
-        processing_halo_factor=overlap_factor,
-        output_transform=candidate,
-    )
-
-    assert np.array_equal(reference, candidate)
-    assert np.any(candidate)  # the comparison would be vacuous otherwise
 
 
 def test_two_passes_cascade_and_compose(cluster_client, synthetic_volumes,
@@ -399,6 +379,97 @@ def test_two_passes_cascade_and_compose(cluster_client, synthetic_volumes,
     interior = (slice(8, -8),) * 3
     total = pass_fields[0][interior] + pass_fields[1][interior]
     assert np.allclose(output[interior], total, atol=0.5)
+
+
+def test_block_context_names_the_pass_as_well_as_the_block(cluster_client,
+                                                           synthetic_volumes,
+                                                           monkeypatch):
+    """
+    The `context` handed to `alignment_pipeline` is logging only, but in a
+    multi-pass run the same block index is aligned once per pass, so the
+    block index alone cannot tell two log lines apart. Every context must
+    carry the pass label too: the pass's `name`, or `passN` when unnamed.
+    """
+    seen_contexts = []
+
+    def recording_pipeline(fix, mov, fix_spacing, mov_spacing, steps,
+                           context='', **kwargs):
+        seen_contexts.append(context)
+        return _fake_alignment_pipeline(fix, mov, fix_spacing, mov_spacing,
+                                        steps, **kwargs)
+
+    _patch_alignment_pipeline(monkeypatch, recording_pipeline)
+    fix_image, mov_image = synthetic_volumes
+    shape = tuple(fix_image.spatial_dims)
+    spacing = np.array([1.0, 1.0, 1.0])
+
+    output = np.zeros(shape + (3,), dtype=np.float32)
+    assert blockwise_alignment_pipeline(
+        fix_image, spacing, mov_image, spacing,
+        [AlignmentPass(alignment_steps=[('deform', {})], name='coarse'),
+         AlignmentPass(alignment_steps=[('deform', {})])],
+        cluster_client,
+        processing_size=(16, 16, 16),
+        processing_halo_factor=0.25,
+        output_transform=output,
+        pass_output_factory=lambda i, s: np.zeros(s, dtype=np.float32),
+    )
+
+    assert seen_contexts
+    # the named pass keeps its name; the unnamed one falls back to its
+    # 1-based position
+    labels = {c.split(' ', 1)[0] for c in seen_contexts}
+    assert labels == {'coarse', 'pass2'}
+    # and the block index is still there, so a context identifies exactly
+    # one block of one pass
+    assert all(c.split(' ', 1)[1].startswith('(') for c in seen_contexts)
+    assert len(set(seen_contexts)) == len(seen_contexts)
+
+
+def test_per_block_log_lines_all_name_the_pass(cluster_client,
+                                               synthetic_volumes,
+                                               monkeypatch, caplog):
+    """
+    Every per-block log line, not just the alignment context, has to say
+    which pass it came from - the whole point is that a log can be read
+    without guessing which lattice a block index belongs to. Any line that
+    names a block index but no pass label is a line that is still ambiguous.
+    """
+    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
+    fix_image, mov_image = synthetic_volumes
+    shape = tuple(fix_image.spatial_dims)
+    spacing = np.array([1.0, 1.0, 1.0])
+
+    output = np.zeros(shape + (3,), dtype=np.float32)
+    with caplog.at_level(logging.DEBUG, logger='bigstream.distributed_align'):
+        assert blockwise_alignment_pipeline(
+            fix_image, spacing, mov_image, spacing,
+            [AlignmentPass(alignment_steps=[('deform', {})], name='coarse'),
+             AlignmentPass(alignment_steps=[('deform', {})])],
+            cluster_client,
+            processing_size=(16, 16, 16),
+            processing_halo_factor=0.25,
+            output_transform=output,
+            pass_output_factory=lambda i, s: np.zeros(s, dtype=np.float32),
+        )
+
+    messages = [r.getMessage() for r in caplog.records
+                if r.name == 'bigstream.distributed_align']
+    # a block index renders as a python tuple, e.g. "(0, 1, 2)"
+    index_re = re.compile(r'\(-?\d+, -?\d+, -?\d+\)')
+    with_index = [m for m in messages if index_re.search(m)]
+    assert with_index, 'no per-block log lines were captured'
+
+    # the compose stage is not a pass and legitimately has no label
+    unlabelled = [m for m in with_index
+                  if 'coarse' not in m and 'pass2' not in m
+                  and not m.startswith('compose')
+                  and 'Compose' not in m]
+    assert not unlabelled, ('per-block log lines without a pass label:\n  '
+                            + '\n  '.join(sorted(set(unlabelled))[:10]))
+    # and both passes actually produced lines
+    assert any('coarse' in m for m in with_index)
+    assert any('pass2' in m for m in with_index)
 
 
 # --------------------------------------------------------------------------
@@ -728,7 +799,7 @@ def _zarr_field(tmp_path, name, shape, chunks, shards=None, zarr_format=3):
                              zarr_format=zarr_format)
 
 
-def test_storage_unit_is_the_shard_when_sharded_else_the_chunk(tmp_path):
+def test_write_unit_is_the_shard_when_sharded_else_the_chunk(tmp_path):
     """
     A sharded v3 array rewrites a whole shard per write, so the shard - not
     the inner chunk - is what two writers must not share.
@@ -776,11 +847,11 @@ def test_lock_grid_coarsens_only_when_the_key_count_would_blow_up(tmp_path):
     ((16, 16, 16), (4, 4, 4), (10, 10, 10)),     # chunk does not divide block
     ((24, 24, 24), (6, 6, 6), (7, 11, 13)),      # nothing lines up at all
 ])
-def test_blocks_sharing_a_storage_unit_share_a_lock_key(tmp_path, block_size,
+def test_blocks_sharing_a_write_unit_share_a_lock_key(tmp_path, block_size,
                                                         halo, chunk):
     """
     The guarantee the whole scheme rests on: if two writes touch a common
-    storage unit then their key sets intersect, so they cannot run at the
+    write unit then their key sets intersect, so they cannot run at the
     same time. This must hold for *any* relationship between the block
     lattice and the chunk grid - which is the point, since the block size no
     longer has to be a multiple of the chunk or shard.
@@ -792,7 +863,7 @@ def test_blocks_sharing_a_storage_unit_share_a_lock_key(tmp_path, block_size,
     grid = _write_lock_grid(array, 3, footprint)
     unit = _storage_write_unit(array, 3)
 
-    def units_touched(coords):
+    def write_units_touched(coords):
         starts = np.array([s.start for s in coords]) // unit
         stops = -(-np.array([s.stop for s in coords]) // unit)
         return {tuple(int(starts[a] + o[a]) for a in range(3))
@@ -800,8 +871,8 @@ def test_blocks_sharing_a_storage_unit_share_a_lock_key(tmp_path, block_size,
 
     blocks = [(index, lattice.footprint_slices(index))
               for index in lattice.indices()]
-    keys = {i: set(_storage_unit_lock_keys(c, grid, 'ns')) for i, c in blocks}
-    units = {i: units_touched(c) for i, c in blocks}
+    keys = {i: set(_lock_cell_keys(c, grid, 'ns')) for i, c in blocks}
+    units = {i: write_units_touched(c) for i, c in blocks}
 
     checked = 0
     for a, _ in blocks:
@@ -810,7 +881,7 @@ def test_blocks_sharing_a_storage_unit_share_a_lock_key(tmp_path, block_size,
                 continue
             if units[a] & units[b]:
                 assert keys[a] & keys[b], (
-                    f'{a} and {b} write into a shared storage unit but hold '
+                    f'{a} and {b} write into a shared write unit but hold '
                     'no lock key in common')
                 checked += 1
     assert checked > 0
@@ -818,7 +889,7 @@ def test_blocks_sharing_a_storage_unit_share_a_lock_key(tmp_path, block_size,
 
 def test_in_memory_overlapping_blocks_share_a_lock_key():
     """
-    With no storage unit to key on, the hazard is the overlap-add itself, so
+    With no write unit to key on, the hazard is the overlap-add itself, so
     the keys are the block and its neighbours - and A's set names B exactly
     when B's set names A.
     """
@@ -855,12 +926,12 @@ def test_in_memory_overlapping_blocks_share_a_lock_key():
     assert all('np.int' not in k for k in keys[(1, 1, 1)])
 
 
-def test_compose_block_write_is_locked_per_unit(tmp_path):
+def test_compose_block_write_is_locked_per_write_unit(tmp_path):
     """Composition writes disjoint blocks, but they can still share a chunk."""
     array = _zarr_field(tmp_path, 'c', (32, 32, 32, 3), (16, 16, 16, 3))
     grid = _write_lock_grid(array, 3, (10, 10, 10))
-    left = _storage_unit_lock_keys((slice(0, 10),) * 3, grid, 'ns')
-    right = _storage_unit_lock_keys((slice(10, 20),) * 3, grid, 'ns')
+    left = _lock_cell_keys((slice(0, 10),) * 3, grid, 'ns')
+    right = _lock_cell_keys((slice(10, 20),) * 3, grid, 'ns')
     # the two blocks do not overlap but both land in chunk (0, 0, 0)
     assert set(left) & set(right)
 
@@ -916,7 +987,7 @@ def test_unaligned_zarr_output_matches_the_in_memory_result(cluster_client_mt,
     # required unit <= processing size) but that was never sufficient - with
     # a halo the footprints still straddle shard boundaries. `max_locks` is
     # set low so the lock grid has to coarsen, which is the branch a block
-    # much larger than its storage unit takes.
+    # much larger than its write unit takes.
     ((16, 16, 16), (4, 4, 4), (8, 8, 8), 8),
 ], ids=['processing-size-smaller-than-shard', 'processing-size-bigger-than-shard'])
 def test_field_is_correct_whatever_the_block_to_shard_ratio(
@@ -950,7 +1021,7 @@ def test_field_is_correct_whatever_the_block_to_shard_ratio(
     footprint = block + 2 * np.round(block * 0.25).astype(int)
     grid = _write_lock_grid(field, 3, footprint, max_locks=max_locks)
     if np.all(unit > block):
-        # smaller: the whole block fits in one storage unit
+        # smaller: the whole block fits in one write unit
         assert np.all(grid == unit)
         with pytest.raises(ValueError, match='too small'):
             validate_processing_block_size(field, block,
@@ -968,3 +1039,109 @@ def test_field_is_correct_whatever_the_block_to_shard_ratio(
 
     assert np.any(reference)
     np.testing.assert_allclose(field[...], reference, rtol=0, atol=1e-5)
+
+
+# --------------------------------------------------------------------------
+# displacement diagnostics
+# --------------------------------------------------------------------------
+
+
+class _DiagnosticsRecorder(logging.Handler):
+    """Counts whole-field diagnostic sweeps and per-block diagnostic lines."""
+
+    def __init__(self):
+        super().__init__()
+        self.sweeps = []
+        self.blocks = 0
+
+    def emit(self, record):
+        message = record.getMessage()
+        if 'Compute displacement diagnostics for' in message:
+            self.sweeps.append(message.split('regions of the ')[-1])
+        if 'block displacement diagnostics' in message:
+            self.blocks += 1
+
+
+@contextmanager
+def _recording_logs(level):
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    recorder = _DiagnosticsRecorder()
+    root.handlers = [recorder]
+    root.setLevel(level)
+    try:
+        yield recorder
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+
+
+def _run_with_diagnostics(cluster_client, volumes, npasses, mode, level):
+    fix_image, mov_image = volumes
+    shape = tuple(fix_image.spatial_dims)
+    spacing = np.array([1.0, 1.0, 1.0])
+    passes = [AlignmentPass(alignment_steps=[('deform', {})],
+                            processing_offset=(0, 0, 0) if i == 0 else (4, 4, 4))
+              for i in range(npasses)]
+    with _recording_logs(level) as recorder:
+        assert blockwise_alignment_pipeline(
+            fix_image, spacing, mov_image, spacing, passes, cluster_client,
+            processing_size=(16, 16, 16), processing_halo_factor=0.25,
+            output_transform=np.zeros(shape + (3,), dtype=np.float32),
+            displacement_diagnostics=mode,
+            pass_output_factory=lambda i, sh: np.zeros(sh, dtype=np.float32),
+        )
+    return recorder
+
+
+@pytest.mark.parametrize('npasses,mode,expected', [
+    # unset: the field is never swept
+    (1, None, []),
+    (2, None, []),
+    # PER_STEP: after every pass, and on the composed result
+    (1, 'PER_STEP', ['pass1']),
+    (2, 'PER_STEP', ['pass1', 'pass2', 'composed multi-pass field']),
+    # FINAL_STEP: the final field only. With one pass that pass *is* the
+    # final field - there is no composition to report on afterwards
+    (1, 'FINAL_STEP', ['pass1']),
+    (2, 'FINAL_STEP', ['composed multi-pass field']),
+])
+def test_diagnostics_mode_decides_which_fields_are_swept(
+        cluster_client, synthetic_volumes, monkeypatch, npasses, mode,
+        expected):
+    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
+    recorder = _run_with_diagnostics(cluster_client, synthetic_volumes,
+                                     npasses, mode, logging.INFO)
+    assert recorder.sweeps == expected
+
+
+@pytest.mark.parametrize('mode', [None, 'PER_STEP', 'FINAL_STEP'])
+def test_per_block_diagnostics_are_debug_only_and_mode_independent(
+        cluster_client, synthetic_volumes, monkeypatch, mode):
+    """
+    A block's own field is not the field that reaches disk - its overlap
+    regions only reach their final values once every neighbour has added its
+    weighted share - so the per-block sweep is debug noise, never promoted
+    by the mode and never suppressed by it either.
+    """
+    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
+    at_info = _run_with_diagnostics(cluster_client, synthetic_volumes, 1,
+                                    mode, logging.INFO)
+    at_debug = _run_with_diagnostics(cluster_client, synthetic_volumes, 1,
+                                     mode, logging.DEBUG)
+    assert at_info.blocks == 0
+    assert at_debug.blocks > 0
+    # the mode governs whole-field sweeps only
+    assert at_info.sweeps == at_debug.sweeps
+
+
+def test_diagnostics_mode_accepts_the_enum_and_any_case():
+    assert _parse_displacement_diagnostics(None) is None
+    for value in ('PER_STEP', 'per_step', ' Per_Step ',
+                  DisplacementDiagnostics.PER_STEP):
+        assert (_parse_displacement_diagnostics(value)
+                is DisplacementDiagnostics.PER_STEP)
+
+
+def test_unknown_diagnostics_mode_is_refused():
+    with pytest.raises(ValueError, match='PER_STEP'):
+        _parse_displacement_diagnostics('EVERY_BLOCK')

@@ -39,6 +39,7 @@ from bigstream.distributed_align import (
     blockwise_alignment_pipeline,
     default_pass_geometry_from_config,
 )
+from bigstream.distributed_transform import distributed_apply_transform
 from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
                                   calc_downsampling_attr)
@@ -46,8 +47,8 @@ from bigstream.ome_utils import (get_spatial_values, compose_origin_transform)
 
 from .cli import (CliArgsHelper, RegistrationInputs,
                   define_registration_input_args,
-                  extract_registration_input_args, get_input_images,
-                  get_transform, dictfromjson, inttuple)
+                  extract_registration_input_args, get_algorithm_parameters,
+                  get_input_images, get_transform, dictfromjson, inttuple)
 
 from .utils import derive_shard_shape, get_zarr_format
 
@@ -56,32 +57,35 @@ from .utils import derive_shard_shape, get_zarr_format
 # front so the module's functions can also be called directly
 logger = logging.getLogger(__name__)
 
+# Block overlap used when warping the moving image, as a fraction of the
+# block size. This is resampling overlap - enough halo that interpolation
+# near a block face has neighbours to read - and has nothing to do with the
+# alignment halo, which exists to blend disagreeing per block fits.
+DEFAULT_TRANSFORM_OVERLAP = 0.125
+
 
 # Arguments `define_registration_input_args` contributes that this tool does
 # not implement. They stay in the parser so the shared definition is not
 # forked, but they are hidden from --help and refused if actually passed -
 # silently ignoring an output the caller asked for would be worse.
+#
+# Warping the moving image is back in scope (the `--local-align-*` group);
+# only the inverse field is not, because inverting is a separate, expensive
+# fixed point solve that has its own tool.
 _INVERSE = ('this tool does not compute the inverse field; '
             'use main_compute_local_inverse')
-_WARP = ('this tool does not warp the moving image; '
-         'use main_apply_local_transform')
 _UNSUPPORTED_ARGS = {
     'inv_transform_name': _INVERSE,
     'inv_transform_subpath': _INVERSE,
     'inv_transform_blocksize': _INVERSE,
-    'align_dir': _WARP,
-    'align_name': _WARP,
-    'align_subpath': _WARP,
-    'align_timeindex': _WARP,
-    'align_channel': _WARP,
-    'align_blocksize': _WARP,
-    'persist_mov_origin_transform': _WARP,
 }
 
 
 def _define_args(local_descriptor):
     args_parser = argparse.ArgumentParser(
-        description='Compute a local deformation field (multi-pass blockwise)')
+        description='Compute a local deformation field (multi-pass '
+                    'blockwise) and optionally warp the moving image '
+                    'through it')
 
     define_registration_input_args(
         args_parser.add_argument_group(
@@ -102,6 +106,16 @@ def _define_args(local_descriptor):
                              dest='initial_transform_subpath',
                              help='Initial transform subpath')
 
+    args_parser.add_argument('--local-transform-overlap-factor',
+                             '--transform-overlap-factor',
+                             dest='transform_overlap_factor',
+                             type=float, default=None,
+                             help='Block overlap, as a fraction of the block '
+                                  'size, used when applying the transform to '
+                                  'warp the moving image. Unrelated to the '
+                                  'alignment halo. Defaults to '
+                                  'local_align.transform_overlap in the '
+                                  f'config, else {DEFAULT_TRANSFORM_OVERLAP}.')
     args_parser.add_argument('--pass-fields-path',
                              dest='pass_fields_path',
                              help='Container for the intermediate per-pass '
@@ -234,8 +248,8 @@ def _reject_unsupported_args(args_parser, args,
                          f'({reason})')
     if given:
         raise SystemExit(
-            'These options are not supported by this tool, which only '
-            'computes the deformation field:\n  ' + '\n  '.join(given)
+            'These options are not supported by this tool:\n  '
+            + '\n  '.join(given)
         )
 
 
@@ -286,6 +300,8 @@ def _get_alignment_passes(config, registration_steps, context='local_align'):
 def _run_local_alignment(reg_args: RegistrationInputs,
                          align_config,
                          initial_transform,
+                         initial_transform_spacing=None,
+                         transform_overlap_factor=None,
                          pass_fields_path=None,
                          max_write_locks=MAX_WRITE_LOCKS,
                          dask_scheduler_address=None,
@@ -333,14 +349,41 @@ def _run_local_alignment(reg_args: RegistrationInputs,
 
     deformfield_path = reg_args.transform_path()
     if not deformfield_path:
-        raise SystemExit('No transform output was given; this tool only '
-                         'computes the deformation field, so there is '
+        raise SystemExit('No transform output was given; the deformation '
+                         'field is this tool\'s primary output, so there is '
                          'nothing to do. Set --local-transform-name.')
     deformfield_subpath = reg_args.transform_subpath or reg_args.mov_subpath
     if reg_args.transform_blocksize:
         deformfield_chunksize = tuple(reg_args.transform_blocksize)[::-1]
     else:
         deformfield_chunksize = tuple(reg_args.output_blocksize)[::-1]
+
+    # warping the moving image is optional and only happens when an output
+    # for it was named
+    align_path = reg_args.align_path()
+    align_subpath = reg_args.align_dataset()
+    if reg_args.align_blocksize:
+        align_chunksize = tuple(reg_args.align_blocksize)[::-1]
+    else:
+        align_chunksize = deformfield_chunksize
+
+    transform_overlap = transform_overlap_factor
+    if transform_overlap is None:
+        transform_overlap = (config.get('local_align') or {}).get(
+            'transform_overlap', DEFAULT_TRANSFORM_OVERLAP)
+    if not 0 <= transform_overlap < 1:
+        raise SystemExit('--local-transform-overlap-factor must be in '
+                         f'[0, 1), got {transform_overlap}')
+
+    # how the warp resamples - order, mode - is configured separately from
+    # the alignment steps, under `apply_deform`
+    transform_coords_args = {}
+    if align_path:
+        apply_deform_steps, _ = get_algorithm_parameters(
+            align_config, 'apply_deform', ['map_coordinates'])
+        for step, step_args in apply_deform_steps:
+            if step == 'map_coordinates':
+                transform_coords_args.update(step_args)
 
     load_dask_config(dask_config_file)
     if dask_scheduler_address:
@@ -355,14 +398,21 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                                           worker_threads_per_cpu=worker_threads_per_cpu)
     cluster_client.register_plugin(worker_config, name='WorkerConfig')
     try:
-        static_transforms, _ = reg_args.get_static_transforms()
+        # the spacings are only needed to *apply* a field - the block
+        # machinery derives a static field's spacing from its shape relative
+        # to the fixed image - but the warp stage below needs them, so they
+        # are carried through in step with the transforms themselves
+        static_transforms, static_transforms_spacings = \
+            reg_args.get_static_transforms()
         if initial_transform is not None:
             static_transforms = static_transforms + [initial_transform,]
+            static_transforms_spacings = (tuple(static_transforms_spacings)
+                                          + (initial_transform_spacing,))
         mov_origin_transform = compose_origin_transform(
             reg_args.get_mov_origin_transform(),
             mov_image.get_attr('globalCoordinateTransformations'),
         )
-        return _compute_deform_field(
+        deform_ok, deformfield = _compute_deform_field(
             fix_image, fix_mask, mov_image, mov_mask, roi,
             alignment_passes,
             default_size,
@@ -387,6 +437,38 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             error_if_displacement_check_fails,
             not reg_args.norebalance_missing_neighbors,
         )
+        if not align_path:
+            logger.info('No aligned output was given, so the moving image '
+                        'is not warped; set --local-align-name to warp it')
+            return deform_ok
+        # a run with static transforms still has something to apply even if
+        # every block of this run's own field failed
+        if not (deform_ok or static_transforms):
+            logger.error('Skip warping the moving image: the deformation '
+                         'field is incomplete and there are no static '
+                         'transforms to fall back on')
+            return False
+        _apply_deform_field(
+            fix_image, mov_image,
+            deformfield if deform_ok else None,
+            static_transforms,
+            static_transforms_spacings,
+            mov_origin_transform,
+            reg_args.persist_mov_origin_transform,
+            align_path,
+            align_subpath,
+            reg_args.align_timeindex,
+            reg_args.align_channel,
+            align_chunksize,
+            transform_overlap,
+            transform_coords_args,
+            cluster_client,
+            compressor,
+            compressor_opts,
+            zarr_format,
+            sharding_factor,
+        )
+        return deform_ok
     finally:
         cluster_client.close()
 
@@ -418,6 +500,13 @@ def _compute_deform_field(fix_image: ImageData,
                           displacement_diagnostics,
                           error_if_displacement_check_fails,
                           rebalance_for_missing_neighbors):
+    """
+    Run the passes and write the composed field.
+
+    Returns `(ok, deformfield)`. The array itself comes back so the warp
+    stage can hand it straight to `distributed_apply_transform` instead of
+    reopening what was just written.
+    """
     logger.info(f'Compute the deformation field aligning {mov_image} to '
                 f'{fix_image} over {len(alignment_passes)} pass(es)')
 
@@ -472,7 +561,125 @@ def _compute_deform_field(fix_image: ImageData,
     else:
         logger.error('Some blocks failed; the deformation field at '
                      f'{deformfield_path}:{deformfield_subpath} is incomplete')
-    return bool(deform_ok)
+    return bool(deform_ok), deformfield
+
+
+def _apply_deform_field(fix_image: ImageData,
+                        mov_image: ImageData,
+                        deformfield,
+                        static_transforms,
+                        static_transforms_spacings,
+                        mov_origin_transform,
+                        persist_mov_origin_transform,
+                        align_path,
+                        align_subpath,
+                        align_timeindex,
+                        align_channel,
+                        align_chunksize,
+                        transform_overlap_factor,
+                        transform_coords_args,
+                        cluster_client,
+                        compressor,
+                        compressor_opts,
+                        zarr_format,
+                        sharding_factor):
+    """
+    Warp the moving image onto the fixed image grid and write it out.
+
+    `deformfield` is this run's composed field, or None when every block of
+    it failed and only the static transforms are left to apply. The static
+    transforms come first in `transform_list` and the local deform last,
+    which is the order `compose_transform_list` reads them in.
+    """
+    axes = mov_image.get_attr('axes')
+
+    # An OME translation on the moving image is normally folded into the
+    # alignment rather than written out. Persisting it instead records it as
+    # a coordinate transformation on the output group, so a viewer places
+    # the warped volume where the original sat.
+    global_transformations = []
+    if mov_origin_transform is not None and persist_mov_origin_transform:
+        spatial_translation = mov_origin_transform[:3, 3].tolist()
+        # one leading 0 per non-spatial axis (time, channel), so the
+        # translation lines up with the axis list it is attached to
+        non_spatial_count = sum(1 for a in (axes or [])
+                                if a.get('type') != 'space')
+        global_transformations.append({
+            'type': 'translation',
+            'translation': [0] * non_spatial_count + spatial_translation,
+        })
+
+    align_attrs = io_utility.prepare_parent_group_attrs(
+        align_path, align_subpath,
+        axes=axes,
+        dataset_transformations=fix_image.get_attr('coordinateTransformations'),
+        global_transformations=global_transformations,
+        zarr_format=zarr_format,
+    )
+    align_shape = fix_image.shape
+    if len(align_chunksize) < len(align_shape):
+        # a spatial-only chunk shape against a t/c/z/y/x output: one chunk
+        # per non-spatial position
+        align_chunk_size = ((1,) * (len(align_shape) - len(align_chunksize))
+                            + tuple(get_spatial_values(align_chunksize)))
+    else:
+        align_chunk_size = tuple(get_spatial_values(align_chunksize))
+    align_shard_size = derive_shard_shape(sharding_factor, align_chunk_size,
+                                          zarr_format)
+    align = io_utility.create_dataset_array(
+        align_path, align_subpath, align_shape, align_chunk_size,
+        fix_image.dtype,
+        overwrite=False,
+        compressor=compressor,
+        compression_opts=compressor_opts,
+        for_timeindex=align_timeindex,
+        for_channel=align_channel,
+        parent_attrs=align_attrs,
+        pixelResolution=calc_full_voxel_resolution_attr(
+            mov_image.voxel_spacing, mov_image.voxel_downsampling),
+        downsamplingFactors=calc_downsampling_attr(mov_image.voxel_downsampling),
+        zarr_format=zarr_format,
+        shard_shape=align_shard_size,
+    )
+    # unlike the alignment writes, which are locked per write unit, the warp
+    # writes each block exactly once and they do not overlap - so a whole
+    # shard per worker is what keeps two workers out of one shard object
+    align_processing_size = getattr(align, 'shards', None) or align_chunk_size
+
+    deform_transforms = [deformfield] if deformfield is not None else []
+    transform_list = list(static_transforms) + deform_transforms
+    # the static transforms carry their own spacings (a global deform may
+    # have been produced at a different scale); this run's field is on the
+    # current fixed grid. An affine has None.
+    fix_deform_spacing = (get_spatial_values(fix_image.voxel_spacing)
+                          / fix_image.expansion_factor)
+    transforms_spacings = (tuple(static_transforms_spacings)
+                           + tuple(fix_deform_spacing
+                                   for _ in deform_transforms))
+
+    logger.info(f'Apply {len(static_transforms)} static transform(s) and '
+                f'{len(deform_transforms)} local deform to warp {mov_image} '
+                f'-> {align_path}:{align_subpath} in '
+                f'{align_processing_size} blocks, spacings '
+                f'{transforms_spacings}, map_coordinates args '
+                f'{transform_coords_args}')
+    distributed_apply_transform(
+        fix_image,
+        np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor,
+        mov_image,
+        np.array(get_spatial_values(mov_image.voxel_spacing)) / mov_image.expansion_factor,
+        align_processing_size,
+        transform_list,
+        cluster_client,
+        overlap_factor=transform_overlap_factor,
+        aligned_data=align,
+        aligned_data_timeindex=align_timeindex,
+        aligned_data_channel=align_channel,
+        transform_spacing=transforms_spacings,
+        **transform_coords_args,
+    )
+    logger.info(f'Wrote the aligned volume to {align_path}:{align_subpath}')
+    return align
 
 
 def _deformfield_factory(fix_image, roi, alignment_passes, chunksize,
@@ -555,14 +762,14 @@ def main():
     logger = configure_logging(args.logging_config, args.verbose)
 
     _reject_unsupported_args(args_parser, args, local_descriptor)
-    logger.info(f'Local deformation field: {args}')
+    logger.info(f'Local alignment: {args}')
 
     reg_inputs = extract_registration_input_args(args, local_descriptor)
 
-    # the spacing `get_transform` reports is only needed to *apply* a field;
-    # the block machinery derives a static field's spacing from its shape
-    # relative to the fixed image, so it is dropped here
-    initial_transform, _ = get_transform(
+    # the spacing matters only to the warp stage - the block machinery
+    # derives a static field's spacing from its shape relative to the fixed
+    # image - but it has to be carried in step with the transform itself
+    initial_transform, initial_transform_spacing = get_transform(
         args.initial_transform, args.initial_transform_subpath,
         expansion_factor=reg_inputs.fix_expansion_factor,
     )
@@ -572,6 +779,8 @@ def main():
         reg_inputs,
         args.align_config,
         initial_transform,
+        initial_transform_spacing=initial_transform_spacing,
+        transform_overlap_factor=args.transform_overlap_factor,
         pass_fields_path=args.pass_fields_path,
         max_write_locks=args.max_write_locks,
         dask_scheduler_address=args.dask_scheduler,

@@ -1,10 +1,11 @@
 """
 End-to-end tests for the local alignment CLI.
 
-`main_local_align_pipeline` does one thing - write the deformation field. The
-tests below check that it does that through the multi-pass pipeline, and
-that it does *not* quietly do the other two things the tool it replaced did
-(invert the field, warp the moving image).
+`main_local_align_pipeline` writes the deformation field, and warps the
+moving image through it when an aligned output is named. The tests below
+check both, and that it does *not* quietly compute the inverse field - the
+one thing the tool it replaced did that this one leaves to
+`main_compute_local_inverse`.
 """
 
 import logging
@@ -135,7 +136,10 @@ def test_two_pass_config_writes_the_field_and_its_per_pass_parts(
 
 def test_only_the_deformation_field_is_produced(volumes, tmp_path,
                                                 in_process_cluster):
-    """No inverse field, no warped volume - that is the whole scope change."""
+    """
+    Warping is opt-in: with no aligned output named, the field is the only
+    thing written. No inverse either, ever.
+    """
     config = _write_config(tmp_path, {
         'processing_size': [16, 16, 16],
         'processing_halo_factor': 0.25,
@@ -147,6 +151,100 @@ def test_only_the_deformation_field_is_produced(volumes, tmp_path,
     assert produced == ['deform.zarr']
     # a single pass writes straight to the output, so there are no leftovers
     assert not (tmp_path / 'out' / 'deform.zarr' / 's0_passes').exists()
+
+
+def test_naming_an_aligned_output_also_warps_the_moving_image(
+        volumes, tmp_path, in_process_cluster):
+    """
+    The warp stage, restored from the ome-dev tool: naming an aligned output
+    writes the field *and* resamples the moving image onto the fixed grid
+    through it.
+    """
+    config = _write_config(tmp_path, {
+        'processing_size': [16, 16, 16],
+        'processing_halo_factor': 0.25,
+        'alignment_passes': [{'alignment_steps': [{'deform': {}}]}],
+    })
+    _run(_base_argv(volumes, tmp_path, config)
+         + ['--local-align-name', 'warped.zarr',
+            '--local-align-subpath', 's0'])
+
+    produced = sorted(p.name for p in (tmp_path / 'out').iterdir())
+    assert produced == ['deform.zarr', 'warped.zarr']
+
+    warped = ImageData(str(tmp_path / 'out' / 'warped.zarr'), 's0',
+                       open_image=True).image_array
+    assert warped.shape == SHAPE
+    assert np.any(warped[...])
+    # it is the moving image resampled, not a copy of either input
+    mov = ImageData(volumes['mov'], 's0', open_image=True).image_array
+    fix = ImageData(volumes['fix'], 's0', open_image=True).image_array
+    assert not np.array_equal(warped[...], mov[...])
+    assert not np.array_equal(warped[...], fix[...])
+
+
+def test_the_warp_uses_the_align_blocksize_when_given(volumes, tmp_path,
+                                                      in_process_cluster):
+    """
+    `--local-align-blocksize` chunks the warped output independently of the
+    field's own chunking - they are different arrays with different access
+    patterns.
+    """
+    config = _write_config(tmp_path, {
+        'processing_size': [16, 16, 16],
+        'processing_halo_factor': 0.25,
+        'alignment_passes': [{'alignment_steps': [{'deform': {}}]}],
+    })
+    _run(_base_argv(volumes, tmp_path, config)
+         + ['--local-align-name', 'warped.zarr',
+            '--local-align-subpath', 's0',
+            '--local-align-blocksize', '20,20,20',
+            '--local-transform-blocksize', '10,10,10'])
+
+    warped = ImageData(str(tmp_path / 'out' / 'warped.zarr'), 's0',
+                       open_image=True).image_array
+    field = ImageData(str(tmp_path / 'out' / 'deform.zarr'), 's0',
+                      open_image=True).image_array
+    assert warped.chunks[:3] == (20, 20, 20)
+    assert field.chunks[:3] == (10, 10, 10)
+
+
+def test_the_warp_reads_map_coordinates_args_from_the_config(
+        volumes, tmp_path, in_process_cluster, monkeypatch):
+    """
+    How the warp resamples is configured under `apply_deform`, separately
+    from the alignment steps, and has to reach `distributed_apply_transform`
+    as keyword arguments.
+    """
+    seen = {}
+    real = cli.distributed_apply_transform
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(cli, 'distributed_apply_transform', spy)
+
+    path = tmp_path / 'align.yml'
+    path.write_text(yaml.safe_dump({
+        'local_align': {
+            'processing_size': [16, 16, 16],
+            'processing_halo_factor': 0.25,
+            'alignment_passes': [{'alignment_steps': [{'deform': {}}]}],
+        },
+        'apply_deform': {
+            'steps': ['map_coordinates'],
+            'map_coordinates': {'order': 1, 'mode': 'constant'},
+        },
+    }))
+    _run(_base_argv(volumes, tmp_path, str(path))
+         + ['--local-align-name', 'warped.zarr',
+            '--local-align-subpath', 's0',
+            '--local-transform-overlap-factor', '0.25'])
+
+    assert seen['order'] == 1
+    assert seen['mode'] == 'constant'
+    assert seen['overlap_factor'] == 0.25
 
 
 def test_a_single_steps_config_still_runs_as_one_pass(volumes, tmp_path,
@@ -190,20 +288,16 @@ def test_processing_size_need_not_divide_the_chunk(volumes, tmp_path,
 
 @pytest.mark.parametrize('flag,value', [
     ('--local-inv-transform-name', 'inv.zarr'),
-    ('--local-align-name', 'warped.zarr'),
-    ('--local-align-blocksize', '64,64,64'),
-    # 0 is a real channel and a real time index, and both are falsy - a
-    # truthiness test on the parsed value let exactly these through
-    ('--local-align-channel', '0'),
-    ('--local-align-timeindex', '0'),
+    ('--local-inv-transform-subpath', 's0'),
+    ('--local-inv-transform-blocksize', '64,64,64'),
 ])
 def test_options_this_tool_cannot_honour_are_refused(volumes, tmp_path,
                                                      in_process_cluster,
                                                      flag, value):
     """
-    The inverse and warp flags come from the shared input definition. They
-    are hidden from --help, but passing one has to fail rather than be
-    silently dropped - the caller asked for an output they would not get.
+    The inverse flags come from the shared input definition. They are hidden
+    from --help, but passing one has to fail rather than be silently dropped
+    - the caller asked for an output they would not get.
     """
     config = _write_config(tmp_path, {
         'processing_size': [16, 16, 16],
@@ -233,7 +327,8 @@ def test_help_hides_the_unsupported_options(capsys):
     text = capsys.readouterr().out
     assert '--local-transform-name' in text
     assert '--local-inv-transform-name' not in text
-    assert '--local-align-name' not in text
+    # warping is supported again, so its flags are back in the help
+    assert '--local-align-name' in text
 
 
 # --------------------------------------------------------------------------

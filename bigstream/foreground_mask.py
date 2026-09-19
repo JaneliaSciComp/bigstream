@@ -1,8 +1,8 @@
 import logging
 import numpy as np
 
-from scipy.ndimage import binary_closing, binary_dilation, label, zoom
-from scipy.ndimage.filters import gaussian_filter
+from scipy.ndimage import (binary_closing, binary_dilation, gaussian_filter,
+                           label, zoom)
 
 from . import level_set
 

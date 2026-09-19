@@ -363,8 +363,8 @@ def test_two_passes_cascade_and_compose(cluster_client, synthetic_volumes,
         cluster_client,
         processing_size=(16, 16, 16),
         processing_halo_factor=0.25,
-        output_transform=output,
-        pass_output_factory=factory,
+        deformfield_final_result=output,
+        deformfield_output_factory=factory,
     )
 
     assert set(pass_fields) == {0, 1}
@@ -379,6 +379,126 @@ def test_two_passes_cascade_and_compose(cluster_client, synthetic_volumes,
     interior = (slice(8, -8),) * 3
     total = pass_fields[0][interior] + pass_fields[1][interior]
     assert np.allclose(output[interior], total, atol=0.5)
+
+
+def _two_pass_setup(cluster_client, synthetic_volumes, monkeypatch,
+                    record_into):
+    _patch_alignment_pipeline(
+        monkeypatch,
+        lambda fix, mov, fix_spacing, mov_spacing, steps,
+               static_transform_list=(), **kwargs: (
+            record_into.append(len(static_transform_list)) or
+            _fake_alignment_pipeline(fix, mov, fix_spacing, mov_spacing,
+                                     steps, **kwargs)
+        ),
+    )
+    fix_image, mov_image = synthetic_volumes
+    shape = tuple(fix_image.spatial_dims)
+    spacing = np.array([1.0, 1.0, 1.0])
+    passes = [AlignmentPass(alignment_steps=[('deform', {})],
+                            processing_offset=(0, 0, 0)),
+             AlignmentPass(alignment_steps=[('deform', {})],
+                            processing_offset=(4, 4, 4),
+                            processing_halo_factor=0.125)]
+    return fix_image, mov_image, shape, spacing, passes
+
+
+def test_resuming_from_pass_two_skips_pass_one_and_matches_a_full_run(
+        cluster_client, synthetic_volumes, monkeypatch):
+    """
+    Standing in for "pass 3 failed, don't redo passes 1-2": resuming from
+    pass 2 with pass 1's field supplied must not recompute pass 1, and the
+    composed output must be bit-for-bit what a full run produces (the fake
+    pipeline is deterministic, so there is no wiggle room to hide behind).
+    """
+    baseline_static_counts = []
+    fix_image, mov_image, shape, spacing, passes = _two_pass_setup(
+        cluster_client, synthetic_volumes, monkeypatch, baseline_static_counts)
+
+    baseline_pass_fields = {}
+
+    def baseline_factory(pass_index, field_shape):
+        baseline_pass_fields[pass_index] = np.zeros(field_shape, dtype=np.float32)
+        return baseline_pass_fields[pass_index]
+
+    baseline_output = np.zeros(shape + (3,), dtype=np.float32)
+    assert blockwise_alignment_pipeline(
+        fix_image, spacing, mov_image, spacing, passes, cluster_client,
+        processing_size=(16, 16, 16), processing_halo_factor=0.25,
+        deformfield_final_result=baseline_output, deformfield_output_factory=baseline_factory,
+    )
+
+    resumed_static_counts = []
+    _patch_alignment_pipeline(
+        monkeypatch,
+        lambda fix, mov, fix_spacing, mov_spacing, steps,
+               static_transform_list=(), **kwargs: (
+            resumed_static_counts.append(len(static_transform_list)) or
+            _fake_alignment_pipeline(fix, mov, fix_spacing, mov_spacing,
+                                     steps, **kwargs)
+        ),
+    )
+    resumed_pass_fields = {}
+
+    def resumed_factory(pass_index, field_shape):
+        resumed_pass_fields[pass_index] = np.zeros(field_shape, dtype=np.float32)
+        return resumed_pass_fields[pass_index]
+
+    resumed_output = np.zeros(shape + (3,), dtype=np.float32)
+    assert blockwise_alignment_pipeline(
+        fix_image, spacing, mov_image, spacing, passes, cluster_client,
+        processing_size=(16, 16, 16), processing_halo_factor=0.25,
+        deformfield_final_result=resumed_output, deformfield_output_factory=resumed_factory,
+        start_pass=2, resumed_pass_fields=[baseline_pass_fields[0]],
+    )
+
+    # pass 1 never ran a block the second time - only pass 2's blocks did,
+    # each seeing the one resumed static transform
+    assert set(resumed_pass_fields) == {1}
+    assert resumed_static_counts and all(c == 1 for c in resumed_static_counts)
+    assert np.array_equal(resumed_pass_fields[1], baseline_pass_fields[1])
+    assert np.array_equal(resumed_output, baseline_output)
+
+
+def test_resume_pass_beyond_configured_passes_is_ignored(
+        cluster_client, synthetic_volumes, monkeypatch):
+    """A resume target with nothing to resume from just runs everything."""
+    static_counts = []
+    fix_image, mov_image, shape, spacing, passes = _two_pass_setup(
+        cluster_client, synthetic_volumes, monkeypatch, static_counts)
+
+    pass_fields = {}
+
+    def factory(pass_index, field_shape):
+        pass_fields[pass_index] = np.zeros(field_shape, dtype=np.float32)
+        return pass_fields[pass_index]
+
+    output = np.zeros(shape + (3,), dtype=np.float32)
+    assert blockwise_alignment_pipeline(
+        fix_image, spacing, mov_image, spacing, passes, cluster_client,
+        processing_size=(16, 16, 16), processing_halo_factor=0.25,
+        deformfield_final_result=output, deformfield_output_factory=factory,
+        start_pass=5,
+    )
+
+    assert set(pass_fields) == {0, 1}
+    assert min(static_counts) == 0 and max(static_counts) == 1
+
+
+def test_resume_without_matching_resumed_fields_is_an_error(
+        cluster_client, synthetic_volumes, monkeypatch):
+    static_counts = []
+    fix_image, mov_image, shape, spacing, passes = _two_pass_setup(
+        cluster_client, synthetic_volumes, monkeypatch, static_counts)
+
+    output = np.zeros(shape + (3,), dtype=np.float32)
+    with pytest.raises(ValueError):
+        blockwise_alignment_pipeline(
+            fix_image, spacing, mov_image, spacing, passes, cluster_client,
+            processing_size=(16, 16, 16), processing_halo_factor=0.25,
+            deformfield_final_result=output,
+            start_pass=2, resumed_pass_fields=[],
+        )
 
 
 def test_block_context_names_the_pass_as_well_as_the_block(cluster_client,
@@ -411,8 +531,8 @@ def test_block_context_names_the_pass_as_well_as_the_block(cluster_client,
         cluster_client,
         processing_size=(16, 16, 16),
         processing_halo_factor=0.25,
-        output_transform=output,
-        pass_output_factory=lambda i, s: np.zeros(s, dtype=np.float32),
+        deformfield_final_result=output,
+        deformfield_output_factory=lambda i, s: np.zeros(s, dtype=np.float32),
     )
 
     assert seen_contexts
@@ -448,8 +568,8 @@ def test_each_pass_logs_its_own_completion(cluster_client,
             cluster_client,
             processing_size=(16, 16, 16),
             processing_halo_factor=0.25,
-            output_transform=output,
-            pass_output_factory=lambda i, s: np.zeros(s, dtype=np.float32),
+            deformfield_final_result=output,
+            deformfield_output_factory=lambda i, s: np.zeros(s, dtype=np.float32),
         )
 
     done = [r.getMessage() for r in caplog.records
@@ -488,7 +608,7 @@ def test_a_failed_pass_says_so_at_error_level(cluster_client,
             cluster_client,
             processing_size=(16, 16, 16),
             processing_halo_factor=0.25,
-            output_transform=output,
+            deformfield_final_result=output,
         )
     assert not ok
 
@@ -521,8 +641,8 @@ def test_per_block_log_lines_all_name_the_pass(cluster_client,
             cluster_client,
             processing_size=(16, 16, 16),
             processing_halo_factor=0.25,
-            output_transform=output,
-            pass_output_factory=lambda i, s: np.zeros(s, dtype=np.float32),
+            deformfield_final_result=output,
+            deformfield_output_factory=lambda i, s: np.zeros(s, dtype=np.float32),
         )
 
     messages = [r.getMessage() for r in caplog.records
@@ -758,7 +878,7 @@ def test_clamp_smooths_the_assembled_field(cluster_client, synthetic_volumes,
             processing_size=(16, 16, 16),
             processing_halo_factor=0.25,
             neighbor_consistency=neighbor_consistency,
-            output_transform=output,
+            deformfield_final_result=output,
         )
         return output
 
@@ -787,7 +907,7 @@ def test_auto_delta_max_comes_from_the_lattice(cluster_client,
         processing_size=(16, 16, 16),
         processing_halo_factor=0.25,
         neighbor_consistency={'delta_max': 'auto', 'k': 0.1},
-        output_transform=output,
+        deformfield_final_result=output,
     )
     assert np.all(np.isfinite(output))
 
@@ -816,7 +936,7 @@ def test_three_element_roi_extends_to_the_volume_bounds(cluster_client,
         [AlignmentPass(alignment_steps=[('deform', {})])], cluster_client,
         processing_size=(16, 16, 16), processing_halo_factor=0.25,
         roi=(20.0, 20.0, 20.0),
-        output_transform=output,
+        deformfield_final_result=output,
     )
     # block (0,0,0) spans voxels 0..19 and so falls entirely below the ROI;
     # the next block's footprint starts at voxel 12
@@ -846,7 +966,7 @@ def test_roi_selects_blocks_without_moving_them(cluster_client,
                            processing_offset=(4, 4, 4))],
             cluster_client,
             processing_size=(16, 16, 16), processing_halo_factor=0.25,
-            roi=roi, output_transform=output,
+            roi=roi, deformfield_final_result=output,
         )
         return output
 
@@ -1033,14 +1153,14 @@ def test_unaligned_zarr_output_matches_the_in_memory_result(cluster_client_mt,
     reference = np.zeros(shape + (3,), dtype=np.float32)
     assert blockwise_alignment_pipeline(
         fix_image, spacing, mov_image, spacing, passes, cluster_client_mt,
-        output_transform=reference, **kwargs)
+        deformfield_final_result=reference, **kwargs)
 
     field = _zarr_field(tmp_path, 'out', shape + (3,), (10, 10, 10, 3),
                         shards=(20, 20, 20, 3))
     assert list(_storage_write_unit(field, 3)) == [20, 20, 20]
     assert blockwise_alignment_pipeline(
         fix_image, spacing, mov_image, spacing, passes, cluster_client_mt,
-        output_transform=field, **kwargs)
+        deformfield_final_result=field, **kwargs)
 
     assert np.any(reference)
     # exact equality is not available - the blocks accumulate in whatever
@@ -1080,7 +1200,7 @@ def test_field_is_correct_whatever_the_block_to_shard_ratio(
     reference = np.zeros(shape + (3,), dtype=np.float32)
     assert blockwise_alignment_pipeline(
         fix_image, spacing, mov_image, spacing, passes, cluster_client_mt,
-        output_transform=reference, **kwargs)
+        deformfield_final_result=reference, **kwargs)
 
     field = _zarr_field(tmp_path, 'out', shape + (3,), tuple(chunks) + (3,),
                         shards=tuple(shards) + (3,))
@@ -1107,7 +1227,7 @@ def test_field_is_correct_whatever_the_block_to_shard_ratio(
 
     assert blockwise_alignment_pipeline(
         fix_image, spacing, mov_image, spacing, passes, cluster_client_mt,
-        output_transform=field, max_write_locks=max_locks, **kwargs)
+        deformfield_final_result=field, max_write_locks=max_locks, **kwargs)
 
     assert np.any(reference)
     np.testing.assert_allclose(field[...], reference, rtol=0, atol=1e-5)
@@ -1158,9 +1278,9 @@ def _run_with_diagnostics(cluster_client, volumes, npasses, mode, level):
         assert blockwise_alignment_pipeline(
             fix_image, spacing, mov_image, spacing, passes, cluster_client,
             processing_size=(16, 16, 16), processing_halo_factor=0.25,
-            output_transform=np.zeros(shape + (3,), dtype=np.float32),
+            deformfield_final_result=np.zeros(shape + (3,), dtype=np.float32),
             displacement_diagnostics=mode,
-            pass_output_factory=lambda i, sh: np.zeros(sh, dtype=np.float32),
+            deformfield_output_factory=lambda i, sh: np.zeros(sh, dtype=np.float32),
         )
     return recorder
 

@@ -278,14 +278,16 @@ def blockwise_alignment_pipeline(
     foreground_percentage=0.,
     mov_origin_transform: Optional[np.ndarray] = None,
     static_transform_list: Sequence[np.ndarray | zarr.Array] = (),
-    output_transform=None,
-    pass_output_factory: Optional[Callable[[int, tuple], Any]] = None,
+    deformfield_final_result=None,
+    deformfield_output_factory: Optional[Callable[[int, tuple], Any]] = None,
     max_concurrent_reads=0,
     max_cluster_jobs=0,
     max_write_locks=MAX_WRITE_LOCKS,
     rebalance_for_missing_neighbors=True,
     displacement_diagnostics=None,
     error_if_displacement_check_fails=False,
+    start_pass=1,
+    resumed_pass_fields: Sequence[np.ndarray | zarr.Array] = (),
 ):
     """
     Multi-pass piecewise alignment of a moving image to a fixed image.
@@ -383,6 +385,20 @@ def blockwise_alignment_pipeline(
         `DisplacementDiagnostics`. Per-block diagnostics are independent of
         this and always go to DEBUG.
 
+    start_pass : int (default: 1)
+        1-indexed pass to resume from. Passes before it are not run; their
+        fields must already exist and be supplied via `resumed_pass_fields`,
+        so cascading (`static_transform_list`) and the final composition see
+        the same fields a full run would have produced. Values `<= 1` run
+        every pass, as if not given. A value greater than the number of
+        configured passes is out of range and is ignored the same way,
+        since there would be nothing left to resume.
+
+    resumed_pass_fields : sequence of ndarray or zarr.Array (default: ())
+        The already-computed fields for passes `1 .. start_pass - 1`, in
+        order. Required (and must match that length) whenever `start_pass`
+        selects a pass beyond the first; ignored otherwise.
+
     Other parameters behave as they did in the single-pass pipeline this
     replaces.
 
@@ -425,18 +441,43 @@ def blockwise_alignment_pipeline(
         diagnostics is DisplacementDiagnostics.PER_STEP
         or (diagnostics is DisplacementDiagnostics.FINAL_STEP and npasses == 1)
     )
-    pass_fields = []
+
+    if start_pass > npasses:
+        logger.warning(
+            f'start_pass={start_pass} is beyond the {npasses} configured '
+            'pass(es); ignoring it and running from pass 1'
+        )
+        start_pass = 1
+    start_pass = max(start_pass, 1)
+
+    if start_pass > 1:
+        if len(resumed_pass_fields) != start_pass - 1:
+            raise ValueError(
+                f'start_pass={start_pass} requires {start_pass - 1} '
+                f'resumed_pass_fields (one per earlier pass), got '
+                f'{len(resumed_pass_fields)}'
+            )
+        logger.info(
+            f'Resuming from pass {start_pass}/{npasses}: reusing '
+            f'{len(resumed_pass_fields)} already-computed pass field(s), '
+            f'passes 1..{start_pass - 1} will not be recomputed'
+        )
+        pass_fields = list(resumed_pass_fields)
+    else:
+        pass_fields = []
     result = True
 
     for pass_index, alignment_pass in enumerate(resolved_passes):
+        if pass_index < start_pass - 1:
+            continue
         label = alignment_pass.name or f'pass{pass_index + 1}'
         if npasses == 1:
-            pass_output = output_transform
+            pass_output = deformfield_final_result
         else:
-            pass_output = _make_pass_output(
+            pass_output = _make_deformfield_output(
                 pass_index, fix_spatial_dims + (spatial_ndim,),
-                pass_output_factory, output_transform)
-
+                deformfield_output_factory,
+            )
         logger.info((
             f'--- {label} ({pass_index + 1}/{npasses}): block size '
             f'{alignment_pass.processing_size}, offset '
@@ -489,10 +530,10 @@ def blockwise_alignment_pipeline(
         if pass_output is not None:
             pass_fields.append(pass_output)
 
-    if npasses > 1 and output_transform is not None and pass_fields:
+    if npasses > 1 and deformfield_final_result is not None and pass_fields:
         logger.info(f'Compose {len(pass_fields)} pass fields into the output')
         composed_ok = _distributed_compose_displacement_fields(
-            pass_fields, fix_spatial_spacing, output_transform, cluster_client,
+            pass_fields, fix_spatial_spacing, deformfield_final_result, cluster_client,
             max_write_locks=max_write_locks,
         )
         result = result and composed_ok
@@ -507,14 +548,14 @@ def blockwise_alignment_pipeline(
                     + 2 * np.array(last.processing_halo))
             ids, coords = _tile_volume(fix_spatial_dims, tile)
             _display_displacement_diagnostics(
-                output_transform, ids, coords, fix_spatial_spacing,
+                deformfield_final_result, ids, coords, fix_spatial_spacing,
                 context='composed multi-pass field')
 
     logger.info(f'Blockwise alignment completed (ok={result})')
     return result
 
 
-def _make_pass_output(pass_index, shape, factory, output_transform):
+def _make_deformfield_output(pass_index, shape, factory):
     if factory is not None:
         return factory(pass_index, shape)
     logger.warning((

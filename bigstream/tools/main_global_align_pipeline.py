@@ -467,7 +467,7 @@ def _align_global_data(
             foreground_percentage=foreground_percentage,
             mov_origin_transform=mov_origin_transform,
             static_transform_list=transforms_list,
-            output_transform=transform,
+            deformfield_final_result=transform,
             max_write_locks=max_write_locks,
             displacement_diagnostics=displacement_diagnostics,
         )

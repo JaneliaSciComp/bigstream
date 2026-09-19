@@ -125,6 +125,18 @@ def _define_args(local_descriptor):
                                   'the run - they are what the per-pass '
                                   'diagnostics are read from - and are never '
                                   'deleted automatically.')
+    args_parser.add_argument('--resume-from-pass', '--resume_from_pass',
+                             dest='resume_from_pass',
+                             type=int, default=None,
+                             help='1-indexed pass to resume from, e.g. after '
+                                  'a later pass failed. Passes before it are '
+                                  'not recomputed; their fields are read '
+                                  'back from --pass-fields-path (or the '
+                                  'transform container) instead, at the '
+                                  'same location a normal run would have '
+                                  'written them. A value greater than the '
+                                  'number of configured passes is ignored '
+                                  'and the run starts from pass 1.')
     args_parser.add_argument('--max-write-locks', '--max_write_locks',
                              dest='max_write_locks',
                              type=int, default=MAX_WRITE_LOCKS,
@@ -303,6 +315,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          initial_transform_spacing=None,
                          transform_overlap_factor=None,
                          pass_fields_path=None,
+                         resume_from_pass=None,
                          max_write_locks=MAX_WRITE_LOCKS,
                          dask_scheduler_address=None,
                          dask_config_file=None,
@@ -424,6 +437,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             deformfield_subpath,
             deformfield_chunksize,
             pass_fields_path or deformfield_path,
+            resume_from_pass,
             cluster_client,
             compressor,
             compressor_opts,
@@ -488,6 +502,7 @@ def _compute_deform_field(fix_image: ImageData,
                           deformfield_subpath,
                           deformfield_chunksize,
                           pass_fields_path,
+                          resume_from_pass,
                           cluster_client,
                           compressor,
                           compressor_opts,
@@ -530,6 +545,19 @@ def _compute_deform_field(fix_image: ImageData,
                     f'{pass_fields_path}:{subpath}')
         return create_field(pass_fields_path, subpath, shape)
 
+    npasses = len(alignment_passes)
+    resumed_pass_fields = []
+    # resume_from_pass beyond npasses is out of range; leave it to
+    # blockwise_alignment_pipeline to ignore it and log why - reading fields
+    # here would just be for a start_pass it is not going to honour
+    if resume_from_pass is not None and 1 < resume_from_pass <= npasses:
+        for n in range(1, resume_from_pass):
+            subpath = f'{deformfield_subpath}_passes/pass{n}'
+            logger.info(f'Resume from pass {resume_from_pass}: reading pass '
+                        f'{n} field from {pass_fields_path}:{subpath}')
+            resumed_pass_fields.append(
+                ImageData(pass_fields_path, subpath, open_image=True))
+
     deform_ok = blockwise_alignment_pipeline(
         fix_image,
         np.array(get_spatial_values(fix_image.voxel_spacing)) / fix_image.expansion_factor,
@@ -546,14 +574,16 @@ def _compute_deform_field(fix_image: ImageData,
         foreground_percentage=foreground_percentage,
         mov_origin_transform=mov_origin_transform,
         static_transform_list=static_transforms,
-        output_transform=deformfield,
-        pass_output_factory=pass_output_factory,
+        deformfield_final_result=deformfield,
+        deformfield_output_factory=pass_output_factory,
         max_concurrent_reads=max_concurrent_zarr_reads,
         max_cluster_jobs=max_cluster_jobs,
         max_write_locks=max_write_locks,
         rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
         displacement_diagnostics=displacement_diagnostics,
         error_if_displacement_check_fails=error_if_displacement_check_fails,
+        start_pass=resume_from_pass or 1,
+        resumed_pass_fields=resumed_pass_fields,
     )
     if deform_ok:
         logger.info(f'Wrote the deformation field to '
@@ -782,6 +812,7 @@ def main():
         initial_transform_spacing=initial_transform_spacing,
         transform_overlap_factor=args.transform_overlap_factor,
         pass_fields_path=args.pass_fields_path,
+        resume_from_pass=args.resume_from_pass,
         max_write_locks=args.max_write_locks,
         dask_scheduler_address=args.dask_scheduler,
         dask_config_file=args.dask_config,

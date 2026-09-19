@@ -2,10 +2,9 @@ import logging
 import numpy as np
 import morphsnakes
 
-from scipy.ndimage import zoom
-from scipy.ndimage.filters import gaussian_filter
-from scipy.ndimage.morphology import binary_erosion, binary_dilation, binary_fill_holes
-from scipy.ndimage.measurements import label, labeled_comprehension
+from scipy.ndimage import (zoom, gaussian_filter, binary_erosion,
+                           binary_dilation, binary_fill_holes, label,
+                           sum_labels)
 
 from skimage import filters
 
@@ -155,7 +154,7 @@ def largest_connected_component(mask):
     """
 
     lbls, nlbls = label(mask)
-    vols = labeled_comprehension(mask, lbls, range(1, nlbls+1), np.sum, float, 0)
+    vols = sum_labels(mask, lbls, range(1, nlbls+1))
     mask[lbls != np.argmax(vols)+1] = 0
     return mask
 

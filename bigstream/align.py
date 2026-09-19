@@ -28,7 +28,7 @@ from scipy.ndimage import zoom
 logger = logging.getLogger(__name__)
 
 
-def realize_mask(image, mask, mask_percentile=(), roi=None):
+def realize_mask(image, mask, mask_percentile=(), background=None, roi=None):
     """
     Ensure that mask is an ndarray, optionally restricted to an ROI box
 
@@ -47,6 +47,12 @@ def realize_mask(image, mask, mask_percentile=(), roi=None):
         If given, foreground is the intensity band between the low and high
         percentiles of `image`.
 
+    background : float (default: None)
+        If given, voxels at or below this intensity are background. The
+        non-background voxels are intersected with whatever `mask` and
+        `mask_percentile` select, so this narrows the foreground rather than
+        replacing it.
+
     roi : tuple of slices (default: None)
         A voxel-space ROI on the image grid (already converted from physical
         coordinates by the caller). If given, the returned mask is restricted
@@ -58,7 +64,7 @@ def realize_mask(image, mask, mask_percentile=(), roi=None):
     A mask for image, which is either None or a binary nd-array with dtype uint8
     """
 
-    if mask is None and not mask_percentile and roi is None:
+    if mask is None and not mask_percentile and background is None and roi is None:
         return None
 
     # realize the base mask (None if only an roi was provided)
@@ -69,6 +75,13 @@ def realize_mask(image, mask, mask_percentile=(), roi=None):
         intensity_filter = ((image > low_thresh) * (image < high_thresh)).astype(np.uint8)
     else:
         intensity_filter = None
+
+    if background is not None:
+        # always threshold the image - by here intensity_filter is already a
+        # 0/1 mask, so comparing it against an intensity would empty it
+        background_filter = (image > background).astype(np.uint8)
+        intensity_filter = (background_filter if intensity_filter is None
+                            else intensity_filter * background_filter)
 
     if mask is None:
         mask_filter = None
@@ -415,6 +428,8 @@ def feature_point_ransac_affine_align(
     mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
+    fix_background=None,
+    mov_background=None,
     static_transform_list=[],
     default=None,
     context='',
@@ -634,9 +649,9 @@ def feature_point_ransac_affine_align(
         default = np.eye(fix.ndim + 1)
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, background=fix_background, roi=fix_roi)
     logger.debug(f'Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
-    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile, background=mov_background)
     logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip sample and determine mask spacings
@@ -892,6 +907,8 @@ def random_affine_search(
     mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
+    fix_background=None,
+    mov_background=None,
     static_transform_list=[],
     use_patch_mutual_information=False,
     context='',
@@ -1049,9 +1066,9 @@ def random_affine_search(
     static_transform_origin = b
 
     # realize masks as arrays
-    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, background=fix_background, roi=fix_roi)
     logger.debug(f'Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
-    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile, background=mov_background)
     logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip sample and determine mask spacings
@@ -1176,6 +1193,8 @@ def affine_align(
     mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
+    fix_background=None,
+    mov_background=None,
     static_transform_list=[],
     default=None,
     final_metric_check=True,
@@ -1325,9 +1344,9 @@ def affine_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, background=fix_background, roi=fix_roi)
     logger.debug(f'Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
-    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile, background=mov_background)
     logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip sample and convert inputs to sitk images
@@ -1465,6 +1484,8 @@ def deformable_align(
     mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
+    fix_background=None,
+    mov_background=None,
     static_transform_list=[],
     default=None,
     final_metric_check=True,
@@ -1644,9 +1665,9 @@ def deformable_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, background=fix_background, roi=fix_roi)
     logger.debug(f'Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
-    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile, background=mov_background)
     logger.debug(f'Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip sample and convert inputs to sitk images

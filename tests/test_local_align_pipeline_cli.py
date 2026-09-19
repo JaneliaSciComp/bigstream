@@ -134,6 +134,96 @@ def test_two_pass_config_writes_the_field_and_its_per_pass_parts(
     assert not np.array_equal(composed[...], second[...])
 
 
+def test_resume_from_pass_skips_recomputing_earlier_passes(
+        volumes, tmp_path, in_process_cluster, monkeypatch):
+    """
+    Standing in for "pass 2 failed, don't redo pass 1": --resume-from-pass 2
+    must not recompute pass 1's blocks, must read pass 1's field back from
+    disk to seed pass 2's cascade, and must recompose to the same result a
+    normal, un-resumed run produces.
+
+    Pass 1 is compared exactly - it is untouched bytes on disk, so anything
+    but equality means it was recomputed or clobbered. Pass 2 and the
+    composed field are compared numerically, not bitwise: this fixture's
+    cluster has two workers, and a pass overlap-adds its blocks into shared
+    regions by read-modify-write, so float32 accumulation order - and with
+    it the last bits - varies run to run. Only the single-worker fixture in
+    test_blockwise_alignment.py can assert bit-for-bit.
+    """
+    config = _write_config(tmp_path, {
+        'processing_size': [16, 16, 16],
+        'processing_halo_factor': 0.25,
+        'alignment_passes': [
+            {'processing_offset': [0, 0, 0],
+             'alignment_steps': [{'deform': {}}]},
+            {'processing_offset': [4, 4, 4],
+             'processing_halo_factor': 0.125,
+             'alignment_steps': [{'deform': {}}]},
+        ],
+    })
+    argv = _base_argv(volumes, tmp_path, config)
+    _run(argv)
+
+    out = tmp_path / 'out' / 'deform.zarr'
+    baseline_composed = ImageData(str(out), 's0', open_image=True).image_array[...]
+    baseline_pass1 = ImageData(str(out), 's0_passes/pass1',
+                               open_image=True).image_array[...]
+    baseline_pass2 = ImageData(str(out), 's0_passes/pass2',
+                               open_image=True).image_array[...]
+
+    contexts = []
+
+    def recording_pipeline(*args, context='', **kwargs):
+        contexts.append(context)
+        return _fake_alignment_pipeline(*args, context=context, **kwargs)
+
+    monkeypatch.setattr(da, 'alignment_pipeline', recording_pipeline)
+
+    _run(argv + ['--resume-from-pass', '2'])
+
+    assert contexts and all(not c.startswith('pass1') for c in contexts)
+    assert any(c.startswith('pass2') for c in contexts)
+
+    resumed_composed = ImageData(str(out), 's0', open_image=True).image_array[...]
+    resumed_pass1 = ImageData(str(out), 's0_passes/pass1',
+                              open_image=True).image_array[...]
+    resumed_pass2 = ImageData(str(out), 's0_passes/pass2',
+                              open_image=True).image_array[...]
+    assert np.array_equal(resumed_pass1, baseline_pass1)
+    assert np.allclose(resumed_pass2, baseline_pass2)
+    assert np.allclose(resumed_composed, baseline_composed)
+
+
+def test_resume_from_pass_beyond_configured_passes_is_ignored(
+        volumes, tmp_path, in_process_cluster, monkeypatch):
+    """A resume target with nothing to resume from just runs everything."""
+    config = _write_config(tmp_path, {
+        'processing_size': [16, 16, 16],
+        'processing_halo_factor': 0.25,
+        'alignment_passes': [
+            {'processing_offset': [0, 0, 0],
+             'alignment_steps': [{'deform': {}}]},
+            {'processing_offset': [4, 4, 4],
+             'processing_halo_factor': 0.125,
+             'alignment_steps': [{'deform': {}}]},
+        ],
+    })
+    argv = _base_argv(volumes, tmp_path, config)
+
+    contexts = []
+
+    def recording_pipeline(*args, context='', **kwargs):
+        contexts.append(context)
+        return _fake_alignment_pipeline(*args, context=context, **kwargs)
+
+    monkeypatch.setattr(da, 'alignment_pipeline', recording_pipeline)
+
+    _run(argv + ['--resume-from-pass', '9'])
+
+    assert any(c.startswith('pass1') for c in contexts)
+    assert any(c.startswith('pass2') for c in contexts)
+
+
 def test_only_the_deformation_field_is_produced(volumes, tmp_path,
                                                 in_process_cluster):
     """

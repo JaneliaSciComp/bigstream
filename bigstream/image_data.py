@@ -87,11 +87,12 @@ class ImageData:
     @property
     def shape(self):
         if self.image_attrs:
-            return self._shape_from_attrs(self.image_attrs)               
-        elif self.image_ndarray is not None:
+            attrs_shape = self._shape_from_attrs(self.image_attrs)
+            if attrs_shape:
+                return attrs_shape
+        if self.image_ndarray is not None:
             return self.image_ndarray.shape
-        else:
-            return ()
+        return ()
     
     def _shape_from_attrs(self, attrs):
         if attrs.get('dimensions'):

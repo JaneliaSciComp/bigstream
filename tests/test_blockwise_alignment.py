@@ -426,6 +426,78 @@ def test_block_context_names_the_pass_as_well_as_the_block(cluster_client,
     assert len(set(seen_contexts)) == len(seen_contexts)
 
 
+def test_each_pass_logs_its_own_completion(cluster_client,
+                                           synthetic_volumes,
+                                           monkeypatch, caplog):
+    """
+    A pass is the unit a run is read in, so each one has to close itself
+    out: the start line alone leaves a reader unable to tell a slow pass
+    from a hung one, or which pass a later failure came after.
+    """
+    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
+    fix_image, mov_image = synthetic_volumes
+    shape = tuple(fix_image.spatial_dims)
+    spacing = np.array([1.0, 1.0, 1.0])
+
+    output = np.zeros(shape + (3,), dtype=np.float32)
+    with caplog.at_level(logging.INFO, logger='bigstream.distributed_align'):
+        assert blockwise_alignment_pipeline(
+            fix_image, spacing, mov_image, spacing,
+            [AlignmentPass(alignment_steps=[('deform', {})], name='coarse'),
+             AlignmentPass(alignment_steps=[('deform', {})])],
+            cluster_client,
+            processing_size=(16, 16, 16),
+            processing_halo_factor=0.25,
+            output_transform=output,
+            pass_output_factory=lambda i, s: np.zeros(s, dtype=np.float32),
+        )
+
+    done = [r.getMessage() for r in caplog.records
+            if 'completed in' in r.getMessage()]
+    assert len(done) == 2
+    assert done[0].startswith('--- coarse (1/2) completed in')
+    assert done[1].startswith('--- pass2 (2/2) completed in')
+    assert all(r.levelno == logging.INFO for r in caplog.records
+               if 'completed in' in r.getMessage())
+
+
+def test_a_failed_pass_says_so_at_error_level(cluster_client,
+                                              synthetic_volumes,
+                                              monkeypatch, caplog):
+    """
+    A pass that loses blocks does not stop the run - later passes still
+    cascade from its partial field - so the only record that anything went
+    wrong is this line. It has to be findable.
+    """
+    # patched at the pass boundary rather than by failing a block: a block
+    # that *raises* propagates out of `_collect_results` and kills the run
+    # (`as_completed(raise_errors=True)`), so the only way a pass returns
+    # False today is a cancelled future - a worker that died. This stands in
+    # for that without needing to kill a worker.
+    monkeypatch.setattr(da, '_run_alignment_pass',
+                        lambda *a, **k: False)
+    fix_image, mov_image = synthetic_volumes
+    shape = tuple(fix_image.spatial_dims)
+    spacing = np.array([1.0, 1.0, 1.0])
+
+    output = np.zeros(shape + (3,), dtype=np.float32)
+    with caplog.at_level(logging.INFO, logger='bigstream.distributed_align'):
+        ok = blockwise_alignment_pipeline(
+            fix_image, spacing, mov_image, spacing,
+            [AlignmentPass(alignment_steps=[('deform', {})], name='coarse')],
+            cluster_client,
+            processing_size=(16, 16, 16),
+            processing_halo_factor=0.25,
+            output_transform=output,
+        )
+    assert not ok
+
+    failed = [r for r in caplog.records if 'FAILED' in r.getMessage()]
+    assert len(failed) == 1
+    assert failed[0].levelno == logging.ERROR
+    assert failed[0].getMessage().startswith('--- coarse (1/1) FAILED in')
+
+
 def test_per_block_log_lines_all_name_the_pass(cluster_client,
                                                synthetic_volumes,
                                                monkeypatch, caplog):

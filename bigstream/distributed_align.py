@@ -446,6 +446,7 @@ def blockwise_alignment_pipeline(
             f'transforms, steps {[s[0] for s in alignment_pass.alignment_steps]}'
         ))
 
+        pass_start = time.time()
         pass_ok = _run_alignment_pass(
             alignment_pass,
             fix_image,
@@ -471,6 +472,19 @@ def blockwise_alignment_pipeline(
             error_if_displacement_check_fails=error_if_displacement_check_fails,
             label=label,
         )
+        # a failed pass does not stop the run - later passes still have
+        # something to cascade from - so say so at a level that survives a
+        # log read, and say which pass it was
+        logger.log(
+            logging.INFO if pass_ok else logging.ERROR,
+            f'--- {label} ({pass_index + 1}/{npasses}) '
+            f'{"completed" if pass_ok else "FAILED"} in '
+            f'{time.time() - pass_start:.1f}s'
+            + ('' if pass_ok else ' - some blocks did not align; its field '
+                                  'is incomplete and every later pass '
+                                  'cascades from it')
+        )
+
         result = result and pass_ok
         if pass_output is not None:
             pass_fields.append(pass_output)

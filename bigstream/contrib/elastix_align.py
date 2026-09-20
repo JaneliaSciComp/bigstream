@@ -84,6 +84,8 @@ def elastix_affine_align(
     mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
+    fix_background=None,
+    mov_background=None,
     static_transform_list=[],
     default=None,
     final_metric_check=True,
@@ -102,9 +104,9 @@ def elastix_affine_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, background=fix_background, roi=fix_roi)
     logger.debug(f'{context} Realized fix mask shape {fix_mask.shape if fix_mask is not None else None}')
-    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile, background=mov_background)
     logger.debug(f'{context} Realized mov mask shape {mov_mask.shape if mov_mask is not None else None}')
 
     # skip-sample and convert to SITK images (images_to_sitk casts to float32)
@@ -300,6 +302,8 @@ def elastix_deformable_align(
     mov_mask_percentile=None,
     fix_origin=None,
     mov_origin=None,
+    fix_background=None,
+    mov_background=None,
     static_transform_list=[],
     default=None,
     final_metric_check=True,
@@ -323,8 +327,8 @@ def elastix_deformable_align(
     static_transform_origin = b
 
     # realize masks
-    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, roi=fix_roi)
-    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile)
+    fix_mask = realize_mask(fix, fix_mask, mask_percentile=fix_mask_percentile, background=fix_background, roi=fix_roi)
+    mov_mask = realize_mask(mov, mov_mask, mask_percentile=mov_mask_percentile, background=mov_background)
 
     # skip-sample and convert to SITK images (images_to_sitk casts to float32)
     X = apply_alignment_spacing(

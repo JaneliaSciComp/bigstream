@@ -80,7 +80,8 @@ import bigstream.utility as ut
 from .align import alignment_pipeline, _phys_roi_to_voxel
 from .align_constraints import (DEFAULT_K, blend_safe_displacement_bound,
                                 neighbor_disagreement_bound)
-from .diagnostics import deform_field_diagnostics
+from .diagnostics import (deform_field_diagnostics,
+                          log_deform_field_diagnostics)
 from .distutils import ThrottledArraySliceReader
 from .image_data import (ImageData, as_image_data)
 from .transform import apply_transform_to_coordinates
@@ -549,7 +550,7 @@ def blockwise_alignment_pipeline(
             ids, coords = _tile_volume(fix_spatial_dims, tile)
             _display_displacement_diagnostics(
                 deformfield_final_result, ids, coords, fix_spatial_spacing,
-                context='composed multi-pass field')
+                cluster_client, context='composed multi-pass field')
 
     logger.info(f'Blockwise alignment completed (ok={result})')
     return result
@@ -725,7 +726,7 @@ def _run_alignment_pass(alignment_pass,
     if output_transform is not None and run_displacement_diagnostics:
         _display_displacement_diagnostics(output_transform, blocks_ids,
                                           blocks_coords, fix_spatial_spacing,
-                                          context=label)
+                                          cluster_client, context=label)
     return result
 
 
@@ -817,6 +818,7 @@ def _collect_results(futures, context=''):
 
 def _display_displacement_diagnostics(output_transform, blocks_ids,
                                       blocks_coords, fix_spacing,
+                                      cluster_client,
                                       context='assembled field'):
     """
     Single diagnostic sweep over a fully-assembled displacement field.
@@ -828,20 +830,40 @@ def _display_displacement_diagnostics(output_transform, blocks_ids,
     added its weighted contribution.
 
     Region by region rather than all at once because an assembled field is
-    far too large to hold in the client at production sizes.
+    far too large to hold in the client at production sizes - and one task
+    per region, on the cluster, because the jacobian determinant is
+    expensive enough that sweeping a production field serially in the client
+    is the slowest thing left in a run.
+
+    Each task returns only `deform_field_diagnostics`' scalar summary, a few
+    hundred bytes, so what comes back through the scheduler is negligible
+    next to the region it was computed from. The reporting happens here, in
+    submission order, so the log reads the same as the serial sweep did.
     """
     logger.info(f'Compute displacement diagnostics for {len(blocks_coords)} '
                 f'regions of the {context}')
-    for block_index, block_coords in zip(blocks_ids, blocks_coords):
+
+    def region_diagnostics(region):
+        block_index, block_coords = region
         try:
-            output_block = output_transform[block_coords]
-            deform_field_diagnostics(
-                output_block, fix_spacing,
-                context=f'{context} {block_index} diagnostics',
-            )
+            return (block_index, block_coords,
+                    deform_field_diagnostics(output_transform[block_coords],
+                                             fix_spacing),
+                    None)
         except Exception as e:
+            # a diagnostic must never take the run down with it - report the
+            # region that failed and carry on with the rest
+            return block_index, block_coords, None, f'{type(e).__name__}: {e}'
+
+    regions = list(zip(blocks_ids, blocks_coords))
+    futures = cluster_client.map(region_diagnostics, regions, pure=False)
+    for block_index, block_coords, stats, error in cluster_client.gather(futures):
+        if error is not None:
             logger.error(f'Error computing diagnostics for {context} '
-                         f'region {block_index} at {block_coords}: {e}')
+                         f'region {block_index} at {block_coords}: {error}')
+        else:
+            log_deform_field_diagnostics(
+                stats, context=f'{context} {block_index} diagnostics')
 
 
 def _tile_volume(shape, tile):
@@ -1438,12 +1460,16 @@ def _align_block(compute_transform_params,
         else:
             #  if it's a displacement field validate it
             # debug only: this is the block's own field, before blending,
-            # so a fold here is not yet a fold in the result
-            deform_field_diagnostics(
-                transform, fix_spacing,
-                context=f'{block_context} block displacement diagnostics',
-                level=logging.DEBUG,
-            )
+            # so a fold here is not yet a fold in the result. Guarded rather
+            # than left to the log level, because the diagnostics compute
+            # unconditionally now and the jacobian determinant is one of the
+            # largest allocations in a block's alignment
+            if logger.isEnabledFor(logging.DEBUG):
+                deform_field_diagnostics(
+                    transform, fix_spacing,
+                    context=f'{block_context} block displacement diagnostics',
+                    level=logging.DEBUG,
+                )
 
     # Finished computing transformation for current block_index
     logger.info((

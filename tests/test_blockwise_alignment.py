@@ -17,6 +17,7 @@ import logging
 import re
 
 from contextlib import contextmanager
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -1245,8 +1246,10 @@ class _DiagnosticsRecorder(logging.Handler):
         super().__init__()
         self.sweeps = []
         self.blocks = 0
+        self.records = []
 
     def emit(self, record):
+        self.records.append(record)
         message = record.getMessage()
         if 'Compute displacement diagnostics for' in message:
             self.sweeps.append(message.split('regions of the ')[-1])
@@ -1324,6 +1327,55 @@ def test_per_block_diagnostics_are_debug_only_and_mode_independent(
     assert at_debug.blocks > 0
     # the mode governs whole-field sweeps only
     assert at_info.sweeps == at_debug.sweeps
+
+
+def test_the_field_sweep_runs_on_the_cluster(cluster_client):
+    """
+    Every region is a cluster task, not a client-side loop.
+
+    The jacobian determinant is the expensive part of a sweep, and on a
+    production field there are many regions of it, so this is the whole
+    reason the sweep is distributed. Asserted by counting what was
+    submitted - one task per region - rather than by timing it.
+    """
+    shape = (32, 32, 32)
+    field = np.zeros(shape + (3,), dtype=np.float32)
+    field[..., 0] = np.linspace(0, 1, shape[0], dtype=np.float32)[:, None, None]
+
+    ids, coords = da._tile_volume(shape, (16, 16, 16))
+    assert len(ids) == 8
+
+    submitted = []
+    real_map = cluster_client.map
+
+    def counting_map(fn, items, **kwargs):
+        submitted.append(len(items))
+        return real_map(fn, items, **kwargs)
+
+    with mock.patch.object(cluster_client, 'map', counting_map):
+        da._display_displacement_diagnostics(
+            field, ids, coords, np.array([1.0, 1.0, 1.0]),
+            cluster_client, context='swept field')
+
+    assert submitted == [len(ids)]
+
+
+def test_a_failing_region_is_reported_without_sinking_the_sweep(cluster_client):
+    """A diagnostic is never worth failing a run over."""
+    shape = (16, 16, 16)
+    field = np.zeros(shape + (3,), dtype=np.float32)
+    ids, coords = da._tile_volume(shape, (8, 8, 8))
+
+    boom = mock.Mock(side_effect=ValueError('no jacobian for you'))
+    with mock.patch.object(da, 'deform_field_diagnostics', boom):
+        with _recording_logs(logging.INFO) as recorder:
+            da._display_displacement_diagnostics(
+                field, ids, coords, np.array([1.0, 1.0, 1.0]),
+                cluster_client, context='doomed field')
+
+    errors = [r for r in recorder.records if r.levelno == logging.ERROR]
+    assert len(errors) == len(ids)
+    assert 'no jacobian for you' in errors[0].getMessage()
 
 
 def test_diagnostics_mode_accepts_the_enum_and_any_case():

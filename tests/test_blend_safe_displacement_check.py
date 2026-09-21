@@ -12,8 +12,12 @@ is the real regression from a run that folded with affine.max_displacement=16
 and deform.max_displacement=16 simultaneously configured, on a lattice whose
 actual ceiling is ~16.68 - individually compliant, together not even close.
 """
+import re
+
 import numpy as np
 import pytest
+
+import bigstream.distributed_align as da
 
 from bigstream.distributed_align import _check_blend_safe_displacement
 from bigstream.align_constraints import blend_safe_displacement_bound
@@ -174,3 +178,39 @@ def test_no_headroom_suggestion_is_also_ramp_aware(caplog):
     suggested = blend_safe_displacement_bound(
         OVERLAPS, SPACING, k_max / 2.0, min_jacobian=0.1, blend_ramp='cosine')
     assert any(f'{suggested:.4g}' in r.message for r in caplog.records)
+
+
+def test_remedy_inverts_the_same_bound_the_check_applied():
+    """
+    The remedy has to clear the ceiling it is answering. It inverts the
+    bound, so it needs the gain too - computed for a linear ramp it
+    understates the overlap a cosine run needs by `pi/2`, and following it
+    would leave the config still over the ceiling.
+    """
+    wanted = SHARED_CEILING * 0.9
+    suggested = {}
+    for ramp in ('linear', 'cosine'):
+        remedy = da._blend_remedy(wanted, BLOCK_SIZE, OVERLAPS, SPACING,
+                                  DEFORM_K, blend_ramp=ramp)
+        suggested[ramp] = float(
+            re.search(r'raise overlap_factor to ~([0-9.]+)', remedy).group(1))
+
+    assert suggested['cosine'] / suggested['linear'] == pytest.approx(
+        np.pi / 2, rel=0.02)
+
+    # and the suggested overlap actually lands on the cosine ceiling. The
+    # message rounds the factor to 2dp and prefixes it "~", so allow that
+    # slack - what is being checked is that the advice is derived from the
+    # cosine bound, not that it is exact to the last voxel.
+    halo = np.round(BLOCK_SIZE * suggested['cosine']).astype(int)
+    reached = blend_safe_displacement_bound(
+        halo, SPACING, DEFORM_K, min_jacobian=0.1, blend_ramp='cosine')
+    assert reached == pytest.approx(wanted, rel=0.02)
+
+
+def test_remedy_default_is_unchanged_for_linear():
+    """Existing callers pass no ramp and must get the advice they always got."""
+    wanted = SHARED_CEILING * 0.9
+    assert (da._blend_remedy(wanted, BLOCK_SIZE, OVERLAPS, SPACING, DEFORM_K)
+            == da._blend_remedy(wanted, BLOCK_SIZE, OVERLAPS, SPACING,
+                                DEFORM_K, blend_ramp='linear'))

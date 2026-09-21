@@ -600,8 +600,19 @@ def _update_dataset_attrs(root_container, dataset,
 
 
 def _to_native_type(obj):
+    """
+    Recursively convert numpy types to plain Python, so attrs are JSON-safe.
+
+    Attributes end up as JSON in the group's `zarr.json`/`.zattrs`, and
+    anything numpy left in them raises at write time - i.e. *after* the work
+    that produced the array. Arrays are handled as well as scalars because
+    recorded provenance (voxel spacing, step arguments) can carry either.
+    """
     if isinstance(obj, np.generic):
         return obj.item()
+
+    if isinstance(obj, np.ndarray):
+        return _to_native_type(obj.tolist())
 
     if isinstance(obj, (list, tuple)):
         return [_to_native_type(x) for x in obj]
@@ -766,10 +777,14 @@ def prepare_parent_group_attrs(container_path,
         Group attributes ready to be written via ``parent.attrs.update(...)``.
     """
 
-    # case of no relevant metadata
+    # Nothing to build NGFF multiscales metadata *from*. The caller's own
+    # attributes still stand: `more_attrs` carries provenance (which steps
+    # ran, with which arguments, over which ROI) that has nothing to do with
+    # whether the source image had OME axes, and dropping it here silently
+    # produced fields with no record of how they were made.
     if ((dataset_transformations is None or dataset_transformations == []) and
         axes is None):
-        return {}
+        return dict(more_attrs)
 
     # identify which dataset in the container we're creating attributes for
     if dataset_path:

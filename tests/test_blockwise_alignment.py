@@ -25,8 +25,7 @@ import yaml
 
 import bigstream.distributed_align as da
 
-from bigstream.align_constraints import (blend_safe_displacement_bound,
-                                         neighbor_disagreement_bound)
+from bigstream.align_constraints import blend_safe_displacement_bound
 from bigstream.distutils import validate_processing_block_size
 from bigstream.distributed_align import (
     AlignmentPass,
@@ -836,65 +835,6 @@ def test_compose_reproduces_the_analytic_composition():
     interior = (slice(2, -2),) * 3
     np.testing.assert_allclose(output[interior], expected[interior],
                                rtol=1e-4, atol=1e-5)
-
-
-# --------------------------------------------------------------------------
-# the neighbour disagreement bound
-# --------------------------------------------------------------------------
-
-
-def test_delta_bound_is_twice_the_displacement_bound():
-    """
-    The two bounds must stay in lockstep: the amplitude ceiling is derived by
-    substituting the worst case `delta <= 2U` into the disagreement bound, so
-    if they ever drift apart one of them is wrong.
-    """
-    halo = np.array([8, 8, 8])
-    spacing = np.array([1.0, 1.0, 1.0])
-    for k in (0.05, 0.1, 0.32):
-        assert neighbor_disagreement_bound(halo, spacing, k) == pytest.approx(
-            2.0 * blend_safe_displacement_bound(halo, spacing, k))
-
-
-@pytest.mark.parametrize('ramp', ['linear', 'cosine'])
-def test_delta_bound_carries_the_ramp_through(ramp):
-    """
-    The disagreement bound has no production caller, but it is the documented
-    reference number for how much two neighbours may disagree - so it has to
-    track the same ramp the amplitude ceiling does, or it would be quoting a
-    linear-ramp figure for a cosine run.
-    """
-    halo = np.array([8, 8, 8])
-    spacing = np.array([1.0, 1.0, 1.0])
-    for k in (0.05, 0.1, 0.32):
-        assert (neighbor_disagreement_bound(halo, spacing, k, blend_ramp=ramp)
-                == pytest.approx(2.0 * blend_safe_displacement_bound(
-                    halo, spacing, k, blend_ramp=ramp)))
-    # and cosine is the pi/2 tighter of the two
-    assert (neighbor_disagreement_bound(halo, spacing, 0.1)
-            / neighbor_disagreement_bound(halo, spacing, 0.1,
-                                          blend_ramp='cosine')
-            == pytest.approx(np.pi / 2, rel=1e-9))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # --------------------------------------------------------------------------

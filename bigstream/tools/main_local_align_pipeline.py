@@ -27,7 +27,6 @@ from dask.distributed import (Client, LocalCluster)
 
 import bigstream.io_utility as io_utility
 
-from bigstream.blend_ramp import parse_blend_ramp
 from bigstream.configure_bigstream import (configure_logging,
                                            default_bigstream_config_str)
 from bigstream.configure_dask import (ConfigureWorkerPlugin, load_dask_config)
@@ -534,6 +533,8 @@ def _compute_deform_field(fix_image: ImageData,
         compressor, compressor_opts, zarr_format, sharding_factor,
         foreground_percentage, rebalance_for_missing_neighbors,
         default_blend_ramp,
+        default_processing_size=default_processing_size,
+        default_halo_factor=default_halo_factor,
     )
 
     deformfield = create_field(deformfield_path, deformfield_subpath,
@@ -719,7 +720,9 @@ def _deformfield_factory(fix_image, roi, alignment_passes, chunksize,
                          compressor, compressor_opts, zarr_format,
                          sharding_factor, foreground_percentage,
                          rebalance_for_missing_neighbors,
-                         default_blend_ramp=None):
+                         default_blend_ramp=None,
+                         default_processing_size=None,
+                         default_halo_factor=None):
     """
     Build the maker for a displacement field array on the fixed image grid.
 
@@ -748,18 +751,35 @@ def _deformfield_factory(fix_image, roi, alignment_passes, chunksize,
     output_shards = (tuple(spatial_shard) + (output_chunks[-1],)
                      if spatial_shard is not None else None)
 
+    # Enough to reproduce this field: every pass's geometry and every step's
+    # full argument dict. Recording only the step *names* would say which
+    # algorithms ran but not how they were configured, which is the thing
+    # worth keeping - the arguments are what a later run has to match.
+    #
+    # The geometry recorded is the **resolved** value each pass actually ran
+    # with, not what the config literally said: a pass that inherits a top
+    # level default would otherwise record a null, which reads as "unset"
+    # rather than as the number that was used.
+    resolved_passes = [
+        p.resolved(fix_image.spatial_ndim,
+                   default_processing_size=default_processing_size,
+                   default_halo_factor=default_halo_factor,
+                   default_blend_ramp=default_blend_ramp)
+        for p in alignment_passes
+    ]
     passes_description = [
         {'name': p.name,
          'processing_size': p.processing_size,
          'processing_offset': p.processing_offset,
+         # the factor is kept alongside the voxel count for provenance; it is
+         # None when the halo was configured directly
          'processing_halo_factor': p.processing_halo_factor,
          'processing_halo': p.processing_halo,
-         # the effective shape, not the configured one: a pass that
-         # inherits the default would otherwise record None, and the ramp
-         # is what decides the fold bound the field was written under
-         'blend_ramp': parse_blend_ramp(p.blend_ramp or default_blend_ramp),
-         'steps': [name for name, _ in p.alignment_steps]}
-        for p in alignment_passes
+         'blend_ramp': p.blend_ramp,
+         # single-key mappings, the same shape the config's `alignment_steps`
+         # uses, so this reads back as a config fragment
+         'steps': [{name: args} for name, args in p.alignment_steps]}
+        for p in resolved_passes
     ]
 
     def create(container_path, subpath, shape):

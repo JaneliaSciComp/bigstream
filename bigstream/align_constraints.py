@@ -53,8 +53,8 @@ from .blend_ramp import DEFAULT_BLEND_RAMP, ramp_gradient_gain
 logger = logging.getLogger(__name__)
 
 
-# sum(k) must be < 1; 0.32 per axis leaves min|J| >= 0.04
-DEFAULT_K = 0.32
+# sum(k) must be < 1; 0.2 per axis leaves min|J| >= 0.4
+DEFAULT_K = 0.2
 
 
 def _as_per_axis(value, ndim, name, allow_zero=False):
@@ -267,8 +267,9 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
     """
     Largest per-component displacement that blockwise blending cannot fold.
 
-    `distributed_align` stitches per-block fields as a weighted sum with
-    linear-ramp weights. The derivative of that sum is
+    `distributed_align` stitches per-block fields as a weighted sum, `w`
+    ramping from 1 on a block's core to 0 across its halo. The derivative of
+    that sum is
 
         d/dr [w*u_A + (1-w)*u_B] = w*u_A' + (1-w)*u_B' + dw/dr * (u_A - u_B)
 
@@ -279,10 +280,32 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
         g = max |dw/dt|     the ramp gradient gain, over the unit ramp
 
     is 1 for the linear ramp the pipeline has always used and `pi/2` for the
-    raised cosine (see `blend_ramp`). With per-component displacements
-    bounded by U the blend raises the effective derivative bound for every
-    component from k_q to k_q + 2*g*U/L. Chun & Fessler's Lemma 2 sums that
-    over all ndim rows of the jacobian:
+    raised cosine (see `blend_ramp`).
+
+    What the blend term actually depends on is the *disagreement*
+
+        delta = |u_A - u_B|     between two overlapping blocks where they
+                                are blended
+
+    for which Lemma 2 would give
+    `delta <= (1 - sum(k) - min_jacobian) * L / (ndim*g)`
+    directly. But a block cannot observe its neighbours, so it has nothing
+    but its own amplitude to bound with, and the worst case `delta <= 2U`
+    has to be substituted. **That substitution is where the factor 2 below
+    comes from, and it is why this ceiling is as tight as it is**: `U`
+    bounds *absolute motion*, which is naturally large - it is the
+    deformation being measured - while `delta` bounds *neighbour
+    disagreement*, which is naturally small, because overlapping blocks see
+    mostly the same tissue. A mechanism that could bound `delta` directly
+    would give the identical fold guarantee at twice the amplitude; the
+    clamp that tried was removed as unsound (see
+    `.claude/plans/multi-pass-blockwise-alignment.md`), leaving this
+    pessimism in place.
+
+    So with per-component displacements bounded by U the blend raises the
+    effective derivative bound for every component from k_q to k_q + 2*g*U/L,
+    and Chun & Fessler's Lemma 2 sums that over all ndim rows of the
+    jacobian:
 
         min|J| >= 1 - sum_q (k_q + 2*g*U/L) = 1 - sum(k) - 2*ndim*g*U/L
 
@@ -340,73 +363,6 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
         return float('inf')
     gain = ramp_gradient_gain(blend_ramp)
     return float(np.min(ramp[ramp > 0]) * headroom / (2.0 * ndim * gain))
-
-
-def neighbor_disagreement_bound(block_overlaps, spacing, k,
-                                min_jacobian=0.1,
-                                blend_ramp=DEFAULT_BLEND_RAMP):
-    """
-    Largest neighbour *disagreement* that blockwise blending cannot fold.
-
-    Same derivation as `blend_safe_displacement_bound`, stopped one step
-    earlier. The quantity the blend term actually depends on is
-
-        delta = |u_A - u_B|     the disagreement between two overlapping
-                                blocks where they are blended
-
-    and Chun & Fessler's Lemma 2 over a ramp of physical length L whose
-    gradient gain is `g` (1 for linear, `pi/2` for cosine) gives
-
-        min|J| >= 1 - sum(k) - ndim*g*delta/L
-        delta  <= (1 - sum(k) - min_jacobian) * L / (ndim*g)
-
-    `blend_safe_displacement_bound` reaches its `U` by substituting the worst
-    case `delta <= 2U`, because a block cannot observe its neighbours and so
-    has nothing but its own amplitude to bound with. That substitution is what
-    makes the amplitude ceiling so tight: `U` bounds *absolute motion*, which
-    is naturally large - it is the deformation being measured - while `delta`
-    bounds *neighbour disagreement*, which is naturally small, because
-    overlapping blocks see mostly the same tissue.
-
-    Bounding `delta` directly would give the identical fold guarantee while
-    leaving absolute displacement free, and this returns what that bound
-    would be. It collapses to `2 * blend_safe_displacement_bound`, as it
-    must.
-
-    Nothing in the pipeline enforces it - the clamp that did was removed (see
-    `.claude/plans/multi-pass-blockwise-alignment.md`). This is kept as the
-    reference number: it tells you how much disagreement a lattice can
-    actually tolerate, which is the figure `blend_safe_displacement_bound`
-    halves to get an amplitude ceiling.
-
-    Parameters
-    ----------
-    block_overlaps : 1d array
-        Per-axis block overlap in voxels (zyx), as used to build the blending
-        weights.
-
-    spacing : 1d array
-        Physical voxel spacing (zyx).
-
-    k : float or 1d array
-        The C4 allowance the deform step is configured with.
-
-    min_jacobian : float (default: 0.1)
-        Jacobian determinant to keep in reserve for the blend.
-
-    blend_ramp : str (default: 'linear')
-        Shape of the blending weight ramp - see `blend_ramp`.
-
-    Returns
-    -------
-    float
-        The bound, as a scalar over the tightest axis. `inf` when there is no
-        overlap to blend across, `0.0` when `k` leaves no headroom at all.
-    """
-    bound = blend_safe_displacement_bound(block_overlaps, spacing, k,
-                                          min_jacobian=min_jacobian,
-                                          blend_ramp=blend_ramp)
-    return bound * 2.0
 
 
 def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,

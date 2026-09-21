@@ -225,6 +225,127 @@ def test_resume_from_pass_beyond_configured_passes_is_ignored(
     assert any(c.startswith('pass2') for c in contexts)
 
 
+# --------------------------------------------------------------------------
+# provenance written onto the field
+#
+# The point is reproducibility: reading the finished field must tell you the
+# exact parameters that produced it. Recording only the step *names* says
+# which algorithms ran but not how they were configured, which is the part a
+# later run has to match.
+# --------------------------------------------------------------------------
+
+
+def _group_attrs(container, subpath=''):
+    zarr = pytest.importorskip('zarr')
+    group = zarr.open_group(str(container), mode='r',
+                            path=subpath) if subpath else zarr.open_group(
+                                str(container), mode='r')
+    return dict(group.attrs)
+
+
+def test_field_records_every_step_argument_not_just_the_step_name(
+        volumes, tmp_path, in_process_cluster):
+    """
+    The regression this restores: `steps` used to be a list of bare names, so
+    a finished field could not tell you the control point spacing, the metric
+    or the C4 allowance it was produced with.
+    """
+    config = _write_config(tmp_path, {
+        'processing_size': [16, 16, 16],
+        'processing_halo_factor': 0.25,
+        'alignment_passes': [
+            {'name': 'coarse',
+             'alignment_steps': [
+                 {'affine': {'alignment_spacing': 4.0, 'metric': 'MMI'}},
+                 {'deform': {'control_point_spacing': 128,
+                             'bspline_constraints': {'k': 0.1}}},
+             ]},
+        ],
+    })
+    _run(_base_argv(volumes, tmp_path, config))
+
+    attrs = _group_attrs(tmp_path / 'out' / 'deform.zarr')
+    passes = attrs['alignment_passes']
+    assert len(passes) == 1
+    assert passes[0]['name'] == 'coarse'
+
+    # single-key mappings, the same shape the config's alignment_steps uses
+    steps = passes[0]['steps']
+    assert [list(s)[0] for s in steps] == ['affine', 'deform']
+
+    affine_args = steps[0]['affine']
+    deform_args = steps[1]['deform']
+    # the values this config set survive verbatim
+    assert affine_args['alignment_spacing'] == 4.0
+    assert affine_args['metric'] == 'MMI'
+    assert deform_args['control_point_spacing'] == 128
+    assert deform_args['bspline_constraints'] == {'k': 0.1}
+    # and so do the bundled per-step defaults layered underneath, because
+    # those are equally part of "what actually ran"
+    assert len(deform_args) > 2
+
+
+def test_field_records_the_resolved_geometry_not_the_configured_nulls(
+        volumes, tmp_path, in_process_cluster):
+    """
+    A pass that inherits a top level default has `processing_size: None` on
+    the unresolved pass. Recording that reads as "unset" rather than as the
+    number that was used, which is useless for reproducing the field.
+    """
+    config = _write_config(tmp_path, {
+        'processing_size': [16, 16, 16],
+        'processing_halo_factor': 0.25,
+        'blend_ramp': 'cosine',
+        'alignment_passes': [
+            {'alignment_steps': [{'deform': {}}]},                  # inherits
+            {'processing_offset': [4, 4, 4],
+             'processing_halo_factor': 0.125,
+             'blend_ramp': 'linear',
+             'alignment_steps': [{'deform': {}}]},                  # overrides
+        ],
+    })
+    _run(_base_argv(volumes, tmp_path, config))
+
+    passes = _group_attrs(tmp_path / 'out' / 'deform.zarr')['alignment_passes']
+    assert len(passes) == 2
+
+    inherited, overridden = passes
+    # inherited, and recorded as the number rather than null
+    assert inherited['processing_size'] == [16, 16, 16]
+    assert inherited['processing_halo'] == [4, 4, 4]      # 0.25 * 16, per side
+    assert inherited['processing_offset'] == [0, 0, 0]
+    assert inherited['blend_ramp'] == 'cosine'
+    # overridden
+    assert overridden['processing_halo'] == [2, 2, 2]     # 0.125 * 16
+    assert overridden['processing_offset'] == [4, 4, 4]
+    assert overridden['blend_ramp'] == 'linear'
+
+
+def test_per_pass_fields_carry_the_same_provenance(
+        volumes, tmp_path, in_process_cluster):
+    """
+    Not essential, but free: the per-pass residual fields are created through
+    the same factory, so they get the same attrs as the composed output.
+    """
+    config = _write_config(tmp_path, {
+        'processing_size': [16, 16, 16],
+        'processing_halo_factor': 0.25,
+        'alignment_passes': [
+            {'alignment_steps': [{'deform': {'control_point_spacing': 32}}]},
+            {'processing_offset': [4, 4, 4],
+             'alignment_steps': [{'deform': {'control_point_spacing': 8}}]},
+        ],
+    })
+    _run(_base_argv(volumes, tmp_path, config))
+
+    out = tmp_path / 'out' / 'deform.zarr'
+    composed = _group_attrs(out)['alignment_passes']
+    per_pass = _group_attrs(out, 's0_passes')['alignment_passes']
+    assert per_pass == composed
+    assert [p['steps'][0]['deform']['control_point_spacing']
+            for p in composed] == [32, 8]
+
+
 def test_only_the_deformation_field_is_produced(volumes, tmp_path,
                                                 in_process_cluster):
     """

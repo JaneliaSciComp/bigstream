@@ -34,6 +34,7 @@ Notations
 
     u        displacement field. `u(x)` is how far the voxel at `x` moves,
              in the same physical units as the voxel spacing.
+    U        max displacement in physical units
     w        per-block blending weight: 1 on a block's core, ramping to 0 at
              its footprint edge. "How much does this block get to vote here."
              Sum over blocks is 1 at every voxel.
@@ -72,7 +73,7 @@ import bigstream.utility as ut
 from .align import alignment_pipeline, _phys_roi_to_voxel
 from .align_constraints import DEFAULT_K, blend_safe_displacement_bound
 from .blend_ramp import (DEFAULT_BLEND_RAMP, blend_ramp_weights,
-                         parse_blend_ramp)
+                         parse_blend_ramp, ramp_gradient_gain)
 from .diagnostics import (deform_field_diagnostics,
                           log_deform_field_diagnostics)
 from .distutils import ThrottledArraySliceReader
@@ -1891,7 +1892,8 @@ def _check_blend_safe_displacement(steps, block_size, block_overlaps,
         )
     elif total_configured > ceiling:
         remedy = _blend_remedy(
-            total_configured, block_size, block_overlaps, fix_spacing, k)
+            total_configured, block_size, block_overlaps, fix_spacing, k,
+            blend_ramp=blend_ramp)
         message = (
             f'configured max_displacement totals {total_configured:.4g} '
             f'across {contributor_names}, which exceeds the blend safe '
@@ -1934,22 +1936,29 @@ def _max_displacement_contributions(steps):
 
 
 def _blend_remedy(wanted, block_size, block_overlaps, spacing, k,
-                  min_jacobian=_BLEND_MIN_JACOBIAN):
+                  min_jacobian=_BLEND_MIN_JACOBIAN,
+                  blend_ramp=DEFAULT_BLEND_RAMP):
     """
     Spell out how to make a displacement bound of `wanted` legal on this lattice.
 
-    The ceiling is `(1 - sum(k) - min_jacobian) * L / (2*ndim)` with
-    `L = (2*overlap - 1) * spacing` the blend ramp length, so there are exactly
-    three levers: shorten the deformation (lower max_displacement), lengthen
-    the ramp (raise overlap_factor), or free jacobian budget (lower k). This
+    The ceiling is `(1 - sum(k) - min_jacobian) * L / (2*ndim*g)` with
+    `L = (2*overlap - 1) * spacing` the blend ramp length and `g` the ramp
+    gradient gain (1 linear, `pi/2` cosine), so there are exactly three
+    levers: shorten the deformation (lower max_displacement), lengthen the
+    ramp (raise overlap_factor), or free jacobian budget (lower k). This
     returns the concrete value each lever would need, so the message says what
     to do rather than only what is wrong.
+
+    This has to invert the *same* bound the check applied, gain included - a
+    remedy computed for a linear ramp understates the overlap a cosine run
+    needs by `pi/2` and would not actually clear the ceiling it is answering.
     """
     size = np.atleast_1d(np.asarray(block_size, dtype=np.float64))
     overlaps = np.atleast_1d(np.asarray(block_overlaps, dtype=np.float64))
     voxel = np.atleast_1d(np.asarray(spacing, dtype=np.float64))
     ndim = overlaps.size
     total_k = _total_k(k, ndim)
+    gain = ramp_gradient_gain(blend_ramp)
 
     ramps = np.maximum(2.0 * overlaps - 1.0, 0.0) * voxel
     axis = int(np.argmin(np.where(ramps > 0, ramps, np.inf)))
@@ -1957,10 +1966,10 @@ def _blend_remedy(wanted, block_size, block_overlaps, spacing, k,
 
     options = [f'lower max_displacement to <= the ceiling']
 
-    # lever 2: a longer ramp. L needed = 2*ndim*wanted / headroom
+    # lever 2: a longer ramp. L needed = 2*ndim*g*wanted / headroom
     headroom = 1.0 - total_k - min_jacobian
     if headroom > 0:
-        needed_ramp = 2.0 * ndim * wanted / headroom
+        needed_ramp = 2.0 * ndim * gain * wanted / headroom
         needed_overlap = (needed_ramp / voxel[axis] + 1.0) / 2.0
         factor = needed_overlap / size[axis]
         if factor <= 0.5:
@@ -1970,8 +1979,8 @@ def _blend_remedy(wanted, block_size, block_overlaps, spacing, k,
                 f'raise overlap_factor (would need ~{factor:.2f}, above the '
                 '0.5 maximum, so this lever alone is not enough)')
 
-    # lever 3: a smaller k. sum(k) needed = 1 - m - 2*ndim*wanted/L
-    needed_total_k = 1.0 - min_jacobian - 2.0 * ndim * wanted / ramp
+    # lever 3: a smaller k. sum(k) needed = 1 - m - 2*ndim*g*wanted/L
+    needed_total_k = 1.0 - min_jacobian - 2.0 * ndim * gain * wanted / ramp
     if needed_total_k > 0:
         options.append(f'lower k to ~{needed_total_k / ndim:.3f}')
     else:

@@ -8,10 +8,7 @@ Implements multi-pass distributed blockwise alignment.
   * a per-pass **lattice offset**, so pass 2's block seams land in pass 1's
     block interiors,
   * a per-pass **halo**, so a pass that fits a smaller residual can reach less
-    far, and
-  * an optional **neighbour consistency clamp**, which bounds how much two
-    overlapping blocks may disagree instead of bounding how far any voxel may
-    move.
+    far.
 
 methods implemented in this module:
 
@@ -25,13 +22,9 @@ methods implemented in this module:
     MAX_WRITE_LOCKS                   default write lock budget
 
 
-Two pieces of the per-block machinery are worth knowing about because they
-are shaped by the multi-pass design rather than by the block loop:
+One piece of the per-block machinery is worth knowing about because it is
+shaped by the multi-pass design rather than by the block loop:
 
-  * `_align_block` and `_write_block_transform` are separate halves of what
-    would naturally be one function, because the neighbour consistency clamp
-    has to interpose between the fit and the write: every block must be
-    aligned, and its summary gathered, before any block writes.
   * `_get_transform_weights` takes explicit `clip_before` / `clip_after`
     amounts rather than deriving the crop from the block's index. An index
     derived crop is only right for a lattice anchored at voxel 0; a lattice
@@ -72,14 +65,14 @@ import numpy as np
 import zarr
 
 from dask.distributed import as_completed, MultiLock
-from scipy.ndimage import gaussian_filter
 
 import bigstream.transform as bst
 import bigstream.utility as ut
 
 from .align import alignment_pipeline, _phys_roi_to_voxel
-from .align_constraints import (DEFAULT_K, blend_safe_displacement_bound,
-                                neighbor_disagreement_bound)
+from .align_constraints import DEFAULT_K, blend_safe_displacement_bound
+from .blend_ramp import (DEFAULT_BLEND_RAMP, blend_ramp_weights,
+                         parse_blend_ramp)
 from .diagnostics import (deform_field_diagnostics,
                           log_deform_field_diagnostics)
 from .distutils import ThrottledArraySliceReader
@@ -122,15 +115,19 @@ class AlignmentPass:
     processing_halo : tuple of int (default: None)
         Halo in voxels, per side. Takes precedence over the factor.
 
-    max_displacement, bspline_constraints, neighbor_consistency
+    blend_ramp : str (default: None)
+        Shape of the overlap-add blending weight ramp, `'linear'` or
+        `'cosine'`. None means "inherit the top level default", which is
+        itself `'linear'` when unset. See `bigstream.blend_ramp`: a cosine
+        ramp has no kink where it meets the block core but is `pi/2` steeper
+        mid-ramp, which tightens the fold-safe displacement ceiling by the
+        same factor.
+
+    max_displacement, bspline_constraints
         Per-pass overrides of the blend-safety budget - see
-        `blockwise_alignment_pipeline`. `max_displacement` and
-        `bspline_constraints` are only used for the *reporting* in
-        `_check_blend_safe_displacement`; the values that actually constrain
-        the fit live in the individual steps' arguments.
-        `neighbor_consistency` is a dict with an optional `delta_max` (the
-        disagreement bound, in physical units) and `sigma` (the normalized
-        convolution width, in lattice nodes).
+        `blockwise_alignment_pipeline`. Both are only used for the
+        *reporting* in `_check_blend_safe_displacement`; the values that
+        actually constrain the fit live in the individual steps' arguments.
     """
 
     alignment_steps: List[Tuple[str, dict]] = field(default_factory=list)
@@ -138,13 +135,13 @@ class AlignmentPass:
     processing_offset: Optional[Tuple[int, ...]] = None
     processing_halo_factor: Optional[Tuple[float, ...]|float] = None
     processing_halo: Optional[Tuple[int, ...]] = None
-    neighbor_consistency: Optional[dict] = None
+    blend_ramp: Optional[str] = None
     name: Optional[str] = None
 
     def resolved(self, ndim,
                  default_processing_size=None,
                  default_halo_factor=None,
-                 default_neighbor_consistency=None):
+                 default_blend_ramp=None):
         """
         A copy with every geometric field filled in as a length-`ndim` tuple.
 
@@ -190,8 +187,10 @@ class AlignmentPass:
                 'leaves no ramp to blend over'
             )
 
-        consistency = {**(default_neighbor_consistency or {}),
-                       **(self.neighbor_consistency or {})}
+        # raises on an unknown name; a typo here would otherwise silently
+        # blend with one ramp and bound the displacement with another
+        ramp = parse_blend_ramp(
+            _first_not_none(self.blend_ramp, default_blend_ramp))
 
         return AlignmentPass(
             alignment_steps=list(self.alignment_steps),
@@ -199,7 +198,7 @@ class AlignmentPass:
             processing_offset=offset,
             processing_halo_factor=self.processing_halo_factor,
             processing_halo=halo,
-            neighbor_consistency=consistency or None,
+            blend_ramp=ramp,
             name=self.name,
         )
 
@@ -272,7 +271,7 @@ def blockwise_alignment_pipeline(
     cluster_client,
     processing_size=None,
     processing_halo_factor=None,
-    neighbor_consistency=None,
+    blend_ramp=None,
     fix_mask=None,
     mov_mask=None,
     roi: Optional[Sequence[float]] = None,
@@ -330,17 +329,11 @@ def blockwise_alignment_pipeline(
         Default per-side halo fraction for passes that do not set their own.
         Same meaning as the old single-pass pipeline's `overlap_factor`.
 
-    neighbor_consistency : dict (default: None)
-        Default `{'delta_max': ..., 'sigma': ...}` for passes that do not set
-        their own. `delta_max` bounds how far two overlapping blocks may
-        disagree, in the same physical units as the spacing; `'auto'` derives
-        it from the pass's lattice with `neighbor_disagreement_bound`. Leaving
-        this unset disables the clamp entirely and each pass runs as a single
-        stage, which is the behaviour the old single-pass pipeline had.
-
-        Enabling it makes each pass two stages, and the per-block fields stay
-        resident in the cluster between them - budget for roughly one block
-        footprint of `float32` vectors per concurrently held block.
+    blend_ramp : str (default: None)
+        Default blending ramp shape for passes that do not set their own,
+        `'linear'` or `'cosine'`. None is `'linear'`, which reproduces every
+        field computed before this was configurable, bit for bit. See
+        `bigstream.blend_ramp` for what the choice costs.
 
     roi : sequence of float (default: None)
         Registration ROI on the fixed image, physical coordinates, zyx
@@ -419,7 +412,7 @@ def blockwise_alignment_pipeline(
         p.resolved(spatial_ndim,
                    default_processing_size=processing_size,
                    default_halo_factor=processing_halo_factor,
-                   default_neighbor_consistency=neighbor_consistency)
+                   default_blend_ramp=blend_ramp)
         for p in alignment_passes
     ]
 
@@ -483,7 +476,8 @@ def blockwise_alignment_pipeline(
             f'--- {label} ({pass_index + 1}/{npasses}): block size '
             f'{alignment_pass.processing_size}, offset '
             f'{alignment_pass.processing_offset}, halo '
-            f'{alignment_pass.processing_halo}, '
+            f'{alignment_pass.processing_halo}, {alignment_pass.blend_ramp} '
+            'blend ramp, '
             f'{len(static_transform_list) + len(pass_fields)} static '
             f'transforms, steps {[s[0] for s in alignment_pass.alignment_steps]}'
         ))
@@ -608,10 +602,8 @@ def _run_alignment_pass(alignment_pass,
     steps = [(name, args) for name, args in alignment_pass.alignment_steps]
     _check_blend_safe_displacement(
         steps, block_size, halo, fix_spatial_spacing,
+        blend_ramp=alignment_pass.blend_ramp,
         error_when_check_fails=error_if_displacement_check_fails)
-
-    delta_max, sigma = _resolve_neighbor_consistency(
-        alignment_pass, halo, fix_spatial_spacing, label)
 
     # Decided once, here, and handed to every block: what a writer has to
     # lock depends on the output's write unit, and all writers must agree
@@ -684,11 +676,7 @@ def _run_alignment_pass(alignment_pass,
                             align_steps=steps,
                             pass_label=label)
 
-    def write_method(aligned_block, estimate=None):
-        if estimate is not None:
-            aligned_block = _clamp_block_to_neighbors(
-                aligned_block, estimate=estimate, delta_max=delta_max,
-                pass_label=label)
+    def write_method(aligned_block):
         block_index = aligned_block[0]
         clip_before, clip_after = lattice.clip_amounts(block_index)
         return _write_block_transform(
@@ -698,6 +686,7 @@ def _run_alignment_pass(alignment_pass,
             nblocks=nblocks,
             output_transform=output_transform,
             rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
+            blend_ramp=alignment_pass.blend_ramp,
             clip_before=clip_before,
             clip_after=clip_after,
             lock_grid=lock_grid,
@@ -710,18 +699,12 @@ def _run_alignment_pass(alignment_pass,
 
     partitions = _partition(blocks_infos, max_cluster_jobs)
 
-    if delta_max is None:
-        result = True
-        for part_index, part in enumerate(partitions):
-            logger.info(f'{label}: process partition {part_index} '
-                        f'({len(part)} blocks)')
-            futures = cluster_client.map(align_and_write_method, part,
-                                         pure=False)
-            result = _collect_results(futures, context=label) and result
-    else:
-        result = _run_two_stage(cluster_client, partitions, lattice,
-                                align_method, write_method, delta_max, sigma,
-                                label)
+    result = True
+    for part_index, part in enumerate(partitions):
+        logger.info(f'{label}: process partition {part_index} '
+                    f'({len(part)} blocks)')
+        futures = cluster_client.map(align_and_write_method, part, pure=False)
+        result = _collect_results(futures, context=label) and result
 
     if output_transform is not None and run_displacement_diagnostics:
         _display_displacement_diagnostics(output_transform, blocks_ids,
@@ -735,53 +718,6 @@ def _partition(items, max_cluster_jobs):
         return [items[i:i + max_cluster_jobs]
                 for i in range(0, len(items), max_cluster_jobs)]
     return [items]
-
-
-def _run_two_stage(cluster_client, partitions, lattice, align_method,
-                   write_method, delta_max, sigma, label):
-    """
-    The neighbour-consistency variant of a pass, in two stages.
-
-    A block cannot see its neighbours' fields - blocks run independently and
-    in parallel - and clamping the already blended field would constrain the
-    wrong quantity. So stage 1 aligns every block and emits a handful of
-    floats summarizing its field; those are cheap enough to gather for the
-    whole lattice. Stage 2 builds the neighbour estimate from that lattice and
-    lets each block clamp its own field against it before writing.
-
-    The stage 1 results stay on their workers as futures between the stages;
-    nothing but the summaries crosses the wire.
-    """
-    aligned_futures = []
-    for part_index, part in enumerate(partitions):
-        logger.info(f'{label}: align partition {part_index} '
-                    f'({len(part)} blocks)')
-        aligned_futures.extend(
-            cluster_client.map(align_method, part, pure=False))
-
-    def summarize(aligned_block):
-        return _block_summary(aligned_block,
-                              lattice.core_within_footprint(aligned_block[0]),
-                              pass_label=label)
-
-    summary_futures = cluster_client.map(summarize, aligned_futures,
-                                         pure=False)
-    summaries = {index: (mean, conf)
-                 for index, mean, conf in cluster_client.gather(summary_futures)}
-    estimate = _neighborhood_estimate(lattice, summaries, sigma=sigma)
-
-    result = True
-    step = max(len(partitions[0]), 1)
-    for offset in range(0, len(aligned_futures), step):
-        chunk = aligned_futures[offset:offset + step]
-        futures = cluster_client.map(write_method, chunk, estimate=estimate,
-                                     pure=False)
-        result = _collect_results(futures, context=label) and result
-        # the stage 1 fields are the memory hog of this path - let each chunk
-        # go as soon as it has been written rather than at the end of the pass
-        for future in chunk:
-            future.release()
-    return result
 
 
 def _collect_results(futures, context=''):
@@ -998,19 +934,6 @@ class _BlockLattice:
         core = self.core_slices(index)
         return tuple(slice(c.start - f.start, c.stop - f.start)
                      for c, f in zip(core, footprint))
-
-    def node_geometry(self):
-        """
-        Where the lattice nodes sit, for the neighbour-consistency estimate.
-
-        One node per block, at the centre of its (unclipped) core, so nodes
-        are uniformly spaced by `B` and a block index maps to a node index
-        one-to-one. Returns `(origin, step)` in volume voxel coordinates.
-        """
-        origin = np.array([self.starts[a][0] + self.block_size[a] / 2.0 - 0.5
-                           for a in range(self.ndim)])
-        return origin, np.array(self.block_size, dtype=float)
-
 
 def _axis_block_starts(extent, block_size, offset):
     """
@@ -1397,11 +1320,7 @@ def _align_block(compute_transform_params,
     Returns `(block_index, block_coords, block_neighbors, transform)` where
     `transform` is the block's own displacement field, before any blending
     weight is applied. A block that could not be aligned returns a zero
-    field, which `_is_abstaining_block` reads as an abstention.
-
-    Kept separate from `_write_block_transform` because the neighbour
-    consistency clamp has to interpose between the two: every block must be
-    aligned, and its summary gathered, before any block writes.
+    field.
     """
     start_time = time.time()
     ((block_index,
@@ -1487,6 +1406,7 @@ def _write_block_transform(aligned_block,
                            nblocks=None,
                            output_transform=None,
                            rebalance_for_missing_neighbors=True,
+                           blend_ramp=None,
                            clip_before=None,
                            clip_after=None,
                            lock_grid=None,
@@ -1519,6 +1439,7 @@ def _write_block_transform(aligned_block,
                                      block_neighbors,
                                      nblocks,
                                      rebalance_for_missing_neighbors,
+                                     blend_ramp=blend_ramp,
                                      clip_before=clip_before,
                                      clip_after=clip_after,
                                      pass_label=pass_label)
@@ -1566,16 +1487,22 @@ def _get_transform_weights(block_index,
                            block_neighbors,
                            nblocks,
                            rebalance_for_missing_neighbors,
+                           blend_ramp=None,
                            clip_before=None,
                            clip_after=None,
                            pass_label=''):
     """
     The blending weight array `w` for one block, shaped like the block footprint.
 
-    `w` is 1 on the block core and ramps linearly to 0 over the last
-    `2*overlap` voxels of each face, so that two adjacent blocks' weights sum
-    to exactly 1 everywhere they overlap (the partition of unity the
-    overlap-add stitch depends on).
+    `w` is 1 on the block core and ramps to 0 over the last `2*overlap`
+    voxels of each face, so that two adjacent blocks' weights sum to exactly
+    1 everywhere they overlap (the partition of unity the overlap-add stitch
+    depends on).
+
+    blend_ramp : str (default: None)
+        Shape of that ramp, `'linear'` (the default) or `'cosine'`. See
+        `bigstream.blend_ramp`; `'linear'` is bit-identical to the
+        `np.pad(..., mode='linear_ramp')` this used to call directly.
 
     clip_before, clip_after : per axis voxel counts (default: None)
         How much of the block's *nominal* footprint falls outside the volume
@@ -1591,7 +1518,7 @@ def _get_transform_weights(block_index,
     # create the standard weights array
     core = tuple(max(x - 2*y + 2, 0) for x, y in zip(block_size, block_overlaps))
     pad = tuple((max(2*y - 1, 0), max(2*y - 1, 0)) for y in block_overlaps)
-    weights = np.pad(np.ones(core, dtype=np.float64), pad, mode='linear_ramp')
+    weights = blend_ramp_weights(core, pad, blend_ramp)
 
     # A neighbor can be absent for two reasons and they need opposite handling.
     #
@@ -1605,7 +1532,7 @@ def _get_transform_weights(block_index,
     #     voxel and then step to zero, which folds the stitched field in a
     #     block aligned sheet along the mask boundary - outside the mask, where
     #     the deformation was never constrained by any image data. Keeping the
-    #     linear ramp instead fades this block's deformation to identity as it
+    #     ramp instead fades this block's deformation to identity as it
     #     reaches into the unaligned region.
     edge_neighbors, unaligned_neighbors = [], []
     for neighbor, flag in block_neighbors.items():
@@ -1830,231 +1757,18 @@ def _log_write_locking(output_array, lock_grid, ndim, region_size, context):
     ))
 
 
-# -------------------------------------------------------------------------
-# block confidence and the neighbour consistency clamp
-# -------------------------------------------------------------------------
 
 
-def _resolve_neighbor_consistency(alignment_pass, halo, spacing, label):
-    """`(delta_max, sigma)` for a pass, or `(None, None)` when the clamp is off."""
-    settings = alignment_pass.neighbor_consistency or {}
-    delta_max = settings.get('delta_max')
-    if delta_max is None:
-        return None, None
-    sigma = float(settings.get('sigma', 1.0))
-    if isinstance(delta_max, str):
-        if delta_max != 'auto':
-            raise ValueError(
-                f"neighbor_consistency.delta_max must be a number or 'auto', "
-                f'got {delta_max!r}')
-        k = settings.get('k', DEFAULT_K)
-        delta_max = neighbor_disagreement_bound(
-            halo, spacing, k,
-            min_jacobian=settings.get('min_jacobian', _BLEND_MIN_JACOBIAN))
-        logger.info((
-            f'{label}: derived neighbor_consistency.delta_max={delta_max:.4g} '
-            f'from halo {tuple(halo)}, spacing {tuple(spacing)}, k={k}'
-        ))
-    delta_max = float(delta_max)
-    if delta_max <= 0:
-        raise ValueError(
-            f'{label}: neighbor_consistency.delta_max must be positive, got '
-            f'{delta_max}; a k that leaves no jacobian headroom yields 0 and '
-            'must be lowered instead'
-        )
-    logger.info(f'{label}: clamping neighbour disagreement to {delta_max:.4g} '
-                f'(sigma={sigma} lattice nodes)')
-    return delta_max, sigma
 
 
-def _block_summary(aligned_block, core_slices, pass_label=''):
-    """
-    The few floats per block that the neighbour estimate is built from.
-
-    Returns `(mean_displacement, confidence)`: the block's mean displacement
-    over its **core** (the territory it owns, excluding halo, so neighbouring
-    summaries describe disjoint tissue), and 1.0 unless the block abstained.
-    Gathering one of these per block is cheap enough to do for the whole
-    lattice, which is what makes a genuinely global neighbour estimate
-    affordable without moving any field off its worker.
-    """
-    block_index, _, _, transform = aligned_block
-    if _is_abstaining_block(transform):
-        logger.info(f'Block {_block_context(pass_label, block_index)} '
-                    'abstains (zero field)')
-        return block_index, np.zeros(transform.shape[-1]), 0.0
-    core = transform[core_slices]
-    mean = np.asarray(core, dtype=np.float64).reshape(-1, transform.shape[-1])
-    return block_index, mean.mean(axis=0), 1.0
 
 
-def _is_abstaining_block(transform):
-    """
-    True when a block produced no displacement at all.
-
-    Every align function returns its `default` - an identity affine or a zero
-    field - when it fails its metric check, has too few point matches, or
-    raises; `_align_block` does the same when a block has no data. Next to
-    neighbours carrying real displacement, writing that zero *maximises*
-    `delta`, manufacturing exactly the fold the failure check was meant to
-    avoid. A block in that state should abstain and let its neighbours fill
-    in, which is what the clamp below does with it.
-
-    An exactly-zero field is the only signal available here: the align
-    functions do not report a confidence, so this cannot distinguish "failed"
-    from "correctly found zero displacement". That is harmless - a block that
-    genuinely needs zero displacement in a neighbourhood that also moved by
-    nothing gets the same zero back from the estimate.
-    """
-    return not np.any(transform)
 
 
-def _neighborhood_estimate(lattice, summaries, sigma=1.0):
-    """
-    Normalized convolution of the summary lattice.
-
-    `summaries` is `{block_index: (mean_displacement, confidence)}`; blocks
-    that were never submitted (masked out, outside the ROI) are simply absent
-    and count as zero confidence.
-
-    `sigma` is in **lattice nodes**, not voxels - sigma 1.0 means "average
-    over roughly the immediate neighbours". Larger values make the estimate
-    stiffer and the clamp more aggressive.
-    """
-    ndim = lattice.ndim
-    nblocks = lattice.nblocks
-    values = np.zeros(nblocks + (ndim,), dtype=np.float64)
-    confidence = np.zeros(nblocks, dtype=np.float64)
-    for index, (mean, conf) in summaries.items():
-        values[index] = mean
-        confidence[index] = conf
-
-    weighted = values * confidence[..., None]
-    denominator = gaussian_filter(confidence, sigma, mode='nearest')
-    numerator = np.stack(
-        [gaussian_filter(weighted[..., q], sigma, mode='nearest')
-         for q in range(ndim)], axis=-1)
-    safe = denominator > 1e-9
-    nodes = np.zeros_like(values)
-    nodes[safe] = numerator[safe] / denominator[safe, None]
-
-    origin, step = lattice.node_geometry()
-    logger.info((
-        f'Neighbourhood estimate over a {nblocks} lattice: '
-        f'{int(confidence.sum())}/{confidence.size} confident blocks, '
-        f'sigma={sigma} nodes, node displacement range '
-        f'[{nodes.min():.4g}, {nodes.max():.4g}]'
-    ))
-    return _NeighborhoodEstimate(nodes=nodes, confidence=confidence,
-                                node_origin=origin, node_step=step)
 
 
-@dataclass
-class _NeighborhoodEstimate:
-    """
-    A smooth, globally defined displacement field reconstructed from the
-    per-block summary lattice - the "what do the neighbours think" reference
-    that every block clamps toward.
-
-    Built by **normalized convolution**: a Gaussian blur of `value*confidence`
-    divided by the same blur of `confidence`. Zero-confidence nodes therefore
-    contribute nothing and are filled in from whatever confident nodes are
-    nearby, rather than dragging the estimate toward zero. This is the
-    reconstruction the block-matching reference uses for its whole field; here
-    it is used only for the summary lattice, so the per-block fit is still
-    what produces the actual deformation.
-
-    Because the estimate is one global field, clamping every block to within
-    `delta_max/2` of it bounds any two overlapping blocks' disagreement by
-    `delta_max` - which is the property the fold bound in
-    `neighbor_disagreement_bound` needs.
-    """
-
-    nodes: np.ndarray        # nblocks + (ndim,), physical displacement units
-    confidence: np.ndarray   # nblocks
-    node_origin: np.ndarray  # volume voxel coords of node (0, 0, 0)
-    node_step: np.ndarray    # voxels between nodes = the block size
-
-    def interpolate(self, block_coords):
-        """
-        Evaluate the estimate on one block's voxel grid.
-
-        Tensor-product linear interpolation, accumulated corner by corner so
-        the only full-size arrays alive are the output and one temporary -
-        a block footprint can be a couple of GB and `meshgrid` over it is not
-        affordable.
-        """
-        ndim = self.nodes.shape[-1]
-        shape = tuple(s.stop - s.start for s in block_coords)
-        base, frac = [], []
-        for a, s in enumerate(block_coords):
-            n = self.nodes.shape[a]
-            t = (np.arange(s.start, s.stop, dtype=np.float64)
-                 - self.node_origin[a]) / self.node_step[a]
-            t = np.clip(t, 0.0, max(n - 1, 0))
-            i0 = np.clip(np.floor(t).astype(int), 0, max(n - 2, 0))
-            base.append(i0)
-            frac.append((t - i0) if n > 1 else np.zeros_like(t))
-
-        out = np.zeros(shape + (ndim,), dtype=np.float32)
-        for corner in product((0, 1), repeat=ndim):
-            weight = None
-            selectors = []
-            for a, c in enumerate(corner):
-                n = self.nodes.shape[a]
-                selectors.append(np.minimum(base[a] + c, n - 1))
-                w = frac[a] if c else (1.0 - frac[a])
-                w = w.astype(np.float32).reshape(
-                    [-1 if b == a else 1 for b in range(ndim)])
-                weight = w if weight is None else weight * w
-            if not np.any(weight):
-                continue
-            out += self.nodes[np.ix_(*selectors)].astype(np.float32) \
-                * weight[..., None]
-        return out
 
 
-def _clamp_block_to_neighbors(aligned_block, estimate=None, delta_max=None,
-                              pass_label=''):
-    """
-    Clamp one block's field toward the neighbourhood estimate.
-
-    For a block that produced a field:
-
-        u'(x) = M(x) + clip(u(x) - M(x), -delta_max/2, +delta_max/2)
-
-    so two overlapping blocks, both clamped to within `delta_max/2` of the
-    *same* `M`, can disagree by at most `delta_max`. That is the quantity the
-    fold bound actually depends on; absolute displacement stays unconstrained,
-    which is the whole point of preferring this to a `max_displacement` cap.
-
-    For a block that abstained, `u' = M` outright: it adopts its neighbours'
-    consensus instead of asserting a zero displacement it has no evidence for.
-    """
-    block_index, block_coords, block_neighbors, transform = aligned_block
-    if estimate is None or delta_max is None or not np.isfinite(delta_max):
-        return aligned_block
-    block_context = _block_context(pass_label, block_index)
-
-    reference = estimate.interpolate(block_coords)
-    if _is_abstaining_block(transform):
-        logger.info((
-            f'Block {block_context} abstained; inpainting from the '
-            'neighbourhood estimate'
-        ))
-        return block_index, block_coords, block_neighbors, reference
-
-    deviation = transform - reference
-    excess = float(np.abs(deviation).max())
-    half = delta_max / 2.0
-    np.clip(deviation, -half, half, out=deviation)
-    deviation += reference
-    logger.info((
-        f'Block {block_context} deviation from the neighbourhood estimate: '
-        f'max {excess:.4g}, clamped to {half:.4g} '
-        f'({"clamped" if excess > half else "already within bound"})'
-    ))
-    return block_index, block_coords, block_neighbors, deviation
 
 
 # -------------------------------------------------------------------------
@@ -2070,6 +1784,7 @@ _BLEND_MIN_JACOBIAN = 0.1
 
 def _check_blend_safe_displacement(steps, block_size, block_overlaps,
                                    fix_spacing,
+                                   blend_ramp=DEFAULT_BLEND_RAMP,
                                    error_when_check_fails=False):
     """
     Warn when the configured displacement bounds are too loose for this lattice.
@@ -2095,6 +1810,10 @@ def _check_blend_safe_displacement(steps, block_size, block_overlaps,
     depends on something this function cannot know - whether the configured
     bound reflects a real deformation the data needs, or is simply too loose -
     so it gives the numbers for all of them rather than picking one.
+
+    `blend_ramp` must be the ramp the pass actually blends with: a cosine
+    ramp is `pi/2` steeper mid-ramp and lowers every ceiling reported here by
+    that factor.
     """
     ndim = len(np.atleast_1d(block_overlaps))
 
@@ -2122,6 +1841,7 @@ def _check_blend_safe_displacement(steps, block_size, block_overlaps,
         k = 1e-12
     ceiling = blend_safe_displacement_bound(
         block_overlaps, fix_spacing, k, min_jacobian=_BLEND_MIN_JACOBIAN,
+        blend_ramp=blend_ramp,
     )
     total_configured = sum(
         float(np.max(np.atleast_1d(bound))) for _, bound in contributions)
@@ -2138,7 +1858,7 @@ def _check_blend_safe_displacement(steps, block_size, block_overlaps,
         suggested_k = k_max / 2.0
         suggested_ceiling = blend_safe_displacement_bound(
             block_overlaps, fix_spacing, suggested_k,
-            min_jacobian=_BLEND_MIN_JACOBIAN,
+            min_jacobian=_BLEND_MIN_JACOBIAN, blend_ramp=blend_ramp,
         )
         message = (
             f"'{constrained_step_name}' bspline_constraints k={k} leaves no "
@@ -2394,6 +2114,7 @@ def alignment_passes_from_config(config, context='local_align'):
         local_align:
             processing_size: [384, 384, 384]        # default for every pass
             processing_halo_factor: 0.2             # default for every pass
+            blend_ramp: cosine                      # default for every pass
             alignment_passes:
                 - processing_offset: [0, 0, 0]
                   processing_halo_factor: [0.2, 0.2, 0.2]
@@ -2402,6 +2123,7 @@ def alignment_passes_from_config(config, context='local_align'):
                     - deform: {...}
                 - processing_offset: [96, 96, 96]
                   processing_halo_factor: [0.1, 0.1, 0.1]
+                  blend_ramp: linear                # per-pass override
                   alignment_steps:
                     - deform: {...}
 
@@ -2434,7 +2156,7 @@ def alignment_passes_from_config(config, context='local_align'):
             processing_offset=spec.get('processing_offset'),
             processing_halo_factor=spec.get('processing_halo_factor'),
             processing_halo=spec.get('processing_halo'),
-            neighbor_consistency=spec.get('neighbor_consistency'),
+            blend_ramp=spec.get('blend_ramp'),
             name=spec.get('name', f'pass{i + 1}'),
         ))
     return passes
@@ -2442,8 +2164,7 @@ def alignment_passes_from_config(config, context='local_align'):
 
 def default_pass_geometry_from_config(config, context='local_align'):
     """
-    The top level per-pass defaults: `(processing_size, halo_factor,
-    neighbor_consistency)`.
+    The top level per-pass defaults: `(processing_size, halo_factor)`.
 
     `processing_halo_factor` and the pre-existing `block_overlap` /
     `overlap_factor` mean the same thing (a per-side fraction of the block
@@ -2457,7 +2178,23 @@ def default_pass_geometry_from_config(config, context='local_align'):
     )
     size = _first_not_none(context_config.get('processing_size'),
                            context_config.get('block_size'))
-    return size, halo_factor, context_config.get('neighbor_consistency')
+    return size, halo_factor
+
+
+def default_blend_ramp_from_config(config, context='local_align'):
+    """
+    The top level `blend_ramp`, for passes that do not set their own.
+
+    Kept separate from `default_pass_geometry_from_config` rather than added
+    to its tuple: the ramp is not lattice geometry, and widening that return
+    would break its call sites for a value most of them do not want.
+
+    Returns the configured name unvalidated, or `None` when unset -
+    `AlignmentPass.resolved` is where an unknown name is refused, so a pass
+    that overrides it never has to care what the default was.
+    """
+    context_config = config.get(context) or {}
+    return context_config.get('blend_ramp')
 
 
 def alignment_steps_from_config(steps_spec, step_defaults=None):

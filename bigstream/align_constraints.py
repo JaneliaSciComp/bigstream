@@ -47,6 +47,8 @@ from itertools import product
 import numpy as np
 import SimpleITK as sitk
 
+from .blend_ramp import DEFAULT_BLEND_RAMP, ramp_gradient_gain
+
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +262,8 @@ def chun_fessler_penalty(coefficients, knot_spacing, k=DEFAULT_K, K=None):
 
 
 def blend_safe_displacement_bound(block_overlaps, spacing, k,
-                                  min_jacobian=0.1):
+                                  min_jacobian=0.1,
+                                  blend_ramp=DEFAULT_BLEND_RAMP):
     """
     Largest per-component displacement that blockwise blending cannot fold.
 
@@ -271,16 +274,25 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
 
     and the last term is bounded by nothing in C4 - two individually compliant
     blocks that disagree strongly still fold where they are blended. Over a
-    linear ramp of physical length L the weight gradient is 1/L, so with
-    per-component displacements bounded by U the blend raises the effective
-    derivative bound for every component from k_q to k_q + 2U/L. Chun &
-    Fessler's Lemma 2 sums that over all ndim rows of the jacobian:
+    ramp of physical length L the weight gradient peaks at `g/L`, where
 
-        min|J| >= 1 - sum_q (k_q + 2U/L) = 1 - sum(k) - 2*ndim*U/L
+        g = max |dw/dt|     the ramp gradient gain, over the unit ramp
+
+    is 1 for the linear ramp the pipeline has always used and `pi/2` for the
+    raised cosine (see `blend_ramp`). With per-component displacements
+    bounded by U the blend raises the effective derivative bound for every
+    component from k_q to k_q + 2*g*U/L. Chun & Fessler's Lemma 2 sums that
+    over all ndim rows of the jacobian:
+
+        min|J| >= 1 - sum_q (k_q + 2*g*U/L) = 1 - sum(k) - 2*ndim*g*U/L
 
     so
 
-        U <= (1 - sum(k) - min_jacobian) * L / (2*ndim)
+        U <= (1 - sum(k) - min_jacobian) * L / (2*ndim*g)
+
+    A cosine ramp therefore buys its smoother ramp ends with 1/(pi/2) = 64%
+    of the linear ramp's amplitude ceiling at the same halo. `linear` leaves
+    the divisor at 1 and every previously computed bound unchanged.
 
     The `ndim` factor is easy to drop - every row picks up its own blend term,
     not just one. Omitting it yields a bound that permits folding: measured on
@@ -305,6 +317,10 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
     min_jacobian : float (default: 0.1)
         Jacobian determinant to keep in reserve for the blend.
 
+    blend_ramp : str (default: 'linear')
+        Shape of the blending weight ramp, `'linear'` or `'cosine'`. Must be
+        the shape the run actually blends with - see `blend_ramp`.
+
     Returns
     -------
     float
@@ -318,15 +334,17 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
     headroom = 1.0 - _as_per_axis(k, ndim, 'k').sum() - float(min_jacobian)
     if headroom <= 0:
         return 0.0
-    # the blending weights ramp linearly over 2*overlap - 1 voxels per axis
+    # the blending weights ramp over 2*overlap - 1 voxels per axis
     ramp = np.maximum(2.0 * overlaps - 1.0, 0.0) * voxel
     if not np.any(ramp > 0):
         return float('inf')
-    return float(np.min(ramp[ramp > 0]) * headroom / (2.0 * ndim))
+    gain = ramp_gradient_gain(blend_ramp)
+    return float(np.min(ramp[ramp > 0]) * headroom / (2.0 * ndim * gain))
 
 
 def neighbor_disagreement_bound(block_overlaps, spacing, k,
-                                min_jacobian=0.1):
+                                min_jacobian=0.1,
+                                blend_ramp=DEFAULT_BLEND_RAMP):
     """
     Largest neighbour *disagreement* that blockwise blending cannot fold.
 
@@ -336,10 +354,11 @@ def neighbor_disagreement_bound(block_overlaps, spacing, k,
         delta = |u_A - u_B|     the disagreement between two overlapping
                                 blocks where they are blended
 
-    and Chun & Fessler's Lemma 2 over a ramp of physical length L gives
+    and Chun & Fessler's Lemma 2 over a ramp of physical length L whose
+    gradient gain is `g` (1 for linear, `pi/2` for cosine) gives
 
-        min|J| >= 1 - sum(k) - ndim*delta/L
-        delta  <= (1 - sum(k) - min_jacobian) * L / ndim
+        min|J| >= 1 - sum(k) - ndim*g*delta/L
+        delta  <= (1 - sum(k) - min_jacobian) * L / (ndim*g)
 
     `blend_safe_displacement_bound` reaches its `U` by substituting the worst
     case `delta <= 2U`, because a block cannot observe its neighbours and so
@@ -349,11 +368,16 @@ def neighbor_disagreement_bound(block_overlaps, spacing, k,
     bounds *neighbour disagreement*, which is naturally small, because
     overlapping blocks see mostly the same tissue.
 
-    Bounding `delta` directly (see `blockwise_alignment_pipeline`'s
-    `delta_max`, which clamps every block toward a shared neighbourhood
-    estimate) gives the identical fold guarantee while leaving absolute
-    displacement free. It collapses to `2 * blend_safe_displacement_bound`, as
-    it must.
+    Bounding `delta` directly would give the identical fold guarantee while
+    leaving absolute displacement free, and this returns what that bound
+    would be. It collapses to `2 * blend_safe_displacement_bound`, as it
+    must.
+
+    Nothing in the pipeline enforces it - the clamp that did was removed (see
+    `.claude/plans/multi-pass-blockwise-alignment.md`). This is kept as the
+    reference number: it tells you how much disagreement a lattice can
+    actually tolerate, which is the figure `blend_safe_displacement_bound`
+    halves to get an amplitude ceiling.
 
     Parameters
     ----------
@@ -370,6 +394,9 @@ def neighbor_disagreement_bound(block_overlaps, spacing, k,
     min_jacobian : float (default: 0.1)
         Jacobian determinant to keep in reserve for the blend.
 
+    blend_ramp : str (default: 'linear')
+        Shape of the blending weight ramp - see `blend_ramp`.
+
     Returns
     -------
     float
@@ -377,7 +404,8 @@ def neighbor_disagreement_bound(block_overlaps, spacing, k,
         overlap to blend across, `0.0` when `k` leaves no headroom at all.
     """
     bound = blend_safe_displacement_bound(block_overlaps, spacing, k,
-                                          min_jacobian=min_jacobian)
+                                          min_jacobian=min_jacobian,
+                                          blend_ramp=blend_ramp)
     return bound * 2.0
 
 

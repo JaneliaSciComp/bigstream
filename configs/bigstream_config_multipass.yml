@@ -97,18 +97,11 @@ local_align:
     processing_size: [256,256,256]
     processing_halo_factor: 0.4
     processing_offset: [0, 0, 0]
-
-    # Bound on how much two overlapping blocks may disagree, in the same
-    # physical units as the voxel spacing (expansion corrected). This replaces
-    # capping max_displacement: 'U' bounds absolute motion, which is the
-    # deformation being measured and naturally large, while delta bounds
-    # neighbour disagreement, which is naturally small because overlapping
-    # blocks see mostly the same tissue. Both give the same fold guarantee.
-    # 'auto' derives it from each pass's own halo/spacing.
-    # Omit the whole section to disable the clamp.
-    # neighbor_consistency:
-    #     delta_max: auto
-    #     sigma: 1.0    # normalized convolution width, in lattice nodes
+    # shape of the blending weight ramp across the halo: linear (default) or
+    # cosine. Cosine has no kink where the ramp meets the block core, but is
+    # pi/2 steeper mid-ramp and lowers the fold-safe max_displacement ceiling
+    # by that factor. A pass may override it.
+    # blend_ramp: cosine
 
     alignment_passes:
         # pass 1 - coarse: full halo (0.2), inherits the default block size

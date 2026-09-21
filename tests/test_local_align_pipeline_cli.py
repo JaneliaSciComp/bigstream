@@ -19,7 +19,8 @@ import bigstream.distributed_align as da
 import bigstream.io_utility as io_utility
 import bigstream.tools.main_local_align_pipeline as cli
 
-from bigstream.distributed_align import default_pass_geometry_from_config
+from bigstream.distributed_align import (default_blend_ramp_from_config,
+                                         default_pass_geometry_from_config)
 from bigstream.image_data import ImageData
 
 sys.path.insert(0, str(__import__('pathlib').Path(__file__).parent))
@@ -433,11 +434,9 @@ def _geometry_for(tmp_path, user_config):
 
 
 def test_bundled_defaults_supply_the_pass_geometry(tmp_path):
-    size, halo_factor, consistency = _geometry_for(tmp_path, {})
+    size, halo_factor = _geometry_for(tmp_path, {})
     assert size == [128, 128, 128]
     assert halo_factor == 0.5
-    # the neighbour clamp is off unless a config asks for it
-    assert consistency is None
 
 
 @pytest.mark.parametrize('user_config,expected', [
@@ -458,8 +457,26 @@ def test_either_spelling_of_the_geometry_survives_the_default_merge(
     `block_size` would be silently overridden by the default
     `processing_size`.
     """
-    size, halo_factor, _ = _geometry_for(tmp_path, {'local_align': user_config})
+    size, halo_factor = _geometry_for(tmp_path, {'local_align': user_config})
     assert (size, halo_factor) == expected
+
+
+def test_bundled_defaults_leave_the_blend_ramp_unset(tmp_path):
+    """
+    The bundled config must not set `blend_ramp`, or every run would silently
+    switch ramp - and, through the fold bound, every run's displacement
+    ceiling. Unset is linear, which is what the pipeline has always done.
+    """
+    path = tmp_path / 'c.yml'
+    path.write_text(yaml.safe_dump({}))
+    assert default_blend_ramp_from_config(cli._load_align_config(str(path))) is None
+
+
+def test_configured_blend_ramp_survives_the_default_merge(tmp_path):
+    path = tmp_path / 'c.yml'
+    path.write_text(yaml.safe_dump({'local_align': {'blend_ramp': 'cosine'}}))
+    assert (default_blend_ramp_from_config(cli._load_align_config(str(path)))
+            == 'cosine')
 
 
 def test_the_documented_alignment_passes_shape_parses(tmp_path):

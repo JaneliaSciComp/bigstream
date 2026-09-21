@@ -116,13 +116,6 @@ deform: &deform_args
   #  Prefer a small k with a larger max_displacement over the reverse: k=0.1
   #  still guarantees min|J| >= 0.7 per block, and spends the freed jacobian
   #  budget on amplitude, which is what actually binds.
-  #
-  #  Better still, do not cap amplitude at all: see
-  #  local_align.neighbor_consistency below. That ceiling is only this tight
-  #  because a block cannot see its neighbours, so the bound has to assume
-  #  the worst case disagreement 2*max_displacement. What actually folds the
-  #  stitch is the disagreement, not the amplitude, and bounding it directly
-  #  gives the identical guarantee while leaving amplitude free.
   # max_displacement: 16
 
 elastix_deform: &elastix_deform_args
@@ -164,6 +157,13 @@ local_align:
   #                  halo is where it blends into its neighbours. Also
   #                  spelled `processing_halo_factor` (or `overlap_factor`),
   #                  which wins if both are present.
+  #   blend_ramp     shape of the blending weight ramp across that halo,
+  #                  `linear` (default) or `cosine`. Cosine has no kink where
+  #                  the ramp meets the block core, but is pi/2 steeper
+  #                  mid-ramp, which lowers the fold-safe max_displacement
+  #                  ceiling by that same factor - see blend_ramp.py and
+  #                  blend_safe_displacement_bound. Leave it unset unless a
+  #                  seam artefact says otherwise.
   #
   # Nothing requires these to be a multiple of the output chunk or shard:
   # block writes are locked on the write unit, so any block geometry is
@@ -197,36 +197,12 @@ local_align:
   #     processing_offset: [96, 96, 96]
   #     processing_halo_factor: [0.1, 0.1, 0.1]   # a smaller residual needs
   #                                               # less reach
+  #     blend_ramp: cosine                        # per-pass override of the
+  #                                               # top level default
   #     alignment_steps:
   #       - deform: {control_point_spacing: 128}
   #
   # See configs/bigstream_config_prototype.yml for a complete example.
-
-  # Bound on how much two overlapping blocks may DISAGREE, in the same
-  # physical units as the voxel spacing (expansion corrected). Applies to
-  # every pass unless the pass overrides it.
-  #
-  # This is the alternative to capping deform.max_displacement, and the
-  # better one. `max_displacement` bounds absolute motion - naturally large,
-  # it is the deformation being measured. `delta_max` bounds neighbour
-  # disagreement - naturally small, because overlapping blocks see mostly
-  # the same tissue. Both give the same fold guarantee; only the second
-  # leaves the deformation free.
-  #
-  # Each block is clamped to within delta_max/2 of a smooth estimate
-  # reconstructed from the whole lattice, so two overlapping blocks differ
-  # by at most delta_max. A block that failed its metric check contributes
-  # nothing to that estimate and adopts it wholesale, instead of asserting
-  # a zero displacement it has no evidence for.
-  #
-  # Costs: the pass runs in two stages and the per-block fields stay
-  # resident in the cluster between them. Omit the section to disable it.
-  #
-  # neighbor_consistency:
-  #   delta_max: auto   # a number, or 'auto' to derive it from each pass's
-  #                     # own halo and spacing
-  #   sigma: 1.0        # reconstruction width, in lattice nodes
-  #   k: 0.32           # C4 allowance 'auto' assumes; match your deform step
 
   affine:
   #  # optional bound on the per-component displacement this block's affine

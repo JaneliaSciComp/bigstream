@@ -3,7 +3,7 @@ Tests for the multi-pass blockwise alignment pipeline.
 
 Historical note: this file used to carry
 `test_single_pass_matches_distributed_alignment`, which asserted that at one
-pass, a zero lattice offset and no neighbour clamp the pipeline reproduced
+pass and a zero lattice offset the pipeline reproduced
 the older `distributed_alignment_pipeline` bit for bit. That guard passed,
 and the old implementation has since been removed - there is no second
 implementation left to compare against, so the test went with it. What it
@@ -33,17 +33,13 @@ from bigstream.distributed_align import (
     DisplacementDiagnostics,
     blockwise_alignment_pipeline,
     _BlockLattice,
-    _NeighborhoodEstimate,
     alignment_passes_from_config,
     alignment_steps_from_config,
     _axis_block_starts,
-    _block_summary,
-    _clamp_block_to_neighbors,
     _compose_fields_block,
+    default_blend_ramp_from_config,
     default_pass_geometry_from_config,
     _get_transform_weights,
-    _is_abstaining_block,
-    _neighborhood_estimate,
     _lock_cell_keys,
     _overlapping_block_lock_keys,
     _parse_displacement_diagnostics,
@@ -87,7 +83,7 @@ def test_alignment_steps_rejects_multi_key_entries():
 def test_config_parses_into_two_passes():
     with open('tests/configs/bigstream_config.yml') as f:
         config = yaml.safe_load(f)
-    size, halo_factor, _ = default_pass_geometry_from_config(config)
+    size, halo_factor = default_pass_geometry_from_config(config)
     passes = alignment_passes_from_config(config)
 
     assert len(passes) == 2
@@ -124,6 +120,74 @@ def test_config_parses_into_two_passes():
     ]
     assert second_step_configs['affine']['alignment_spacing'] == 1.0
     assert second_step_configs['affine']['optimizer'] == 'RSGD'
+
+
+BLEND_RAMP_CONFIG = """
+local_align:
+    processing_size: [64, 64, 64]
+    processing_halo_factor: 0.25
+    blend_ramp: cosine
+    alignment_passes:
+        - name: coarse
+          alignment_steps: [deform]
+        - name: fine
+          blend_ramp: linear
+          alignment_steps: [deform]
+        - name: explicit_default
+          blend_ramp: cosine
+          alignment_steps: [deform]
+"""
+
+
+def test_blend_ramp_default_and_per_pass_override():
+    """
+    `blend_ramp` mirrors `processing_halo_factor`: a top level default that
+    every pass inherits, and a per-pass override that wins.
+    """
+    config = yaml.safe_load(BLEND_RAMP_CONFIG)
+    default_ramp = default_blend_ramp_from_config(config)
+    assert default_ramp == 'cosine'
+
+    passes = alignment_passes_from_config(config)
+    resolved = [p.resolved(3, default_processing_size=(64, 64, 64),
+                           default_halo_factor=0.25,
+                           default_blend_ramp=default_ramp)
+                for p in passes]
+    assert [p.blend_ramp for p in resolved] == ['cosine', 'linear', 'cosine']
+    # the unresolved passes keep "unset" distinct from "explicitly linear"
+    assert [p.blend_ramp for p in passes] == [None, 'linear', 'cosine']
+
+
+def test_blend_ramp_unset_everywhere_is_linear():
+    config = yaml.safe_load(BLEND_RAMP_CONFIG.replace(
+        '    blend_ramp: cosine\n', '', 1))
+    assert default_blend_ramp_from_config(config) is None
+    resolved = alignment_passes_from_config(config)[0].resolved(
+        3, default_processing_size=(64, 64, 64), default_halo_factor=0.25,
+        default_blend_ramp=default_blend_ramp_from_config(config))
+    assert resolved.blend_ramp == 'linear'
+
+
+def test_blend_ramp_is_linear_in_the_shared_test_config():
+    """The config every other test here uses must stay on the default path."""
+    with open('tests/configs/bigstream_config.yml') as f:
+        config = yaml.safe_load(f)
+    assert default_blend_ramp_from_config(config) is None
+
+
+def test_unknown_blend_ramp_is_refused_when_the_pass_resolves():
+    """
+    Refused at `resolved()`, which is before a single block runs - not
+    silently treated as linear, which would blend with one ramp while the
+    fold ceiling was computed for another.
+    """
+    with pytest.raises(ValueError, match='unsupported blend_ramp'):
+        AlignmentPass(processing_size=(16,) * 3, processing_halo_factor=0.25,
+                      blend_ramp='hann').resolved(3)
+    with pytest.raises(ValueError, match='unsupported blend_ramp'):
+        AlignmentPass(processing_size=(16,) * 3,
+                      processing_halo_factor=0.25).resolved(
+                          3, default_blend_ramp='tukey')
 
 
 def test_pass_without_a_block_size_is_an_error():
@@ -192,13 +256,19 @@ def test_clip_amounts_describe_the_clipped_footprint(offset):
         assert np.all(actual == nominal - before - after)
 
 
+@pytest.mark.parametrize('blend_ramp', [None, 'linear', 'cosine'])
 @pytest.mark.parametrize('offset', [(0, 0, 0), (4, 4, 4), (5, 3, 7)])
-def test_blending_weights_are_a_partition_of_unity(offset):
+def test_blending_weights_are_a_partition_of_unity(offset, blend_ramp):
     """
     Every voxel must receive a total weight of exactly 1, including at the
     volume faces where the missing off-volume neighbour's share is rebalanced
     into the blocks that remain. Without this the stitched field is silently
     scaled down (or up) wherever the sum is off.
+
+    Parametrized over the ramp shape because this is the property the whole
+    overlap-add stitch rests on, and it is not obviously shape-independent:
+    it holds for any `w` with `w(t) + w(1-t) = 1`, and the N-D case follows
+    only because the weights are a separable product of such profiles.
     """
     extent = (40, 44, 48)
     block, halo = (16, 16, 16), (4, 4, 4)
@@ -219,6 +289,7 @@ def test_blending_weights_are_a_partition_of_unity(offset):
         before, after = lattice.clip_amounts(index)
         weights = _get_transform_weights(index, np.array(block), np.array(halo),
                                          neighbors, nblocks, True,
+                                         blend_ramp=blend_ramp,
                                          clip_before=before, clip_after=after)
         total[lattice.footprint_slices(index)] += weights
     np.testing.assert_allclose(total, 1.0, rtol=0, atol=1e-6)
@@ -380,6 +451,72 @@ def test_two_passes_cascade_and_compose(cluster_client, synthetic_volumes,
     interior = (slice(8, -8),) * 3
     total = pass_fields[0][interior] + pass_fields[1][interior]
     assert np.allclose(output[interior], total, atol=0.5)
+
+
+def test_blend_ramp_reaches_the_weight_builder_per_pass(
+        cluster_client, synthetic_volumes, monkeypatch):
+    """
+    The threading test: the ramp configured on a pass has to survive the trip
+    through `_run_alignment_pass` -> the write closure ->
+    `_write_block_transform` -> `_get_transform_weights`. Every link is a
+    keyword with a default, so a dropped one fails silently as "linear".
+    """
+    seen = []
+    real_weights = da._get_transform_weights
+
+    def recording_weights(*args, blend_ramp=None, **kwargs):
+        seen.append(blend_ramp)
+        return real_weights(*args, blend_ramp=blend_ramp, **kwargs)
+
+    monkeypatch.setattr(da, '_get_transform_weights', recording_weights)
+    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
+    fix_image, mov_image = synthetic_volumes
+    spacing = np.array([1.0, 1.0, 1.0])
+
+    assert blockwise_alignment_pipeline(
+        fix_image, spacing, mov_image, spacing,
+        [AlignmentPass(alignment_steps=[('deform', {})], name='a'),
+         AlignmentPass(alignment_steps=[('deform', {})], name='b',
+                       blend_ramp='linear')],
+        cluster_client,
+        processing_size=(16, 16, 16),
+        processing_halo_factor=0.25,
+        blend_ramp='cosine',
+        deformfield_final_result=np.zeros(
+            tuple(fix_image.spatial_dims) + (3,), dtype=np.float32),
+    )
+    # pass 'a' inherits the pipeline default, pass 'b' overrides it; both
+    # appear once per block, and nothing arrives unresolved
+    assert set(seen) == {'cosine', 'linear'}
+    assert None not in seen
+
+
+def test_cosine_pipeline_output_differs_from_linear(
+        cluster_client, synthetic_volumes, monkeypatch):
+    """
+    End to end, the ramp choice has to change the field that reaches the
+    output - and only in the overlaps, since the block cores carry weight 1
+    under either shape.
+    """
+    fix_image, mov_image = synthetic_volumes
+    spacing = np.array([1.0, 1.0, 1.0])
+    shape = tuple(fix_image.spatial_dims)
+
+    def run(ramp):
+        _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
+        output = np.zeros(shape + (3,), dtype=np.float32)
+        assert blockwise_alignment_pipeline(
+            fix_image, spacing, mov_image, spacing,
+            [AlignmentPass(alignment_steps=[('deform', {})])],
+            cluster_client,
+            processing_size=(16, 16, 16), processing_halo_factor=0.25,
+            blend_ramp=ramp, deformfield_final_result=output,
+        )
+        return output
+
+    linear, cosine = run('linear'), run('cosine')
+    assert np.array_equal(linear, run(None))   # unset is linear
+    assert not np.allclose(linear, cosine)
 
 
 def _two_pass_setup(cluster_client, synthetic_volumes, monkeypatch,
@@ -702,7 +839,7 @@ def test_compose_reproduces_the_analytic_composition():
 
 
 # --------------------------------------------------------------------------
-# phase 5 - abstention and the neighbour consistency clamp
+# the neighbour disagreement bound
 # --------------------------------------------------------------------------
 
 
@@ -719,198 +856,45 @@ def test_delta_bound_is_twice_the_displacement_bound():
             2.0 * blend_safe_displacement_bound(halo, spacing, k))
 
 
-def test_zero_field_is_read_as_an_abstention():
-    assert _is_abstaining_block(np.zeros((4, 4, 4, 3), dtype=np.float32))
-    field = np.zeros((4, 4, 4, 3), dtype=np.float32)
-    field[0, 0, 0, 0] = 1e-6
-    assert not _is_abstaining_block(field)
-
-
-def test_block_summary_averages_the_core_only():
-    field = np.zeros((6, 6, 6, 3), dtype=np.float32)
-    core = (slice(2, 4),) * 3
-    field[core] = 5.0
-    field[0] = 100.0  # halo territory another block owns
-    index, mean, confidence = _block_summary(((1, 1, 1), None, None, field),
-                                             core)
-    assert index == (1, 1, 1)
-    assert confidence == 1.0
-    np.testing.assert_allclose(mean, [5.0, 5.0, 5.0])
-
-
-def test_abstaining_block_gets_zero_confidence():
-    field = np.zeros((6, 6, 6, 3), dtype=np.float32)
-    _, mean, confidence = _block_summary(((0, 0, 0), None, None, field),
-                                         (slice(None),) * 3)
-    assert confidence == 0.0
-    np.testing.assert_allclose(mean, np.zeros(3))
-
-
-def test_estimate_inpaints_a_zero_confidence_node():
+@pytest.mark.parametrize('ramp', ['linear', 'cosine'])
+def test_delta_bound_carries_the_ramp_through(ramp):
     """
-    A failed block must not drag the estimate toward zero. Normalized
-    convolution divides out the confidence, so a hole is filled from its
-    neighbours rather than averaged with a zero that nobody measured.
+    The disagreement bound has no production caller, but it is the documented
+    reference number for how much two neighbours may disagree - so it has to
+    track the same ramp the amplitude ceiling does, or it would be quoting a
+    linear-ramp figure for a cosine run.
     """
-    lattice = _BlockLattice((16, 16, 16), (4, 4, 4), (0, 0, 0), (48, 48, 48))
-    summaries = {}
-    for index in lattice.indices():
-        confident = index != (1, 1, 1)
-        summaries[index] = (np.array([3.0, 0.0, 0.0]) if confident
-                            else np.zeros(3), 1.0 if confident else 0.0)
-    estimate = _neighborhood_estimate(lattice, summaries, sigma=1.0)
-    # the hole picks up its neighbours' value, not zero
-    np.testing.assert_allclose(estimate.nodes[1, 1, 1], [3.0, 0.0, 0.0],
-                               rtol=1e-6)
-
-
-def test_clamp_bounds_the_deviation_from_the_estimate():
-    lattice = _BlockLattice((8, 8, 8), (2, 2, 2), (0, 0, 0), (16, 16, 16))
-    summaries = {index: (np.zeros(3), 1.0) for index in lattice.indices()}
-    estimate = _neighborhood_estimate(lattice, summaries)
-
-    coords = (slice(0, 10), slice(0, 10), slice(0, 10))
-    field = np.full((10, 10, 10, 3), 12.0, dtype=np.float32)
-    _, _, _, clamped = _clamp_block_to_neighbors(
-        ((0, 0, 0), coords, {}, field), estimate=estimate, delta_max=4.0)
-    # estimate is zero everywhere, so the field may reach delta_max / 2
-    np.testing.assert_allclose(clamped, 2.0)
-
-
-def test_abstaining_block_adopts_the_estimate_instead_of_zero():
-    lattice = _BlockLattice((8, 8, 8), (2, 2, 2), (0, 0, 0), (16, 16, 16))
-    summaries = {index: (np.array([7.0, 7.0, 7.0]), 1.0)
-                 for index in lattice.indices()}
-    estimate = _neighborhood_estimate(lattice, summaries)
-
-    coords = (slice(0, 10), slice(0, 10), slice(0, 10))
-    field = np.zeros((10, 10, 10, 3), dtype=np.float32)
-    _, _, _, filled = _clamp_block_to_neighbors(
-        ((0, 0, 0), coords, {}, field), estimate=estimate, delta_max=4.0)
-    np.testing.assert_allclose(filled, 7.0, rtol=1e-5)
-
-
-def test_estimate_interpolation_is_exact_at_the_nodes():
-    lattice = _BlockLattice((8, 8, 8), (2, 2, 2), (0, 0, 0), (24, 24, 24))
-    nodes = np.zeros(lattice.nblocks + (3,))
-    nodes[..., 0] = np.arange(np.prod(lattice.nblocks)).reshape(lattice.nblocks)
-    origin, step = lattice.node_geometry()
-    estimate = _NeighborhoodEstimate(nodes=nodes,
-                                    confidence=np.ones(lattice.nblocks),
-                                    node_origin=origin, node_step=step)
-    # node (1, 1, 1) sits at voxel 8 + 3.5 = 11.5 -> sample the two voxels
-    # either side of it and check they bracket the node value
-    sampled = estimate.interpolate((slice(11, 13),) * 3)
-    assert sampled[..., 0].mean() == pytest.approx(nodes[1, 1, 1, 0], abs=1e-5)
-
-
-def test_clamped_blocks_agree_within_delta_max():
-    """
-    The guarantee the whole phase exists for: after clamping, no two
-    overlapping blocks may disagree by more than `delta_max`, however wildly
-    they disagreed before. That holds because every block is clamped to
-    within `delta_max/2` of the *same* global estimate, so the triangle
-    inequality closes - which is why the estimate has to be one field rather
-    than a per-block scalar.
-    """
-    rng = np.random.default_rng(7)
-    lattice = _BlockLattice((16, 16, 16), (4, 4, 4), (0, 0, 0), (48, 48, 48))
-    delta_max = 1.0
-
-    blocks = {}
-    for index in lattice.indices():
-        coords = lattice.footprint_slices(index)
-        shape = tuple(s.stop - s.start for s in coords)
-        # wildly disagreeing blocks: each one a different large constant
-        value = rng.uniform(-50.0, 50.0, size=3).astype(np.float32)
-        blocks[index] = (index, coords, {},
-                         np.broadcast_to(value, shape + (3,)).copy())
-
-    summaries = dict()
-    for index, block in blocks.items():
-        _, mean, confidence = _block_summary(
-            block, lattice.core_within_footprint(index))
-        summaries[index] = (mean, confidence)
-    estimate = _neighborhood_estimate(lattice, summaries, sigma=1.0)
-
-    clamped = {index: _clamp_block_to_neighbors(block, estimate=estimate,
-                                                delta_max=delta_max)
-               for index, block in blocks.items()}
-
-    worst = 0.0
-    indices = sorted(clamped)
-    for a in indices:
-        for b in indices:
-            if a >= b or any(abs(i - j) > 1 for i, j in zip(a, b)):
-                continue
-            _, coords_a, _, field_a = clamped[a]
-            _, coords_b, _, field_b = clamped[b]
-            overlap = tuple(slice(max(x.start, y.start), min(x.stop, y.stop))
-                            for x, y in zip(coords_a, coords_b))
-            if any(s.stop <= s.start for s in overlap):
-                continue
-            sub_a = field_a[tuple(slice(s.start - c.start, s.stop - c.start)
-                                  for s, c in zip(overlap, coords_a))]
-            sub_b = field_b[tuple(slice(s.start - c.start, s.stop - c.start)
-                                  for s, c in zip(overlap, coords_b))]
-            worst = max(worst, float(np.abs(sub_a - sub_b).max()))
-
-    assert worst > 0.0            # the blocks really do still disagree
-    assert worst <= delta_max + 1e-5
-
-
-def test_clamp_smooths_the_assembled_field(cluster_client, synthetic_volumes,
-                                           monkeypatch):
-    """
-    End to end through the cluster: the largest voxel-to-voxel jump in the
-    assembled field *is* delta (the spec's `max jump dx/dy/dz` diagnostic), so
-    turning the clamp on has to bring it down.
-    """
-    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
-    fix_image, mov_image = synthetic_volumes
-    shape = tuple(fix_image.spatial_dims)
+    halo = np.array([8, 8, 8])
     spacing = np.array([1.0, 1.0, 1.0])
-
-    def run(neighbor_consistency):
-        output = np.zeros(shape + (3,), dtype=np.float32)
-        assert blockwise_alignment_pipeline(
-            fix_image, spacing, mov_image, spacing,
-            [AlignmentPass(alignment_steps=[('deform', {})])], cluster_client,
-            processing_size=(16, 16, 16),
-            processing_halo_factor=0.25,
-            neighbor_consistency=neighbor_consistency,
-            deformfield_final_result=output,
-        )
-        return output
-
-    def max_jump(field):
-        return max(float(np.abs(np.diff(field, axis=a)).max())
-                   for a in range(3))
-
-    unclamped = run(None)
-    clamped = run({'delta_max': 0.05})
-    assert np.any(unclamped)
-    assert max_jump(clamped) < max_jump(unclamped)
+    for k in (0.05, 0.1, 0.32):
+        assert (neighbor_disagreement_bound(halo, spacing, k, blend_ramp=ramp)
+                == pytest.approx(2.0 * blend_safe_displacement_bound(
+                    halo, spacing, k, blend_ramp=ramp)))
+    # and cosine is the pi/2 tighter of the two
+    assert (neighbor_disagreement_bound(halo, spacing, 0.1)
+            / neighbor_disagreement_bound(halo, spacing, 0.1,
+                                          blend_ramp='cosine')
+            == pytest.approx(np.pi / 2, rel=1e-9))
 
 
-def test_auto_delta_max_comes_from_the_lattice(cluster_client,
-                                               synthetic_volumes,
-                                               monkeypatch):
-    """`delta_max: auto` must resolve, run, and not blow up on a real pass."""
-    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
-    fix_image, mov_image = synthetic_volumes
-    shape = tuple(fix_image.spatial_dims)
-    spacing = np.array([1.0, 1.0, 1.0])
-    output = np.zeros(shape + (3,), dtype=np.float32)
-    assert blockwise_alignment_pipeline(
-        fix_image, spacing, mov_image, spacing,
-        [AlignmentPass(alignment_steps=[('deform', {})])], cluster_client,
-        processing_size=(16, 16, 16),
-        processing_halo_factor=0.25,
-        neighbor_consistency={'delta_max': 'auto', 'k': 0.1},
-        deformfield_final_result=output,
-    )
-    assert np.all(np.isfinite(output))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # --------------------------------------------------------------------------

@@ -27,6 +27,7 @@ from dask.distributed import (Client, LocalCluster)
 
 import bigstream.io_utility as io_utility
 
+from bigstream.blend_ramp import parse_blend_ramp
 from bigstream.configure_bigstream import (configure_logging,
                                            default_bigstream_config_str)
 from bigstream.configure_dask import (ConfigureWorkerPlugin, load_dask_config)
@@ -37,6 +38,7 @@ from bigstream.distributed_align import (
     alignment_passes_from_config,
     alignment_steps_from_config,
     blockwise_alignment_pipeline,
+    default_blend_ramp_from_config,
     default_pass_geometry_from_config,
 )
 from bigstream.distributed_transform import distributed_apply_transform
@@ -338,8 +340,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
         logger.info('Skip local alignment: no alignment passes and no steps.')
         return True
 
-    default_size, default_halo_factor, default_consistency = \
-        default_pass_geometry_from_config(config)
+    default_size, default_halo_factor = default_pass_geometry_from_config(config)
+    default_blend_ramp = default_blend_ramp_from_config(config)
 
     if reg_args.processing_size:
         # the CLI takes xyz, everything below here is zyx
@@ -430,7 +432,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             alignment_passes,
             default_size,
             default_halo_factor,
-            default_consistency,
+            default_blend_ramp,
             mov_origin_transform,
             static_transforms,
             deformfield_path,
@@ -495,7 +497,7 @@ def _compute_deform_field(fix_image: ImageData,
                           alignment_passes,
                           default_processing_size,
                           default_halo_factor,
-                          default_neighbor_consistency,
+                          default_blend_ramp,
                           mov_origin_transform,
                           static_transforms,
                           deformfield_path,
@@ -531,6 +533,7 @@ def _compute_deform_field(fix_image: ImageData,
         fix_image, roi, alignment_passes, deformfield_chunksize,
         compressor, compressor_opts, zarr_format, sharding_factor,
         foreground_percentage, rebalance_for_missing_neighbors,
+        default_blend_ramp,
     )
 
     deformfield = create_field(deformfield_path, deformfield_subpath,
@@ -567,7 +570,7 @@ def _compute_deform_field(fix_image: ImageData,
         cluster_client,
         processing_size=default_processing_size,
         processing_halo_factor=default_halo_factor,
-        neighbor_consistency=default_neighbor_consistency,
+        blend_ramp=default_blend_ramp,
         fix_mask=fix_mask,
         mov_mask=mov_mask,
         roi=roi,
@@ -715,7 +718,8 @@ def _apply_deform_field(fix_image: ImageData,
 def _deformfield_factory(fix_image, roi, alignment_passes, chunksize,
                          compressor, compressor_opts, zarr_format,
                          sharding_factor, foreground_percentage,
-                         rebalance_for_missing_neighbors):
+                         rebalance_for_missing_neighbors,
+                         default_blend_ramp=None):
     """
     Build the maker for a displacement field array on the fixed image grid.
 
@@ -750,6 +754,10 @@ def _deformfield_factory(fix_image, roi, alignment_passes, chunksize,
          'processing_offset': p.processing_offset,
          'processing_halo_factor': p.processing_halo_factor,
          'processing_halo': p.processing_halo,
+         # the effective shape, not the configured one: a pass that
+         # inherits the default would otherwise record None, and the ramp
+         # is what decides the fold bound the field was written under
+         'blend_ramp': parse_blend_ramp(p.blend_ramp or default_blend_ramp),
          'steps': [name for name, _ in p.alignment_steps]}
         for p in alignment_passes
     ]

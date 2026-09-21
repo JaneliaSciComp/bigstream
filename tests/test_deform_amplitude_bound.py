@@ -299,3 +299,64 @@ def test_blending_folds_only_when_the_amplitude_exceeds_the_ramp(
             f'amplitude {amplitude} within the ramp should not fold, '
             f'got {100*folded:.3f}% min|J|={min_jac}'
         )
+
+
+# --------------------------------------------------------------------------
+# the bound under a non-linear blending ramp
+# --------------------------------------------------------------------------
+
+
+def test_linear_ramp_leaves_the_bound_exactly_unchanged():
+    """
+    The regression guard for making the bound ramp-aware: dividing by a gain
+    of 1.0 must be a no-op, so every existing config keeps the ceiling it
+    had. `==`, not `approx` - this is arithmetic, not a measurement.
+    """
+    overlaps, spacing, k = np.array([102, 102, 102]), np.array([2.181, 1.294, 1.295]), 0.2
+    baseline = blend_safe_displacement_bound(overlaps, spacing, k)
+    assert blend_safe_displacement_bound(
+        overlaps, spacing, k, blend_ramp='linear') == baseline
+
+
+def test_cosine_ramp_tightens_the_bound_by_pi_over_two():
+    """
+    A cosine ramp is `pi/2` steeper at its steepest point, and the bound is
+    derived from exactly that peak gradient, so the ceiling drops by the
+    same factor. This is the cost the shape is chosen against, not a
+    conservative fudge.
+    """
+    overlaps, spacing, k = np.array([64, 64, 64]), np.ones(NDIM), 0.1
+    linear = blend_safe_displacement_bound(overlaps, spacing, k)
+    cosine = blend_safe_displacement_bound(overlaps, spacing, k,
+                                           blend_ramp='cosine')
+    assert linear == pytest.approx(12.700, abs=1e-3)
+    assert cosine == pytest.approx(8.085, abs=1e-3)
+    assert linear / cosine == pytest.approx(np.pi / 2, rel=1e-9)
+
+
+def test_cosine_bound_closed_form():
+    """U <= (1 - sum(k) - m) * L / (2*ndim*g), with g = pi/2."""
+    overlaps = np.array([102, 102, 102])
+    spacing = np.array([2.181, 1.294, 1.295])
+    k, m = 0.2, 0.1
+    L = (2 * 102 - 1) * 1.294               # tightest axis
+    expected = (1 - 3 * k - m) * L / (2 * NDIM * (np.pi / 2))
+    got = blend_safe_displacement_bound(overlaps, spacing, k, min_jacobian=m,
+                                        blend_ramp='cosine')
+    assert got == pytest.approx(expected, rel=1e-9)
+
+
+def test_degenerate_bounds_ignore_the_ramp():
+    """No headroom stays 0 and no overlap stays inf - the gain cannot rescue
+    either, and must not turn `inf` into a nan."""
+    assert blend_safe_displacement_bound(
+        [102, 102, 102], [2.181, 1.294, 1.295], 0.32, min_jacobian=0.1,
+        blend_ramp='cosine') == 0.0
+    assert blend_safe_displacement_bound(
+        [0, 0, 0], [1.0, 1.0, 1.0], 0.2, blend_ramp='cosine') == float('inf')
+
+
+def test_unknown_ramp_is_refused_by_the_bound():
+    with pytest.raises(ValueError, match='unsupported blend_ramp'):
+        blend_safe_displacement_bound([64] * NDIM, np.ones(NDIM), 0.1,
+                                      blend_ramp='hann')

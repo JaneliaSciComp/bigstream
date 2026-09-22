@@ -9,6 +9,7 @@ from dask.distributed import (Client, LocalCluster)
 from bigstream.configure_bigstream import (configure_logging)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
+from bigstream.distributed_io_utility import MAX_WRITE_LOCKS
 from bigstream.distributed_transform import distributed_apply_transform
 from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
@@ -136,8 +137,22 @@ def _define_args():
                              dest='output_blocksize',
                              type=inttuple,
                              help='Output chunk size as a tuple.')
-    args_parser.add_argument('--blocks-overlap-factor',
-                             dest='blocks_overlap_factor',
+    args_parser.add_argument('--processing-size', '--processing_size',
+                             dest='processing_size',
+                             type=inttuple,
+                             default=None,
+                             help='Block partition size in xyz order used to '
+                                  'distribute the warp, e.g. 256,256,128. '
+                                  'Writes are locked per output chunk (or '
+                                  'shard), so this need not line up with '
+                                  'either. Defaults to the shard shape when '
+                                  'sharding is on, else to the output chunk '
+                                  'shape - the size at which no two blocks '
+                                  'share a write unit and the locks never '
+                                  'contend.')
+    args_parser.add_argument('--processing-overlap-factor',
+                             '--blocks-overlap-factor',
+                             dest='processing_overlap_factor',
                              default=0.1,
                              type=float,
                              help='partition overlap when splitting the work - a fractional number between 0 - 1')
@@ -162,6 +177,15 @@ def _define_args():
                              dest='max_concurrent_zarr_reads',
                              type=int, default=0,
                              help='Maximum number of concurrent reads from a zarr array')
+    args_parser.add_argument('--max-write-locks', '--max_write_locks',
+                             dest='max_write_locks',
+                             type=int, default=MAX_WRITE_LOCKS,
+                             help='Largest number of lock names one block '
+                                  'write may hold. Block writes are locked '
+                                  'per output chunk (or shard), so the '
+                                  'processing size need not be a multiple of '
+                                  'either; a block much larger than the chunk '
+                                  'coarsens its lock grid to stay under this.')
     args_parser.add_argument('--compression', '--compressor',
                              dest='compressor',
                              default='zstd',
@@ -187,8 +211,8 @@ def _define_args():
                                   'sharding_factor. When sharding is enabled, '
                                   'the processing block size defaults to the '
                                   'shard shape so each dask task writes a full '
-                                  'shard. Ignored when --output-zarr-format '
-                                  'is not 3.')
+                                  'shard - override it with --processing-size. '
+                                  'Ignored when --output-zarr-format is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -289,14 +313,21 @@ def _run_apply_transform(args):
             args.output_sharding_factor, output_chunk_size, output_zarr_format
         )
 
-        # processing block size: full shard when sharding is on, else output_blocks
-        if output_shard_size is not None:
+        # Processing block size: whatever --processing-size asked for,
+        # else a whole shard when sharding is on, else the chunk. Writes are
+        # locked per write unit, so any block size is safe here - a whole
+        # unit per block is simply the size at which no two blocks share a
+        # unit and the locks never contend.
+        if args.processing_size:
+            processing_blocksize = tuple(args.processing_size[::-1])  # xyz -> zyx
+        elif output_shard_size is not None:
             processing_blocksize = tuple(output_shard_size[-len(output_blocks):])
         else:
             processing_blocksize = tuple(output_blocks)
         logger.info(
             f'Apply-transform processing block size: {processing_blocksize} '
-            f'(output_blocks={output_blocks}, '
+            f'(processing_size={args.processing_size}, '
+            f'output_blocks={output_blocks}, '
             f'output_shard_size={output_shard_size})'
         )
 
@@ -363,15 +394,16 @@ def _run_apply_transform(args):
                 np.array(get_spatial_values(fix_data.voxel_spacing)) / fix_data.expansion_factor,
                 mov_data,
                 np.array(get_spatial_values(mov_data.voxel_spacing)) / mov_data.expansion_factor,
-                processing_blocksize, # processing block size (= shard when sharding is on)
+                processing_blocksize, # processing block size
                 all_transforms, # transform_list
                 cluster_client,
-                overlap_factor=args.blocks_overlap_factor,
+                overlap_factor=args.processing_overlap_factor,
                 aligned_data=output_dataarray,
                 aligned_data_timeindex=args.output_timeindex,
                 aligned_data_channel=args.output_channel,
                 transform_spacing=transforms_spacings,
                 max_concurrent_reads=args.max_concurrent_zarr_reads,
+                max_write_locks=args.max_write_locks,
                 **deform_extra_args,
             )
         finally:

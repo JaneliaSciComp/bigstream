@@ -10,8 +10,11 @@ from itertools import product
 
 from dask.distributed import as_completed
 
+from typing import Optional
+
+from .distributed_io_utility import BlockWriter, MAX_WRITE_LOCKS
 from .image_data import ImageData
-from .distutils import validate_processing_block_size, ThrottledArraySliceReader
+from .distutils import ThrottledArraySliceReader
 from .ome_utils import get_spatial_values
 
 
@@ -32,6 +35,7 @@ def distributed_apply_transform(
     aligned_data_channel=None,
     transform_spacing=None,
     max_concurrent_reads=0,
+    max_write_locks=MAX_WRITE_LOCKS,
     **kwargs,
 ):
     """
@@ -69,6 +73,13 @@ def distributed_apply_transform(
     cluster_client : Dask cluster client proxy
         the cluster must exists before this method is invoked
 
+    max_write_locks : int (default: 64)
+        Largest number of lock names one block write may hold. Writes are
+        locked per output chunk (or shard), so `process_blocksize` need not
+        be a multiple of either; a block much larger than the chunk coarsens
+        its lock grid to stay under this. See
+        `bigstream.distributed_io_utility.BlockWriter`.
+
     **kwargs : Any additional keyword arguments
         Passed to bigstream.transform.apply_transform
 
@@ -93,8 +104,23 @@ def distributed_apply_transform(
     nblocks = np.ceil(np.array(fix_spatial_dims) / process_block_partition_size).astype(int)
     overlaps = np.round(process_block_partition_size * overlap_factor).astype(int)
 
-    # verify output zarr chunk size <= block size to prevent race conditions
-    validate_processing_block_size(aligned_data, process_block_partition_size)
+    # One writer, built here and shipped to every block: writes into a
+    # chunked or sharded output are serialized per write unit, so the block
+    # partition need not line up with the chunk or shard grid at all. The
+    # region below is in the output's own index space - a single timepoint
+    # and a single channel, both written whole - and mirrors exactly how
+    # `_transform_single_block` builds its write coordinates.
+    write_region = []
+    if aligned_data is not None and len(aligned_data.shape) > 3:
+        if aligned_data_timeindex is not None:
+            write_region.append(1)
+        if aligned_data_channel is not None:
+            write_region.append(1)
+    write_region.extend(int(b) for b in process_block_partition_size)
+    block_writer = BlockWriter(aligned_data, write_region,
+                               max_locks=max_write_locks,
+                               namespace='apply-transform')
+    block_writer.log('Apply transform')
 
     # prepare block coordinates
     transform_spacing_list = bs_transform.prepare_all_transforms_spacings(
@@ -166,7 +192,7 @@ def distributed_apply_transform(
         transform_list=transform_list,
         transform_spacing_list=transform_spacing_list,
         deform_block_reader=ThrottledArraySliceReader(max_concurrent_reads),
-        output=aligned_data,
+        block_writer=block_writer,
         output_timeindex=aligned_data_timeindex,
         output_channel=aligned_data_channel,
         **kwargs,
@@ -206,13 +232,14 @@ def _transform_single_block(fix_block_read_method,
                             transform_list=[],
                             transform_spacing_list=[],
                             deform_block_reader=ThrottledArraySliceReader(),
-                            output=None,
+                            block_writer:Optional[BlockWriter]=None,
                             output_timeindex=None,
                             output_channel=None,
                             **additional_transform_args):
     """
     Block transform function
     """
+    output = block_writer.output if block_writer is not None else None
     fix_spacing = np.array(fix_spacing)
     mov_spacing = np.array(mov_spacing)
     full_mov_shape = np.array(full_mov_shape)
@@ -406,8 +433,12 @@ def _transform_single_block(fix_block_read_method,
             f'Finished deforming block {block_index} at {block_coords} to a {aligned_block.shape} shaped block, '
             f'moving coords: {mov_block_voxel_coords}, '
             f'final coords: {final_block_coords} '))
-        written_coords = _write_block(block_index, final_block_coords, aligned_block,
-                                      output=output)
+        if block_writer is not None:
+            written_coords = block_writer.write(
+                block_index, final_block_coords, aligned_block,
+                context=f'Transform block {block_index}')
+        else:
+            written_coords = None
         del fix_block, mov_block, aligned_block
         return block_index, written_coords
     except Exception as e:
@@ -658,6 +689,7 @@ def distributed_invert_displacement_vector_field(
     cluster_client,
     overlap_factor=0.25,
     max_concurrent_reads=0,
+    max_write_locks=MAX_WRITE_LOCKS,
     **kwargs,
 ):
     """
@@ -682,6 +714,12 @@ def distributed_invert_displacement_vector_field(
 
     overlap_factor : overlap factor (default: 0.25)
 
+    max_write_locks : int (default: 64)
+        Largest number of lock names one block write may hold. Writes are
+        locked per output chunk (or shard), so `blocksize` need not be a
+        multiple of either. See
+        `bigstream.distributed_io_utility.BlockWriter`.
+
     **kwargs : passed to bigstream.transform.invert_displacement_vector_field
         You have full control over the inversion algorithm through keyword arguments.
         Please read the docstring for bigstream.transform.invert_displacement_vector_field
@@ -703,7 +741,14 @@ def distributed_invert_displacement_vector_field(
         f'invert displacement args: {kwargs} '
     ))
 
-    validate_processing_block_size(inv_vectorfield_outputarray, block_partition_size, reverse_output_axes=True)
+    # One writer for the whole run - see `distributed_apply_transform`. The
+    # output is laid out `(z,y,x,d)`, so the spatial partition size is the
+    # whole write region bar the vector axis, which `BlockWriter` fills in.
+    block_writer = BlockWriter(inv_vectorfield_outputarray,
+                               block_partition_size,
+                               max_locks=max_write_locks,
+                               namespace='invert-displacement-field')
+    block_writer.log('Invert displacement field')
 
     # store block coordinates in a dask array
     blocks = []
@@ -719,7 +764,7 @@ def distributed_invert_displacement_vector_field(
     invert_block = functools.partial(
         _invert_block,
         full_vectorfield=vectorfield_array,
-        inv_vectorfield_result=inv_vectorfield_outputarray,
+        block_writer=block_writer,
         spacing=spatial_spacing,
         blocksize=block_partition_size,
         blockoverlaps=overlaps,
@@ -747,7 +792,7 @@ def distributed_invert_displacement_vector_field(
 
 def _invert_block(block_info,
                   full_vectorfield=[],
-                  inv_vectorfield_result=[],
+                  block_writer=None,
                   spacing=[],
                   blocksize=[],
                   blockoverlaps=[],
@@ -801,17 +846,11 @@ def _invert_block(block_info,
         f'{block_info} at {block_coords}, {block_vectorfield.shape} -> '
         f'{inverse_block_coords}, {inverse_block.shape} '
     ))
-    written_coords = _write_block(block_index, inverse_block_coords, inverse_block,
-                                  output=inv_vectorfield_result)
+    if block_writer is not None:
+        written_coords = block_writer.write(
+            block_index, inverse_block_coords, inverse_block,
+            context=f'Invert block {block_index}')
+    else:
+        written_coords = None
     del block_vectorfield, inverse_block
     return written_coords
-
-
-def _write_block(block_index, block_coords, block_data, output=None):
-    if output is not None and block_data is not None:
-        logger.debug(f'Write {block_data.shape} block {block_index} at {block_coords} to {output}({output.shape})')
-        output[block_coords] = block_data
-        logger.debug(f'Done writing {block_data.shape} block {block_index} at {block_coords} to {output}({output.shape})')
-        return block_coords
-
-    return None

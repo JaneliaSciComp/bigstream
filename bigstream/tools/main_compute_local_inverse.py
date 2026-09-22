@@ -8,6 +8,7 @@ from dask.distributed import (Client, LocalCluster)
 from bigstream.configure_bigstream import (configure_logging)
 from bigstream.configure_dask import (ConfigureWorkerPlugin,
                                       load_dask_config)
+from bigstream.distributed_io_utility import MAX_WRITE_LOCKS
 from bigstream.distributed_transform import (distributed_invert_displacement_vector_field)
 from bigstream.image_data import (ImageData,
                                   calc_full_voxel_resolution_attr,
@@ -53,6 +54,19 @@ def _define_args():
                              type=inttuple,
                              help='Inverse transform blocksize')
 
+    args_parser.add_argument('--processing-size', '--processing_size',
+                             dest='processing_size',
+                             type=inttuple,
+                             default=None,
+                             help='Block partition size in xyz order used to '
+                                  'distribute the inversion, e.g. '
+                                  '256,256,128. Writes are locked per output '
+                                  'chunk (or shard), so this need not line up '
+                                  'with either. Defaults to the shard spatial '
+                                  'shape when sharding is on, else to the '
+                                  'inverse transform blocksize - the size at '
+                                  'which no two blocks share a write unit and '
+                                  'the locks never contend.')
     args_parser.add_argument('--processing-overlap-factor',
                              dest='processing_overlap_factor',
                              type=float,
@@ -115,6 +129,15 @@ def _define_args():
                              dest='max_concurrent_zarr_reads',
                              type=int, default=0,
                              help='Maximum number of concurrent reads from a zarr array')
+    args_parser.add_argument('--max-write-locks', '--max_write_locks',
+                             dest='max_write_locks',
+                             type=int, default=MAX_WRITE_LOCKS,
+                             help='Largest number of lock names one block '
+                                  'write may hold. Block writes are locked '
+                                  'per output chunk (or shard), so the '
+                                  'processing size need not be a multiple of '
+                                  'either; a block much larger than the chunk '
+                                  'coarsens its lock grid to stay under this.')
     args_parser.add_argument('--compression', '--compressor',
                              dest='compressor',
                              default='zstd',
@@ -140,7 +163,8 @@ def _define_args():
                                   'sharding_factor (the trailing vector axis '
                                   'is not sharded). When sharding is enabled, '
                                   'the processing block size defaults to the '
-                                  'shard spatial shape. Ignored when '
+                                  'shard spatial shape - override it with '
+                                  '--processing-size. Ignored when '
                                   '--output-zarr-format is not 3.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
@@ -206,13 +230,21 @@ def _run_compute_inverse(args):
     )
     if spatial_shard_size is not None:
         inv_deform_shard_size = tuple(spatial_shard_size) + (inv_deform_chunks[-1],)
-        processing_blocksize = tuple(spatial_shard_size)
+        default_processing_blocksize = tuple(spatial_shard_size)
     else:
         inv_deform_shard_size = None
-        processing_blocksize = tuple(inv_transform_blocksize)
+        default_processing_blocksize = tuple(inv_transform_blocksize)
+    # --processing-size wins; otherwise a whole write unit per block, which
+    # is the size at which the write locks never contend. Any size is safe:
+    # writes are locked per chunk (or shard) either way.
+    if args.processing_size:
+        processing_blocksize = tuple(args.processing_size[::-1])  # xyz -> zyx
+    else:
+        processing_blocksize = default_processing_blocksize
     logger.info(
         f'Inverse processing block size: {processing_blocksize} '
-        f'(inv_transform_blocksize={inv_transform_blocksize}, '
+        f'(processing_size={args.processing_size}, '
+        f'inv_transform_blocksize={inv_transform_blocksize}, '
         f'inv_deform_chunks={inv_deform_chunks}, '
         f'inv_deform_shard_size={inv_deform_shard_size})'
     )
@@ -270,7 +302,7 @@ def _run_compute_inverse(args):
         distributed_invert_displacement_vector_field(
             local_deform_field.image_array,
             local_deform_spacing / args.deform_expansion_factor,
-            processing_blocksize, # = shard spatial shape when sharding, else blocksize
+            processing_blocksize,
             inv_deform_field,
             cluster_client,
             overlap_factor=args.processing_overlap_factor,
@@ -282,6 +314,7 @@ def _run_compute_inverse(args):
             pad=args.inv_pad,
             use_root=args.inv_use_root,
             max_concurrent_reads=args.max_concurrent_zarr_reads,
+            max_write_locks=args.max_write_locks,
         )
     finally:
         cluster_client.close()

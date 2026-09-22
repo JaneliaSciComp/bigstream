@@ -26,7 +26,11 @@ import yaml
 import bigstream.distributed_align as da
 
 from bigstream.align_constraints import blend_safe_displacement_bound
-from bigstream.distutils import validate_processing_block_size
+from bigstream.distributed_io_utility import (
+    lock_cell_keys,
+    storage_write_unit,
+    write_lock_grid,
+)
 from bigstream.distributed_align import (
     AlignmentPass,
     DisplacementDiagnostics,
@@ -39,11 +43,8 @@ from bigstream.distributed_align import (
     default_blend_ramp_from_config,
     default_pass_geometry_from_config,
     _get_transform_weights,
-    _lock_cell_keys,
     _overlapping_block_lock_keys,
     _parse_displacement_diagnostics,
-    _storage_write_unit,
-    _write_lock_grid,
 )
 from bigstream.image_data import ImageData
 
@@ -921,21 +922,22 @@ def test_write_unit_is_the_shard_when_sharded_else_the_chunk(tmp_path):
     A sharded v3 array rewrites a whole shard per write, so the shard - not
     the inner chunk - is what two writers must not share.
     """
-    shape, ndim = (64, 64, 64, 3), 3
+    shape = (64, 64, 64, 3)
     v2 = _zarr_field(tmp_path, 'v2', shape, (16, 16, 16, 3), zarr_format=2)
     v3 = _zarr_field(tmp_path, 'v3', shape, (16, 16, 16, 3))
     sharded = _zarr_field(tmp_path, 'v3s', shape, (8, 8, 8, 3),
                           shards=(32, 32, 32, 3))
 
-    assert list(_storage_write_unit(v2, ndim)) == [16, 16, 16]
-    assert list(_storage_write_unit(v3, ndim)) == [16, 16, 16]
-    assert list(_storage_write_unit(sharded, ndim)) == [32, 32, 32]
+    # the unit spans every axis, the vector axis included
+    assert list(storage_write_unit(v2)) == [16, 16, 16, 3]
+    assert list(storage_write_unit(v3)) == [16, 16, 16, 3]
+    assert list(storage_write_unit(sharded)) == [32, 32, 32, 3]
     # an in-memory array assigns element by element - no unit to protect
-    assert _storage_write_unit(np.zeros(shape, dtype=np.float32), ndim) is None
+    assert storage_write_unit(np.zeros(shape, dtype=np.float32)) is None
 
 
 def test_no_lock_grid_for_an_in_memory_output():
-    assert _write_lock_grid(np.zeros((32, 32, 32, 3)), 3, (16, 16, 16)) is None
+    assert write_lock_grid(np.zeros((32, 32, 32, 3)), (16, 16, 16)) is None
 
 
 def test_lock_grid_coarsens_only_when_the_key_count_would_blow_up(tmp_path):
@@ -945,17 +947,19 @@ def test_lock_grid_coarsens_only_when_the_key_count_would_blow_up(tmp_path):
     whole multiple of the unit, so a unit is never split between two cells.
     """
     array = _zarr_field(tmp_path, 'fine', (512, 512, 512, 3), (16, 16, 16, 3))
-    unit = np.array([16, 16, 16])
+    unit = np.array([16, 16, 16, 3])
 
     # a block the size of one chunk locks at chunk granularity
-    fine = _write_lock_grid(array, 3, (16, 16, 16), max_locks=64)
+    fine = write_lock_grid(array, (16, 16, 16), max_locks=64)
     assert list(fine) == list(unit)
 
     # a block spanning many chunks coarsens
-    coarse = _write_lock_grid(array, 3, (256, 256, 256), max_locks=64)
+    coarse = write_lock_grid(array, (256, 256, 256), max_locks=64)
     assert np.all(coarse % unit == 0)
-    assert np.all(coarse > unit)
-    touched = int(np.prod(-(-np.array([256, 256, 256]) // coarse) + 1))
+    assert np.all(coarse[:3] > unit[:3])
+    # the vector axis is spanned whole by every write, so it contributes one
+    # cell however coarse the grid gets - only the spatial axes multiply out
+    touched = int(np.prod(-(-np.array([256, 256, 256]) // coarse[:3]) + 1))
     assert touched <= 64
 
 
@@ -977,8 +981,8 @@ def test_blocks_sharing_a_write_unit_share_a_lock_key(tmp_path, block_size,
     array = _zarr_field(tmp_path, 'f', extent + (3,), tuple(chunk) + (3,))
     lattice = _BlockLattice(block_size, halo, (5, 3, 7), extent)
     footprint = np.array(block_size) + 2 * np.array(halo)
-    grid = _write_lock_grid(array, 3, footprint)
-    unit = _storage_write_unit(array, 3)
+    grid = write_lock_grid(array, footprint)
+    unit = storage_write_unit(array)[:3]
 
     def write_units_touched(coords):
         starts = np.array([s.start for s in coords]) // unit
@@ -988,7 +992,7 @@ def test_blocks_sharing_a_write_unit_share_a_lock_key(tmp_path, block_size,
 
     blocks = [(index, lattice.footprint_slices(index))
               for index in lattice.indices()]
-    keys = {i: set(_lock_cell_keys(c, grid, 'ns')) for i, c in blocks}
+    keys = {i: set(lock_cell_keys(array, c, grid, 'ns')) for i, c in blocks}
     units = {i: write_units_touched(c) for i, c in blocks}
 
     checked = 0
@@ -1046,9 +1050,9 @@ def test_in_memory_overlapping_blocks_share_a_lock_key():
 def test_compose_block_write_is_locked_per_write_unit(tmp_path):
     """Composition writes disjoint blocks, but they can still share a chunk."""
     array = _zarr_field(tmp_path, 'c', (32, 32, 32, 3), (16, 16, 16, 3))
-    grid = _write_lock_grid(array, 3, (10, 10, 10))
-    left = _lock_cell_keys((slice(0, 10),) * 3, grid, 'ns')
-    right = _lock_cell_keys((slice(10, 20),) * 3, grid, 'ns')
+    grid = write_lock_grid(array, (10, 10, 10))
+    left = lock_cell_keys(array, (slice(0, 10),) * 3, grid, 'ns')
+    right = lock_cell_keys(array, (slice(10, 20),) * 3, grid, 'ns')
     # the two blocks do not overlap but both land in chunk (0, 0, 0)
     assert set(left) & set(right)
 
@@ -1082,7 +1086,7 @@ def test_unaligned_zarr_output_matches_the_in_memory_result(cluster_client_mt,
 
     field = _zarr_field(tmp_path, 'out', shape + (3,), (10, 10, 10, 3),
                         shards=(20, 20, 20, 3))
-    assert list(_storage_write_unit(field, 3)) == [20, 20, 20]
+    assert list(storage_write_unit(field)[:3]) == [20, 20, 20]
     assert blockwise_alignment_pipeline(
         fix_image, spacing, mov_image, spacing, passes, cluster_client_mt,
         deformfield_final_result=field, **kwargs)
@@ -1096,15 +1100,14 @@ def test_unaligned_zarr_output_matches_the_in_memory_result(cluster_client_mt,
 
 
 @pytest.mark.parametrize('processing_size,chunks,shards,max_locks', [
-    # several whole blocks land inside one shard. This is the case the old
-    # `validate_processing_block_size` rejected outright, and the one with
+    # several whole blocks land inside one shard - the case the retired
+    # `unit <= processing size` check rejected outright, and the one with
     # the most lock contention: every block on a shard is serialized.
     ((12, 12, 12), (6, 6, 6), (24, 24, 24), 64),
-    # one block spans many shards. The old check permitted this (it only
-    # required unit <= processing size) but that was never sufficient - with
-    # a halo the footprints still straddle shard boundaries. `max_locks` is
-    # set low so the lock grid has to coarsen, which is the branch a block
-    # much larger than its write unit takes.
+    # one block spans many shards. The retired check permitted this, but it
+    # was never sufficient - with a halo the footprints still straddle shard
+    # boundaries. `max_locks` is set low so the lock grid has to coarsen,
+    # which is the branch a block much larger than its write unit takes.
     ((16, 16, 16), (4, 4, 4), (8, 8, 8), 8),
 ], ids=['processing-size-smaller-than-shard', 'processing-size-bigger-than-shard'])
 def test_field_is_correct_whatever_the_block_to_shard_ratio(
@@ -1129,26 +1132,21 @@ def test_field_is_correct_whatever_the_block_to_shard_ratio(
 
     field = _zarr_field(tmp_path, 'out', shape + (3,), tuple(chunks) + (3,),
                         shards=tuple(shards) + (3,))
-    unit = _storage_write_unit(field, 3)
+    unit = storage_write_unit(field)[:3]
     assert list(unit) == list(shards)
 
     # pin down which regime this parametrization is actually in, so the two
     # cases cannot silently converge if someone edits the numbers
     block = np.array(processing_size)
     footprint = block + 2 * np.round(block * 0.25).astype(int)
-    grid = _write_lock_grid(field, 3, footprint, max_locks=max_locks)
+    grid = write_lock_grid(field, footprint, max_locks=max_locks)[:3]
     if np.all(unit > block):
         # smaller: the whole block fits in one write unit
         assert np.all(grid == unit)
-        with pytest.raises(ValueError, match='too small'):
-            validate_processing_block_size(field, block,
-                                           reverse_output_axes=True)
     else:
         # bigger: the block spans many units, so the grid had to coarsen
         assert np.all(unit < block)
         assert np.all(grid > unit) and np.all(grid % unit == 0)
-        # the old check waved this through even though blocks still share units
-        validate_processing_block_size(field, block, reverse_output_axes=True)
 
     assert blockwise_alignment_pipeline(
         fix_image, spacing, mov_image, spacing, passes, cluster_client_mt,

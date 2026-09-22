@@ -482,6 +482,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             compressor_opts,
             zarr_format,
             sharding_factor,
+            max_write_locks,
         )
         return deform_ok
     finally:
@@ -616,7 +617,8 @@ def _apply_deform_field(fix_image: ImageData,
                         compressor,
                         compressor_opts,
                         zarr_format,
-                        sharding_factor):
+                        sharding_factor,
+                        max_write_locks):
     """
     Warp the moving image onto the fixed image grid and write it out.
 
@@ -675,9 +677,9 @@ def _apply_deform_field(fix_image: ImageData,
         zarr_format=zarr_format,
         shard_shape=align_shard_size,
     )
-    # unlike the alignment writes, which are locked per write unit, the warp
-    # writes each block exactly once and they do not overlap - so a whole
-    # shard per worker is what keeps two workers out of one shard object
+    # the warp writes are locked per write unit too, so any block size is
+    # safe here. A whole shard per worker is still the best default: no two
+    # blocks then share a shard and the locks never contend.
     align_processing_size = getattr(align, 'shards', None) or align_chunk_size
 
     deform_transforms = [deformfield] if deformfield is not None else []
@@ -710,6 +712,7 @@ def _apply_deform_field(fix_image: ImageData,
         aligned_data_timeindex=align_timeindex,
         aligned_data_channel=align_channel,
         transform_spacing=transforms_spacings,
+        max_write_locks=max_write_locks,
         **transform_coords_args,
     )
     logger.info(f'Wrote the aligned volume to {align_path}:{align_subpath}')

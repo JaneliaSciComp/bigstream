@@ -19,7 +19,11 @@ methods implemented in this module:
                                         inherit, and
     alignment_steps_from_config         the steps-list converter the two
                                         above use
-    MAX_WRITE_LOCKS                   default write lock budget
+    MAX_WRITE_LOCKS                   default write lock budget,
+                                      re-exported from
+                                      `bigstream.distributed_io_utility`,
+                                      which holds the write locking this
+                                      module shares with the transform paths
 
 
 One piece of the per-block machinery is worth knowing about because it is
@@ -56,7 +60,6 @@ import logging
 import time
 import traceback
 
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from itertools import product
@@ -65,7 +68,7 @@ from typing import Any, Callable, List, Optional, Sequence, Tuple
 import numpy as np
 import zarr
 
-from dask.distributed import as_completed, MultiLock
+from dask.distributed import as_completed
 
 import bigstream.transform as bst
 import bigstream.utility as ut
@@ -76,6 +79,13 @@ from .blend_ramp import (DEFAULT_BLEND_RAMP, blend_ramp_weights,
                          parse_blend_ramp, ramp_gradient_gain)
 from .diagnostics import (deform_field_diagnostics,
                           log_deform_field_diagnostics)
+from .distributed_io_utility import (MAX_WRITE_LOCKS,
+                                     lock_cell_keys,
+                                     log_write_locking,
+                                     storage_write_unit,
+                                     write_lock,
+                                     write_lock_grid,
+                                     write_lock_namespace)
 from .distutils import ThrottledArraySliceReader
 from .image_data import (ImageData, as_image_data)
 from .transform import apply_transform_to_coordinates
@@ -202,24 +212,6 @@ class AlignmentPass:
             blend_ramp=ramp,
             name=self.name,
         )
-
-
-# Two different granularities, kept distinct throughout:
-#
-#   write unit   what the store rewrites atomically - a chunk, or a shard on
-#                a sharded v3 array. Fixed by the output array.
-#   lock cell    what one lock name covers. Always a whole number of write
-#                units, so "same write unit" always implies "same cell".
-#
-# One lock per write unit touched is the precise answer, but a large block
-# over a fine chunk grid touches hundreds of them. Past MAX_WRITE_LOCKS the
-# cell grows to a larger multiple of the write unit: still correct, because
-# it locks a superset, and it only costs parallelism.
-MAX_WRITE_LOCKS = 64
-
-# Ceiling on how many write units one lock cell may span, so a pathological
-# max_locks cannot search forever.
-_MAX_LOCK_CELL_MULTIPLIER = 1024
 
 
 class DisplacementDiagnostics(str, Enum):
@@ -613,12 +605,11 @@ def _run_alignment_pass(alignment_pass,
     # Nothing requires the block footprint to be a multiple of that unit -
     # blocks that land in a shared chunk are simply serialized.
     footprint = block_size + 2 * halo
-    lock_grid = _write_lock_grid(output_transform, lattice.ndim, footprint,
-                                 max_locks=max_write_locks)
-    lock_namespace = _write_lock_namespace(output_transform, label)
+    lock_grid = write_lock_grid(output_transform, footprint,
+                                max_locks=max_write_locks)
+    lock_namespace = write_lock_namespace(output_transform, label)
     if output_transform is not None:
-        _log_write_locking(output_transform, lock_grid, lattice.ndim,
-                           footprint, label)
+        log_write_locking(output_transform, lock_grid, footprint, label)
 
     blocks_ids, blocks_coords = _select_blocks(
         lattice,
@@ -1420,7 +1411,7 @@ def _write_block_transform(aligned_block,
 
     The write is a read-modify-write and has to be locked, but *what* has to
     be locked depends on where the output lives, so the caller passes the
-    grid it decided on (see `_write_lock_grid`):
+    grid it decided on (see `write_lock_grid`):
 
       * a zarr output rewrites a whole chunk or shard at a time - its
         *write unit* - so exclusion is keyed on that, not on the block: two
@@ -1465,13 +1456,13 @@ def _write_block_transform(aligned_block,
 
     if output_transform is not None:
         if lock_grid is not None:
-            lock_keys = _lock_cell_keys(block_coords, lock_grid,
-                                                lock_namespace)
+            lock_keys = lock_cell_keys(output_transform, block_coords,
+                                       lock_grid, lock_namespace)
         else:
             lock_keys = _overlapping_block_lock_keys(block_index,
                                                      block_neighbors,
                                                      lock_namespace)
-        with _write_lock(lock_keys, context=f'Block {block_context}'):
+        with write_lock(lock_keys, context=f'Block {block_context}'):
             # read-modify-write: every overlapping block adds its weighted
             # share, and the sum only reaches 1 once they all have
             output_block = output_transform[block_coords] + transform
@@ -1605,100 +1596,13 @@ def _get_transform_weights(block_index,
 
 
 # -------------------------------------------------------------------------
-# write locking: one writer per write unit (chunk or shard)
+# write locking for an in-memory overlap-add
 # -------------------------------------------------------------------------
-
-
-def _storage_write_unit(output_array, ndim):
-    """
-    The smallest region the store rewrites as a whole, in spatial voxels.
-
-    Writing a single voxel of a zarr array rewrites its entire chunk - or its
-    entire shard, for a sharded v3 array, because a shard is one object. So
-    two workers whose regions land in the same unit clobber each other *even
-    when they share no voxel*: each reads the unit, patches its own part and
-    writes the whole thing back, and the last one wins.
-
-    Returns `None` for an in-memory array, which assigns element by element
-    and has no such unit.
-
-    The output transform is laid out spatial-first with the displacement
-    vector last, and the vector axis is never split across units, so the
-    leading `ndim` entries of the chunk/shard shape are the spatial unit.
-    """
-    unit = (getattr(output_array, 'shards', None)
-            or getattr(output_array, 'chunks', None))
-    if not unit:
-        return None
-    unit = tuple(unit)[:ndim]
-    if not all(isinstance(v, (int, np.integer)) for v in unit):
-        # e.g. a dask array, whose `chunks` is a tuple of per-axis tuples
-        return None
-    return np.asarray(unit, dtype=int)
-
-
-def _write_lock_grid(output_array, ndim, region_size,
-                     max_locks=MAX_WRITE_LOCKS):
-    """
-    Lock cell size for writes into `output_array`, in spatial voxels.
-
-    `None` means the array has no write unit to protect, i.e. it is in
-    memory.
-
-    Computed **once for a whole pass**, from the nominal block footprint
-    rather than from any individual block. Every writer has to agree on the
-    grid: two blocks that derived different cell sizes would lock different
-    names for the same write unit and so would not exclude each other at
-    all. Edge blocks are smaller than the nominal footprint, which only means
-    they lock fewer cells of the same grid.
-
-    Each cell is a whole number of write units, so a write unit is never
-    split between two cells - which is what makes "same write unit implies
-    same cell" hold, and with it the whole guarantee.
-    """
-    unit = _storage_write_unit(output_array, ndim)
-    if unit is None:
-        return None
-    region = np.asarray(region_size, dtype=int)
-    # smallest whole multiple that fits, walked one step at a time rather
-    # than doubled: any multiple keeps a write unit inside a single cell, so
-    # doubling only over-coarsens. On a 538 voxel footprint over 128 voxel
-    # units with max_locks=16, doubling lands on 1024 where 640 would do.
-    for multiplier in range(1, _MAX_LOCK_CELL_MULTIPLIER + 1):
-        cell = unit * multiplier
-        # a region this size straddles at most ceil(size/cell) + 1 cells per
-        # axis, depending on where it happens to start
-        if int(np.prod(-(-region // cell) + 1)) <= max_locks:
-            break
-    return unit * multiplier
-
-
-def _write_lock_namespace(output_array, fallback):
-    """
-    Lock names are global to the cluster, so they have to identify the array
-    as well as the region within it. A zarr array's path does that; anything
-    else falls back to a caller supplied label.
-    """
-    name = getattr(output_array, 'name', None)
-    return str(name) if name else str(fallback)
-
-
-def _lock_cell_keys(block_coords, lock_grid, namespace):
-    """
-    One lock key per lock cell the write to `block_coords` touches.
-
-    A cell is a whole number of write units, so two writes that share a
-    write unit always share a key. Empty when `lock_grid` is None - see
-    `_overlapping_block_lock_keys` for what guards an in-memory output.
-    """
-    if lock_grid is None:
-        return []
-    start = np.array([s.start for s in block_coords])
-    stop = np.array([s.stop for s in block_coords])
-    first = start // lock_grid
-    counts = np.maximum(-(-stop // lock_grid) - first, 0)
-    return [f'{namespace}/cell{tuple(int(f + o) for f, o in zip(first, offset))}'
-            for offset in np.ndindex(*counts)]
+#
+# The zarr side of this lives in `bigstream.distributed_io_utility`, shared
+# with the transform paths. What stays here is the one hazard that is
+# specific to this module: an in-memory output has no write unit, and the
+# only way two blocks collide is through the overlap-add itself.
 
 
 def _overlapping_block_lock_keys(block_index, block_neighbors, namespace):
@@ -1719,56 +1623,6 @@ def _overlapping_block_lock_keys(block_index, block_neighbors, namespace):
     return [f'{namespace}/block'
             f'{tuple(int(i) + int(o) for i, o in zip(block_index, offset))}'
             for offset, present in block_neighbors.items() if present]
-
-
-@contextmanager
-def _write_lock(lock_keys, context=''):
-    """Hold every key in `lock_keys` for the duration of a write."""
-    if not lock_keys:
-        yield
-        return
-    lock = MultiLock(list(lock_keys))
-    lock.acquire()
-    logger.debug(f'{context} holds {len(lock_keys)} write locks: {lock_keys}')
-    try:
-        yield
-    finally:
-        lock.release()
-        logger.debug(f'{context} released {len(lock_keys)} write locks')
-
-
-def _log_write_locking(output_array, lock_grid, ndim, region_size, context):
-    """Report how writes will be serialized - it is the main cost knob here."""
-    unit = _storage_write_unit(output_array, ndim)
-    if unit is None:
-        logger.info((
-            f'{context}: in-memory output, locking per overlapping block '
-            '(there is no write unit to protect)'
-        ))
-        return
-    region = np.asarray(region_size, dtype=int)
-    cells = int(np.prod(-(-region // lock_grid) + 1))
-    aligned = bool(np.all(region % lock_grid == 0))
-    logger.info((
-        f'{context}: output write unit {tuple(unit)}, lock cell '
-        f'{tuple(lock_grid)}, up to {cells} locks per write'
-        + ('' if aligned else
-           f'; the {tuple(region)} write region is not a multiple of the '
-           'lock cell, so two blocks sharing a cell are serialized')
-    ))
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -2018,22 +1872,23 @@ def _distributed_compose_displacement_fields(fields, spacing, output,
     at all.
     """
     shape = tuple(output.shape[:-1])
-    unit = _storage_write_unit(output, len(shape))
+    unit = storage_write_unit(output)
     if processing_size is None:
         if unit is not None:
             # one task per write unit: no write unit is then shared by
-            # two tasks and the locks below never contend
-            processing_size = tuple(int(u) for u in unit)
+            # two tasks and the locks below never contend. `unit` covers the
+            # vector axis too, so take only its spatial leading entries -
+            # the blocks below are spatial.
+            processing_size = tuple(int(u) for u in unit[:len(shape)])
         else:
             # an in-memory output has no natural unit; keep the per task
             # coordinate arrays bounded rather than walking the whole volume
             processing_size = tuple(min(s, 128) for s in shape)
     processing_size = np.asarray(processing_size, dtype=int)
-    lock_grid = _write_lock_grid(output, len(shape), processing_size,
-                                 max_locks=max_write_locks)
-    lock_namespace = _write_lock_namespace(output, 'compose')
-    _log_write_locking(output, lock_grid, len(shape), processing_size,
-                       'compose')
+    lock_grid = write_lock_grid(output, processing_size,
+                                max_locks=max_write_locks)
+    lock_namespace = write_lock_namespace(output, 'compose')
+    log_write_locking(output, lock_grid, processing_size, 'compose')
     nblocks = np.ceil(np.array(shape) / processing_size).astype(int)
     logger.info((
         f'Compose {len(fields)} displacement fields into a {shape} output '
@@ -2104,9 +1959,9 @@ def _compose_fields_block(block_coords, block_index=None, fields=None,
     if output is not None:
         # a plain assignment, but on zarr it still rewrites whole units, so
         # another task writing a different part of the same unit has to wait
-        lock_keys = _lock_cell_keys(block_coords, lock_grid,
-                                            lock_namespace)
-        with _write_lock(lock_keys, context=f'Compose block {block_index}'):
+        lock_keys = lock_cell_keys(output, block_coords, lock_grid,
+                                   lock_namespace)
+        with write_lock(lock_keys, context=f'Compose block {block_index}'):
             output[block_coords] = composed
     return block_index, block_coords
 

@@ -131,7 +131,7 @@ def distributed_apply_transform(
     )
     logger.info((
         f'Apply distributed transform to {fix_image.shape} '
-        f'partitioned in {nblocks} blocks using {process_block_partition_size} '
+        f'partitioned in {nblocks} blocks of size {process_block_partition_size} '
         f'using transform spacings {transform_spacing_list} '
     ))
     blocks = []

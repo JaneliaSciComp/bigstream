@@ -412,8 +412,11 @@ def blockwise_alignment_pipeline(
     if roi is not None:
         roi_start, roi_stop = _phys_roi_to_voxel(roi, fix_spatial_dims,
                                                  fix_spatial_spacing)
-        logger.info(f'ROI {roi} selects blocks intersecting voxels '
-                    f'{roi_start}:{roi_stop}')
+        logger.info((
+            f'ROI {roi} with voxel spacing {fix_spatial_spacing} '
+            'selects blocks intersecting voxels '
+            f'{roi_start}:{roi_stop}'
+        ))
     else:
         roi_start = roi_stop = None
 

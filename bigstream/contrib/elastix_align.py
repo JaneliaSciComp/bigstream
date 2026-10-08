@@ -162,7 +162,7 @@ def elastix_affine_align(
     )
     logger.debug((
         f'{context} '
-        f'Elastix registration parameters {parameter_map_obj}'
+        f'Elastix registration parameters {dict(parameter_map_obj)}'
     ))
 
     # elastix writes side-effect files (TransformParameters.0.txt, result.0.nii)
@@ -394,7 +394,7 @@ def elastix_deformable_align(
     )
     logger.debug((
         f'{context} '
-        f'Elastix registration parameters {parameter_map_obj}'
+        f'Elastix registration parameters {dict(parameter_map_obj)}'
     ))
 
     # Both filters write side-effect files (TransformParameters.0.txt,

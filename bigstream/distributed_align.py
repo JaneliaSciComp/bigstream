@@ -1974,6 +1974,28 @@ def _compose_fields_block(block_coords, block_index=None, fields=None,
 # -------------------------------------------------------------------------
 
 
+def _deep_merge(base, override):
+    merged = dict(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k] = _deep_merge(merged[k], v)
+        else:
+            merged[k] = v
+    return merged
+
+
+def _step_defaults(config, context_config):
+    """
+    Per-step default arguments: top level `<step>:` sections overlaid with
+    the `<context>.<step>:` sections.
+    """
+    defaults = {k: v for k, v in config.items() if isinstance(v, dict)}
+    for k, v in context_config.items():
+        if isinstance(v, dict):
+            defaults[k] = _deep_merge(defaults.get(k) or {}, v)
+    return defaults
+
+
 def alignment_passes_from_config(config, context='local_align'):
     """
     Read the `alignment_passes` section of a bigstream config.
@@ -1994,9 +2016,11 @@ def alignment_passes_from_config(config, context='local_align'):
                   alignment_steps:
                     - deform: {...}
 
-    Each pass's step arguments are layered over the config's top level
-    per-step defaults (`ransac:`, `affine:`, `deform:` ...), exactly as
-    `get_algorithm_parameters` does for the single-pass `steps:` list.
+    Each pass's step arguments are layered over the per-step defaults: the
+    config's top level sections (`ransac:`, `affine:`, `deform:` ...) with the
+    `<context>` section's own (`local_align.deform:` ...) merged over them,
+    exactly as `get_algorithm_parameters` does for the single-pass `steps:`
+    list.
 
     Returns
     -------
@@ -2013,12 +2037,13 @@ def alignment_passes_from_config(config, context='local_align'):
     if not passes_spec:
         return []
 
+    step_defaults = _step_defaults(config, context_config)
     passes = []
     for i, spec in enumerate(passes_spec):
         spec = dict(spec or {})
         passes.append(AlignmentPass(
             alignment_steps=alignment_steps_from_config(
-                spec.get('alignment_steps'), step_defaults=config),
+                spec.get('alignment_steps'), step_defaults=step_defaults),
             processing_size=spec.get('processing_size'),
             processing_offset=spec.get('processing_offset'),
             processing_halo_factor=spec.get('processing_halo_factor'),
@@ -2113,5 +2138,9 @@ def alignment_steps_from_config(steps_spec, step_defaults=None):
                 f'unsupported alignment_steps entry {entry!r}; expected a '
                 'step name or a single-key mapping'
             )
+        if name not in step_defaults:
+            logger.warning(
+                f'alignment step {name!r} has no config section; '
+                'it will run with the library defaults plus its inline args')
         steps.append((name, {**(step_defaults.get(name) or {}), **args}))
     return steps

@@ -2142,5 +2142,5 @@ def alignment_steps_from_config(steps_spec, step_defaults=None):
             logger.warning(
                 f'alignment step {name!r} has no config section; '
                 'it will run with the library defaults plus its inline args')
-        steps.append((name, {**(step_defaults.get(name) or {}), **args}))
+        steps.append((name, _deep_merge(step_defaults.get(name) or {}, args)))
     return steps

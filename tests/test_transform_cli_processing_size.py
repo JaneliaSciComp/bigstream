@@ -168,12 +168,15 @@ def test_apply_processing_size_wins_over_the_shard(volumes, tmp_path,
 
 def test_apply_processing_overlap_factor_reaches_the_distributed_call(
         volumes, tmp_path, apply_spy):
-    """This replaced `--blocks-overlap-factor`, which no longer exists."""
     _run_apply(volumes, tmp_path, ['--processing-overlap-factor', '0.3'])
     assert apply_spy['overlap_factor'] == 0.3
 
-    with pytest.raises(SystemExit):
-        apply_cli._define_args().parse_args(['--blocks-overlap-factor', '0.3'])
+
+def test_apply_blocks_overlap_factor_alias_reaches_the_distributed_call(
+        volumes, tmp_path, apply_spy):
+    """`--blocks-overlap-factor` is kept as an alias."""
+    _run_apply(volumes, tmp_path, ['--blocks-overlap-factor', '0.3'])
+    assert apply_spy['overlap_factor'] == 0.3
 
 
 def test_apply_default_overlap_factor_is_unchanged(volumes, tmp_path,

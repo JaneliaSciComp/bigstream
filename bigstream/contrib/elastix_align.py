@@ -25,7 +25,7 @@ def _robust_normalize(arr, stats=None, p_low=1.0, p_high=99.0):
     """
     Clip to the [p_low, p_high] percentile range and rescale to [0, 1].
 
-    Used to make an SSD-based comparison scale-invariant: a plain shared
+    Used to make the final before/after metric check scale-invariant: a plain shared
     rescale (e.g. dividing both images by the same constant) does NOT change
     which of two SSD values is smaller, since SSD(fix/s, mov/s) = SSD(fix,
     mov) / s**2 for any positive s -- the ordering is preserved. What DOES
@@ -70,6 +70,176 @@ def _robust_normalize(arr, stats=None, p_low=1.0, p_high=99.0):
     return np.clip(out, 0.0, 1.0, out=out)
 
 
+FINAL_METRICS = ('mi', 'abs_ncc', 'ssd')
+
+# fewer valid voxels than this cannot support a meaningful before/after
+# comparison of two images
+MIN_VALID_VOXELS_FOR_CHECK = 1000
+
+
+def _alignment_score(fix_vals, mov_vals, method, bins=32):
+    """
+    Similarity of two intensity vectors; higher is better.
+
+    Both vectors hold the same voxels, already normalized to [0, 1].
+
+    method == 'mi'      mutual information (nats) of the joint `bins` x `bins`
+                        histogram. It is the same family of metric elastix
+                        optimizes, and it does not assume that fix and mov
+                        have the same (or even a monotone) contrast
+                        relationship.
+    method == 'abs_ncc' |Pearson correlation|: sign agnostic, so inverted
+                        contrast scores as well as matching contrast, but it
+                        assumes a roughly linear relation.
+    method == 'ssd'     negative mean squared difference. Only meaningful when
+                        fix and mov have the same contrast: for inverted
+                        contrast a better alignment has a LARGER SSD.
+    """
+    if method == 'mi':
+        fi = np.minimum((fix_vals * bins).astype(np.intp), bins - 1)
+        mi_ = np.minimum((mov_vals * bins).astype(np.intp), bins - 1)
+        joint = np.bincount(
+            fi * bins + mi_, minlength=bins * bins,
+        ).reshape(bins, bins).astype(np.float64)
+        pxy = joint / joint.sum()
+        px = pxy.sum(axis=1, keepdims=True)
+        py = pxy.sum(axis=0, keepdims=True)
+        nz = pxy > 0
+        return float(np.sum(pxy[nz] * np.log(pxy[nz] / (px @ py)[nz])))
+    if method == 'abs_ncc':
+        fc = fix_vals.astype(np.float64)
+        mc = mov_vals.astype(np.float64)
+        fc -= fc.mean()
+        mc -= mc.mean()
+        denom = np.sqrt(np.dot(fc, fc) * np.dot(mc, mc))
+        return float(abs(np.dot(fc, mc)) / denom) if denom > 0 else 0.0
+    if method == 'ssd':
+        return -float(np.mean((fix_vals - mov_vals) ** 2))
+    raise ValueError(
+        f'unknown final_metric {method!r}; expected one of {FINAL_METRICS}'
+    )
+
+
+def _final_metric_check(
+    fix,
+    mov,
+    after_transform,
+    after_interpolator,
+    fix_mask,
+    method,
+    tolerance,
+    context,
+    label,
+):
+    """
+    Decide whether a registration result may be kept: it must not score worse
+    than the starting point by more than `tolerance`.
+
+    Parameters
+    ----------
+    fix, mov : sitk.Image
+        The images elastix registered. `mov` may be on its own grid; it is
+        resampled onto `fix` for the "before" score.
+
+    after_transform : sitk.Transform
+        The result, mapping fix points to mov points.
+
+    after_interpolator : int
+        sitk interpolator used to warp `mov` with `after_transform`.
+
+    fix_mask : sitk.Image or None
+        Fix mask on the fix grid. The comparison only uses voxels inside it.
+
+    method : str
+        One of `FINAL_METRICS`.
+
+    tolerance : float
+        The result is rejected when `after < before - tolerance`.
+
+    label : str
+        'affine' or 'deform', for the log messages.
+
+    Returns
+    -------
+    keep : bool
+        True when the result is acceptable.
+
+    Notes
+    -----
+    Only voxels where the fix mask is set and where `mov` actually covers the
+    fix voxel, both before and after, are scored, so the zero padding written
+    outside the moving image never contributes, and the before and after
+    scores always cover exactly the same voxels. The images are normalized
+    independently (percentile clipping, see `_robust_normalize`) using
+    statistics of those voxels, with mov's statistics shared between before
+    and after.
+    """
+    ndim = fix.GetDimension()
+    identity_tx = sitk.Transform(ndim, sitk.sitkIdentity)
+
+    mov_on_fix = sitk.Resample(mov, fix, identity_tx, sitk.sitkLinear, 0.0)
+    warped = sitk.Resample(mov, fix, after_transform, after_interpolator, 0.0)
+
+    ones = sitk.Image(mov.GetSize(), sitk.sitkFloat32)
+    ones.CopyInformation(mov)
+    ones = ones + 1.0
+    covered = (
+        sitk.GetArrayViewFromImage(
+            sitk.Resample(ones, fix, identity_tx, sitk.sitkLinear, 0.0)
+        ) > 0.5
+    ) & (
+        sitk.GetArrayViewFromImage(
+            sitk.Resample(ones, fix, after_transform, sitk.sitkLinear, 0.0)
+        ) > 0.5
+    )
+    del ones
+    if fix_mask is not None:
+        valid = covered & (sitk.GetArrayViewFromImage(fix_mask) > 0)
+    else:
+        valid = covered
+    nvalid = int(valid.sum())
+    valid_fraction = nvalid / valid.size
+    if nvalid < MIN_VALID_VOXELS_FOR_CHECK:
+        logger.warning((
+            f'{context} Elastix {label} result cannot be evaluated: only '
+            f'{nvalid} valid voxels ({valid_fraction:.2%} of the block) '
+            f'in the fix mask and covered by mov'
+        ))
+        return False
+
+    fix_raw = sitk.GetArrayViewFromImage(fix)[valid]
+    before_raw = sitk.GetArrayViewFromImage(mov_on_fix)[valid]
+    after_raw = sitk.GetArrayViewFromImage(warped)[valid]
+    del valid, covered, mov_on_fix, warped
+
+    fix_vals = _robust_normalize(fix_raw)
+    mov_stats = tuple(np.percentile(before_raw, [1.0, 99.0]))
+    before_vals = _robust_normalize(before_raw, stats=mov_stats)
+    after_vals = _robust_normalize(after_raw, stats=mov_stats)
+
+    before = _alignment_score(fix_vals, before_vals, method)
+    after = _alignment_score(fix_vals, after_vals, method)
+    # a sign agnostic reference alongside whichever method decides
+    ncc = (
+        ''
+        if method == 'abs_ncc' else
+        f', |NCC| {_alignment_score(fix_vals, before_vals, "abs_ncc"):.4f} '
+        f'-> {_alignment_score(fix_vals, after_vals, "abs_ncc"):.4f}'
+    )
+    detail = (
+        f'({method}, higher is better): initial: {before}, final: {after}'
+        f'{ncc}; valid voxels {nvalid} ({valid_fraction:.2%})'
+    )
+    if after < before - tolerance:
+        logger.warning(
+            f'{context} Elastix {label} optimization failed to improve '
+            f'metric {detail}'
+        )
+        return False
+    logger.info(f'{context} Elastix {label} align succeeded: {detail}')
+    return True
+
+
 def elastix_affine_align(
     fix,
     mov,
@@ -89,10 +259,18 @@ def elastix_affine_align(
     static_transform_list=[],
     default=None,
     final_metric_check=True,
+    final_metric='mi',
+    final_metric_tolerance=0.0,
     context='',
     keep_logs=False,
     **align_args,
 ):
+    if final_metric_check and final_metric not in FINAL_METRICS:
+        raise ValueError(
+            f'unknown final_metric {final_metric!r}; '
+            f'expected one of {FINAL_METRICS}'
+        )
+
     # bound the elastix thread count; see configure_elastix
     nthreads = configure_elastix_threads(context=context)
 
@@ -240,43 +418,13 @@ def elastix_affine_align(
         logger.info(f'{context} Returning default')
         return default
 
-    # final metric check on the skip-sampled grid (SSD, lower is better); images
-    # are independently, robustly normalized first (see _robust_normalize).
-    if final_metric_check:
-        fix_arr = sitk.GetArrayViewFromImage(fix)
-        mov_arr = sitk.GetArrayViewFromImage(mov)
-        # mov may live on its own grid (different shape/spacing than fix) unless
-        # it was pre-warped onto the fix grid by the static transforms above --
-        # e.g. an affine step with no static transforms. Resample it onto the
-        # fix grid with the identity transform so the "before" SSD is computed on
-        # the same grid as fix (and as the warped "after" image below); a direct
-        # fix_arr - mov_arr would otherwise raise a shape-broadcast error.
-        mov_on_fix = sitk.Resample(mov, fix, identity_tx, sitk.sitkLinear, 0.0)
-        mov_on_fix_arr = sitk.GetArrayViewFromImage(mov_on_fix)
-        fix_norm = _robust_normalize(fix_arr)
-        # normalize with mov's own full-extent dynamic range (raw mov, no resample
-        # padding), applied consistently to both the before and after images
-        mov_stats = tuple(np.percentile(mov_arr, [1.0, 99.0]))
-        mov_norm = _robust_normalize(mov_on_fix_arr, stats=mov_stats)
-        initial_metric_value = float(np.mean((fix_norm - mov_norm) ** 2))
-        warped = sitk.Resample(mov, fix, sitk_transform, sitk.sitkLinear, 0.0)
-        warped_arr = sitk.GetArrayViewFromImage(warped)
-        warped_norm = _robust_normalize(warped_arr, stats=mov_stats)
-        final_metric_value = float(np.mean((fix_norm - warped_norm) ** 2))
-        if final_metric_value > initial_metric_value:
-            logger.warning((
-                f'{context} Elastix affine optimization failed to improve metric '
-                f'(normalized SSD): initial: {initial_metric_value}, '
-                f'final: {final_metric_value}'
-            ))
-            logger.info(f'{context} Elastix affine align returning default')
-            return default
-        else:
-            logger.info((
-                f'{context} Elastix affine align succeeded: '
-                f'(normalized SSD): initial: {initial_metric_value}, '
-                f'final: {final_metric_value}'
-            ))
+    # final metric check on the skip-sampled grid; see _final_metric_check
+    if final_metric_check and not _final_metric_check(
+            fix, mov, sitk_transform, sitk.sitkLinear, fix_mask,
+            final_metric, final_metric_tolerance, context, 'affine',
+        ):
+        logger.info(f'{context} Elastix affine align returning default')
+        return default
 
     # convert the sitk transform to a bigstream 4x4 matrix (physical, zyx order)
     affine_matrix = bst.affine_transform_to_matrix(sitk_transform)
@@ -307,10 +455,18 @@ def elastix_deformable_align(
     static_transform_list=[],
     default=None,
     final_metric_check=True,
+    final_metric='mi',
+    final_metric_tolerance=0.0,
     context='',
     keep_logs=False,
     **align_args,
 ):
+    if final_metric_check and final_metric not in FINAL_METRICS:
+        raise ValueError(
+            f'unknown final_metric {final_metric!r}; '
+            f'expected one of {FINAL_METRICS}'
+        )
+
     # bound the elastix thread count; see configure_elastix
     nthreads = configure_elastix_threads(context=context)
 
@@ -445,58 +601,19 @@ def elastix_deformable_align(
     disp.SetOrigin(fix.GetOrigin())
     disp.SetDirection(fix.GetDirection())
 
-    # final metric check on the skip-sampled grid (SSD, lower is better).
-    # Images are independently, robustly normalized first: a plain shared
-    # rescale would NOT change the comparison (SSD/s**2 preserves ordering for
-    # any s), but raw wide-dynamic-range data (e.g. uint16 fluorescence) can
-    # make SSD dominated by a few bright/outlier voxels or by an absolute
-    # intensity-scale difference between fix and mov -- independent per-image
-    # percentile normalization removes both effects. mov and warped (a
-    # resample of mov) share mov's own stats so "before" and "after" use one
-    # consistent scale.
+    # final metric check on the skip-sampled grid; see _final_metric_check
     if final_metric_check:
-        fix_arr = sitk.GetArrayViewFromImage(fix)
-        mov_arr = sitk.GetArrayViewFromImage(mov)
-        # mov may live on its own grid (different shape/spacing than fix) unless
-        # it was pre-warped onto the fix grid by the static transforms above --
-        # e.g. an affine step with no static transforms. Resample it onto the
-        # fix grid with the identity transform so the "before" SSD is computed on
-        # the same grid as fix (and as the warped "after" image below); a direct
-        # fix_arr - mov_arr would otherwise raise a shape-broadcast error.
-        mov_on_fix = sitk.Resample(mov, fix, identity_tx, sitk.sitkLinear, 0.0)
-        mov_on_fix_arr = sitk.GetArrayViewFromImage(mov_on_fix)
-        fix_norm = _robust_normalize(fix_arr)
-        # normalize with mov's own full-extent dynamic range (raw mov, no resample
-        # padding), applied consistently to both the before and after images
-        mov_stats = tuple(np.percentile(mov_arr, [1.0, 99.0]))
-        mov_norm = _robust_normalize(mov_on_fix_arr, stats=mov_stats)
-        initial_metric_value = float(np.mean((fix_norm - mov_norm) ** 2))
-        del mov_norm
         disp_tx = sitk.DisplacementFieldTransform(
             sitk.Cast(sitk.Image(disp), sitk.sitkVectorFloat64)
         )
-        warped = sitk.Resample(mov, fix, disp_tx, sitk.sitkBSpline, 0.0)
+        keep = _final_metric_check(
+            fix, mov, disp_tx, sitk.sitkBSpline, fix_mask,
+            final_metric, final_metric_tolerance, context, 'deform',
+        )
         del disp_tx
-        warped_arr = sitk.GetArrayViewFromImage(warped)
-        warped_norm = _robust_normalize(warped_arr, stats=mov_stats)
-        final_metric_value = float(np.mean((fix_norm - warped_norm) ** 2))
-        # release the whole-block temporaries before the field is densified
-        # onto the full fix grid below, so the two peaks do not overlap
-        del warped, warped_arr, warped_norm, fix_norm, mov_on_fix, mov_on_fix_arr
-        if final_metric_value > initial_metric_value:
-            logger.warning((
-                f'{context} Elastix deform optimization failed to improve metric '
-                f'(normalized SSD): initial: {initial_metric_value}, '
-                f'final: {final_metric_value}'
-            ))
+        if not keep:
             logger.info(f'{context} Elastix deform align returning default')
             return default
-        else:
-            logger.info((
-                f'{context} Elastix deform align succeeded: '
-                f'(normalized SSD): initial: {initial_metric_value}, '
-                f'final: {final_metric_value}'
-            ))
 
     # resample field back to the original (pre-alignment-spacing) fix grid so
     # the returned field always has shape initial_fix_shape + (ndim,)

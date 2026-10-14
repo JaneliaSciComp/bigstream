@@ -321,7 +321,12 @@ def elastix_affine_align(
             static_transform_origin,
         )
         is_field = any(len(t.shape) not in (1, 2) for t in static_transform_list)
-        mov_interp = sitk.sitkBSpline if is_field else sitk.sitkLinear
+        if is_field:
+            mov_interp = sitk.sitkBSpline
+            logger.info(f'{context} composed static transforms: {T}')
+        else:
+            logger.info(f'{context} composed static transforms (deform field): {T}')
+            mov_interp = sitk.sitkLinear
         mov = sitk.Resample(mov, fix, T, mov_interp, 0.0)
         if mov_mask is not None:
             mov_mask = sitk.Resample(

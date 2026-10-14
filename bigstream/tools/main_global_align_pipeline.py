@@ -247,6 +247,9 @@ def _run_global_align(reg_args:RegistrationInputs,
             sharding_factor,
             prealign_steps=prealign_steps,
             align_steps=global_steps,
+            processing_size=reg_args.processing_size,
+            processing_overlap_factor=reg_args.processing_overlap_factor,
+            foreground_percentage=reg_args.foreground_percentage,
         )
         # save the transform
         transform_subpath = reg_args.transform_subpath or reg_args.mov_subpath

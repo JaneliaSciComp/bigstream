@@ -639,7 +639,7 @@ def feature_point_ransac_affine_align(
     affine_matrix : 2d array 4x4
         An affine matrix matching the moving image to the fixed image
     """
-    logger.info(f'Ransac affine align {context} -> {kwargs}')
+    logger.info(f'Ransac affine align {context} additional args: {kwargs}')
     initial_fix_shape = fix.shape
     initial_fix_spacing = np.asarray(fix_spacing, dtype=np.float64)
     max_displacement = validate_affine_displacement_bound(max_displacement, fix.ndim)
@@ -1379,6 +1379,7 @@ def affine_align(
             static_transform_spacing,
             static_transform_origin,
         )
+        logger.info(f'{context} composed static transforms: {T}')
         irm.SetMovingInitialTransform(T)
 
     if initial_transform_given:

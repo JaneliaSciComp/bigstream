@@ -838,6 +838,50 @@ def test_compose_reproduces_the_analytic_composition():
                                rtol=1e-4, atol=1e-5)
 
 
+@pytest.mark.parametrize('side', [-1, 1])
+def test_compose_extrapolates_when_points_leave_the_field(side, monkeypatch):
+    """
+    The second field pushes a whole edge block past the end (or the start)
+    of the volume, so every point the first field is looked up at lies
+    outside it. The crop used to come out empty and the composed block was
+    uninitialized memory (seen as a constant -8.67e16 in a real run); it
+    must use the edge value of the first field instead.
+    """
+    shape = (20, 16, 16)
+    spacing = np.array([1.0, 0.5, 0.5])
+    ndim = 3
+    push = np.array([side * 30.0, 0.0, 0.0])   # 30 voxels along z
+    edge_value = np.array([0.25, -0.5, 0.75], dtype=np.float32)
+
+    first = np.broadcast_to(edge_value, shape + (ndim,)).copy()
+    second = np.broadcast_to(push.astype(np.float32),
+                             shape + (ndim,)).copy()
+
+    # an empty crop can still return the right numbers by accident (the
+    # uninitialized buffer may hold a previous result), so check the crops
+    crop_sizes = []
+    lookup = da.apply_transform_to_coordinates
+
+    def recording_lookup(points, transforms, *args, **kwargs):
+        crop_sizes.append(transforms[0].size)
+        return lookup(points, transforms, *args, **kwargs)
+
+    monkeypatch.setattr(da, 'apply_transform_to_coordinates',
+                        recording_lookup)
+
+    block = ((slice(16, 20) if side > 0 else slice(0, 4)),
+             slice(0, 16), slice(0, 16))
+    output = np.full(shape + (ndim,), np.nan, dtype=np.float32)
+    _compose_fields_block(block, fields=[first, second], spacing=spacing,
+                          shape=shape, output=output)
+
+    assert crop_sizes and all(size > 0 for size in crop_sizes)
+    composed = output[block]
+    assert np.all(np.isfinite(composed))
+    np.testing.assert_allclose(composed, np.broadcast_to(
+        push + edge_value, composed.shape), atol=1e-5)
+
+
 # --------------------------------------------------------------------------
 # ROI handling
 # --------------------------------------------------------------------------

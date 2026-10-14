@@ -1947,6 +1947,11 @@ def _compose_fields_block(block_coords, block_index=None, fields=None,
         low = np.maximum(0, np.floor(voxels.min(axis=0)).astype(int) - 1)
         high = np.minimum(shape,
                           np.ceil(voxels.max(axis=0)).astype(int) + 2)
+        # points pushed entirely past one end of the field leave an empty
+        # crop, and interpolating an empty field returns uninitialized
+        # memory; keep at least the edge voxel so 'nearest' extrapolates
+        low = np.minimum(low, shape - 1)
+        high = np.maximum(high, low + 1)
         del voxels
         crop = tuple(slice(int(a), int(b)) for a, b in zip(low, high))
         # spacing/origin are passed as 1-tuples: apply_transform_to_coordinates

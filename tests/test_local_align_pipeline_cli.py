@@ -19,6 +19,8 @@ import bigstream.distributed_align as da
 import bigstream.io_utility as io_utility
 import bigstream.tools.main_local_align_pipeline as cli
 
+from bigstream.alignment_config import (get_alignment_passes,
+                                        load_align_config)
 from bigstream.distributed_align import (default_blend_ramp_from_config,
                                          default_pass_geometry_from_config)
 from bigstream.image_data import ImageData
@@ -551,7 +553,7 @@ def test_help_hides_the_unsupported_options(capsys):
 def _geometry_for(tmp_path, user_config):
     path = tmp_path / 'c.yml'
     path.write_text(yaml.safe_dump(user_config))
-    return default_pass_geometry_from_config(cli._load_align_config(str(path)))
+    return default_pass_geometry_from_config(load_align_config(str(path)))
 
 
 def test_bundled_defaults_supply_the_pass_geometry(tmp_path):
@@ -590,13 +592,13 @@ def test_bundled_defaults_leave_the_blend_ramp_unset(tmp_path):
     """
     path = tmp_path / 'c.yml'
     path.write_text(yaml.safe_dump({}))
-    assert default_blend_ramp_from_config(cli._load_align_config(str(path))) is None
+    assert default_blend_ramp_from_config(load_align_config(str(path))) is None
 
 
 def test_configured_blend_ramp_survives_the_default_merge(tmp_path):
     path = tmp_path / 'c.yml'
     path.write_text(yaml.safe_dump({'local_align': {'blend_ramp': 'cosine'}}))
-    assert (default_blend_ramp_from_config(cli._load_align_config(str(path)))
+    assert (default_blend_ramp_from_config(load_align_config(str(path)))
             == 'cosine')
 
 
@@ -615,8 +617,8 @@ def test_the_documented_alignment_passes_shape_parses(tmp_path):
     ]}}
     path = tmp_path / 'c.yml'
     path.write_text(yaml.safe_dump(config))
-    merged = cli._load_align_config(str(path))
-    passes = cli._get_alignment_passes(merged, [])
+    merged = load_align_config(str(path))
+    passes = get_alignment_passes(merged, [], 'local_align')
     assert len(passes) == 2
     resolved = [p.resolved(3, *_geometry_for(tmp_path, config)[:2])
                 for p in passes]
@@ -644,8 +646,8 @@ def test_steps_come_from_the_command_line_or_the_config(tmp_path, cli_steps,
                                                         config_steps, expected):
     path = tmp_path / 'c.yml'
     path.write_text(yaml.safe_dump({'local_align': {'steps': config_steps}}))
-    passes = cli._get_alignment_passes(cli._load_align_config(str(path)),
-                                       cli_steps)
+    passes = get_alignment_passes(load_align_config(str(path)),
+                                  cli_steps, 'local_align')
     assert len(passes) == 1
     assert [name for name, _ in passes[0].alignment_steps] == expected
 
@@ -666,8 +668,8 @@ def test_a_steps_config_layers_args_the_way_it_always_did(tmp_path):
 
     from bigstream.tools.cli import get_algorithm_parameters
     old, _ = get_algorithm_parameters(str(path), 'local_align', cli_steps)
-    new = cli._get_alignment_passes(cli._load_align_config(str(path)),
-                                    cli_steps)[0].alignment_steps
+    new = get_alignment_passes(load_align_config(str(path)),
+                               cli_steps, 'local_align')[0].alignment_steps
     assert dict(old) == dict(new)
     # the local_align override on top of the bundled per-step defaults
     assert dict(new)['deform']['control_point_spacing'] == 128
@@ -684,12 +686,13 @@ def test_a_null_valued_step_section_is_tolerated(tmp_path):
     """
     path = tmp_path / 'c.yml'
     path.write_text(yaml.safe_dump({'local_align': {}}))
-    passes = cli._get_alignment_passes(cli._load_align_config(str(path)),
-                                       ['affine', 'deform'])
+    passes = get_alignment_passes(load_align_config(str(path)),
+                                  ['affine', 'deform'], 'local_align')
     assert [name for name, _ in passes[0].alignment_steps] == ['affine', 'deform']
 
 
 def test_no_steps_anywhere_means_nothing_to_do(tmp_path):
     path = tmp_path / 'c.yml'
     path.write_text(yaml.safe_dump({'local_align': {}}))
-    assert cli._get_alignment_passes(cli._load_align_config(str(path)), []) == []
+    assert get_alignment_passes(load_align_config(str(path)), [],
+                                'local_align') == []

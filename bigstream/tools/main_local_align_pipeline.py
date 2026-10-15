@@ -17,25 +17,19 @@ block, so any block geometry is safe - see `max_write_locks`.
 import argparse
 import logging
 
-from copy import deepcopy
-
 import numpy as np
-import pydantic.v1.utils as pu
-import yaml
 
 from dask.distributed import (Client, LocalCluster)
 
 import bigstream.io_utility as io_utility
 
-from bigstream.configure_bigstream import (configure_logging,
-                                           default_bigstream_config_str)
+from bigstream.alignment_config import (get_alignment_passes,
+                                        load_align_config)
+from bigstream.configure_bigstream import configure_logging
 from bigstream.configure_dask import (ConfigureWorkerPlugin, load_dask_config)
 from bigstream.distributed_align import (
     MAX_WRITE_LOCKS,
-    AlignmentPass,
     DisplacementDiagnostics,
-    alignment_passes_from_config,
-    alignment_steps_from_config,
     blockwise_alignment_pipeline,
     default_blend_ramp_from_config,
     default_pass_geometry_from_config,
@@ -266,50 +260,6 @@ def _reject_unsupported_args(args_parser, args,
         )
 
 
-def _load_align_config(config_filename):
-    """The bigstream defaults with the user's config layered on top."""
-    config = yaml.safe_load(default_bigstream_config_str)
-    if config_filename:
-        with open(config_filename) as f:
-            external_config = yaml.safe_load(f)
-        logger.info(f'Read external config from {config_filename}')
-        config = pu.deep_update(config, external_config)
-    return config
-
-
-def _get_alignment_passes(config, registration_steps, context='local_align'):
-    """
-    The passes to run, from `local_align.alignment_passes`.
-
-    A config written for the older single-pass pipeline has no
-    `alignment_passes`, only a flat `steps:` list. Rather than refuse it, run
-    it as one pass - which is exactly what the multi-pass pipeline reduces to
-    at one pass and a zero lattice offset, so such a config keeps its old
-    meaning.
-    """
-    passes = alignment_passes_from_config(config, context)
-    if passes:
-        return passes
-
-    context_config = config.get(context) or {}
-    steps = registration_steps or context_config.get('steps') or []
-    if not steps:
-        return []
-    logger.info(f'No {context}.alignment_passes in the config; running the '
-                f'single steps list {steps} as one pass')
-    # mirror get_algorithm_parameters' precedence: global per-step defaults,
-    # then the local_align overrides for that step. deep_update writes into
-    # its first argument, so copy rather than edit the config in place
-    step_defaults = {name: pu.deep_update(deepcopy(config.get(name) or {}),
-                                          deepcopy(context_config.get(name) or {}))
-                     for name in steps}
-    return [AlignmentPass(
-        alignment_steps=alignment_steps_from_config(list(steps),
-                                                     step_defaults=step_defaults),
-        name='pass1',
-    )]
-
-
 def _run_local_alignment(reg_args: RegistrationInputs,
                          align_config,
                          initial_transform,
@@ -333,8 +283,9 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          max_cluster_jobs=0,
                          displacement_diagnostics=None,
                          error_if_displacement_check_fails=False):
-    config = _load_align_config(align_config)
-    alignment_passes = _get_alignment_passes(config, reg_args.registration_steps)
+    config = load_align_config(align_config)
+    alignment_passes = get_alignment_passes(config, reg_args.registration_steps,
+                                            'local_align')
     if not alignment_passes:
         logger.info('Skip local alignment: no alignment passes and no steps.')
         return True

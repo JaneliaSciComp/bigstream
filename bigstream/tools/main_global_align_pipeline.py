@@ -12,13 +12,17 @@ from dask.distributed import (Client, LocalCluster)
 
 
 from bigstream.align import alignment_pipeline
+from bigstream.alignment_config import (AlignmentPass,
+                                        get_alignment_passes,
+                                        load_align_config)
 from bigstream.configure_bigstream import (configure_logging,
                                            set_cpu_resources)
 from bigstream.diagnostics import dice_score
 from bigstream.distributed_align import (MAX_WRITE_LOCKS,
-                                        AlignmentPass,
                                         DisplacementDiagnostics,
-                                        blockwise_alignment_pipeline)
+                                        blockwise_alignment_pipeline,
+                                        default_blend_ramp_from_config,
+                                        default_pass_geometry_from_config)
 from bigstream.io_utility import read_block
 from bigstream.level_set import estimate_background
 from bigstream.image_data import (ImageData,
@@ -108,10 +112,11 @@ def _define_args(args_descriptor):
                              default=None,
                              help='When to run displacement field '
                                   'diagnostics (jacobian folding statistics) '
-                                  'over the assembled global field. Global '
-                                  'alignment is a single blockwise pass, so '
-                                  'PER_STEP and FINAL_STEP both mean "once, '
-                                  'at the end". Omit for none. Only applies '
+                                  'over the assembled global field: after '
+                                  'every pass (PER_STEP) or only on the '
+                                  'final field (FINAL_STEP); with a single '
+                                  'pass both mean "once, at the end". '
+                                  'Omit for none. Only applies '
                                   'when a processing size selects the '
                                   'blockwise path; per-block diagnostics are '
                                   'separate and always go to the debug log.')
@@ -197,9 +202,28 @@ def _run_global_align(reg_args:RegistrationInputs,
     global_steps, _ = get_algorithm_parameters(align_config,
                                                'global_align',
                                                reg_args.registration_steps)
-    if len(global_steps) == 0:
-        logger.info('Skip global alignment because no global steps were specified.')
-        return None
+    if reg_args.processing_size is None:
+        alignment_passes = None
+        if len(global_steps) == 0:
+            logger.info('Skip global alignment because no global steps were '
+                        'specified. global_align.alignment_passes, if any, '
+                        'are only used by the blockwise alignment, which '
+                        'needs a processing size.')
+            return None
+        default_halo_factor = default_blend_ramp = None
+    else:
+        config = load_align_config(align_config)
+        alignment_passes = get_alignment_passes(config,
+                                                reg_args.registration_steps,
+                                                'global_align')
+        if not alignment_passes:
+            logger.info('Skip global alignment because no global alignment '
+                        'passes or steps were specified.')
+            return None
+        _, default_halo_factor = default_pass_geometry_from_config(
+            config, 'global_align')
+        default_blend_ramp = default_blend_ramp_from_config(config,
+                                                            'global_align')
 
     fix, fix_mask, mov, mov_mask, roi = get_input_images(reg_args)
     if fix.has_data() and mov.has_data():
@@ -213,21 +237,26 @@ def _run_global_align(reg_args:RegistrationInputs,
                                                      reg_args.prealign_steps)
         # calculate and apply the global transform
         static_transforms, static_transforms_spacings = reg_args.get_static_transforms()
-        transform, aligned = _align_global_data(fix, fix_mask,
-                                                mov, mov_mask,
-                                                roi,
-                                                prealign_steps,
-                                                global_steps,
-                                                reg_args.processing_size,
-                                                reg_args.processing_overlap_factor,
-                                                reg_args.foreground_percentage,
-                                                mov_origin_transform,
-                                                static_transforms,
-                                                static_transforms_spacings,
-                                                prealign_downsample=prealign_downsample,
-                                                displacement_diagnostics=displacement_diagnostics,
-                                                max_write_locks=max_write_locks,
-                                                local_workers=local_workers)
+        processing_overlap_factor = reg_args.processing_overlap_factor or default_halo_factor
+        alignment_passes, transform, aligned = _align_global_data(
+            fix, fix_mask,
+            mov, mov_mask,
+            roi,
+            prealign_steps,
+            global_steps,
+            reg_args.processing_size,
+            processing_overlap_factor,
+            reg_args.foreground_percentage,
+            mov_origin_transform,
+            static_transforms,
+            static_transforms_spacings,
+            prealign_downsample=prealign_downsample,
+            alignment_passes=alignment_passes,
+            blend_ramp=default_blend_ramp,
+            displacement_diagnostics=displacement_diagnostics,
+            max_write_locks=max_write_locks,
+            local_workers=local_workers
+        )
         if len(transform.shape) == 2:
             logger.info(f'Global affine transform: {transform}')
         else:
@@ -246,9 +275,9 @@ def _run_global_align(reg_args:RegistrationInputs,
             zarr_format,
             sharding_factor,
             prealign_steps=prealign_steps,
-            align_steps=global_steps,
+            alignment_passes=alignment_passes,
             processing_size=reg_args.processing_size,
-            processing_overlap_factor=reg_args.processing_overlap_factor,
+            processing_overlap_factor=processing_overlap_factor,
             foreground_percentage=reg_args.foreground_percentage,
         )
         # save the transform
@@ -280,7 +309,7 @@ def _run_global_align(reg_args:RegistrationInputs,
             transform_blocksize=transform_blocksize,
             sharding_factor=sharding_factor,
             prealign_steps=prealign_steps,
-            align_steps=global_steps,
+            alignment_passes=alignment_passes,
         )
         # generate and save the global inverse transform
         inv_transform_path = reg_args.inv_transform_path()
@@ -322,10 +351,17 @@ def _align_global_data(
         static_transforms,
         static_transforms_spacings=(),
         prealign_downsample=1,
+        alignment_passes=None,
+        blend_ramp=None,
         displacement_diagnostics=None,
         max_write_locks=MAX_WRITE_LOCKS,
         local_workers=1,
 ):
+    """
+    `steps` drive the whole-image alignment (no `processing_size`).
+    `alignment_passes` drive the blockwise one; when not given, `steps` are
+    run there as a single pass.
+    """
     logger.info('Read image data for global alignment')
     if isinstance(fix_mask_arg, ImageData):
         logger.info(f'Alignment fix mask: {fix_mask_arg}')
@@ -445,25 +481,36 @@ def _align_global_data(
                                              threads_per_worker=1,
                                              memory_limit=0,
                                              processes=False))
-        # Exactly one pass, at a zero lattice offset and with no neighbour
-        # clamp. Multi-pass cascading is a local-stage tool: it exists to
-        # split a large deformation across several budgets and to stagger
-        # block seams, and a global alignment fits neither - it runs on a
-        # downsampled volume looking for the low frequency part of the
-        # deformation, which one pass already carries. A second pass here
-        # would only refit its own residual at the same resolution.
-        #
+        if not alignment_passes:
+            alignment_passes = [AlignmentPass(alignment_steps=steps,
+                                              name='global')]
+
+        def pass_output_factory(pass_index, shape):
+            # only called with more than one pass; the per-pass fields live
+            # next to the final one and go away with the temp dir
+            return zarr.open(
+                os.path.join(transform_tmp_dir.name,
+                             f'global-deform-field-pass{pass_index + 1}.zarr'),
+                mode='w',
+                shape=shape,
+                chunks=block_zyx + (displacement_vector_ndim,),
+                dtype=np.float32,
+            )
+
         # `processing_overlap_factor` and `processing_halo_factor` are the
         # same quantity: a per-side halo as a fraction of the block size.
+        # Passes that set their own block geometry or blend ramp keep it.
         deform_ok = blockwise_alignment_pipeline(
             fix_image,
             fix_spacing / fix_image.expansion_factor,
             mov_image,
             mov_spacing / fix_image.expansion_factor,
-            [AlignmentPass(alignment_steps=steps, name='global')],
+            alignment_passes,
             cluster_client,
             processing_size=block_zyx,
             processing_halo_factor=processing_overlap_factor,
+            blend_ramp=blend_ramp,
+            deformfield_output_factory=pass_output_factory,
             fix_mask=fix_mask,
             mov_mask=mov_mask,
             roi=roi,
@@ -511,7 +558,7 @@ def _align_global_data(
     alignment_score = dice_score(fix_image_array, aligned,
                                  background=_estimate_background(fix_image_array))
     logger.info(f'Dice score for the alignment of {fix_image} to {mov_image}: {alignment_score}')
-    return transform, aligned
+    return alignment_passes, transform, aligned
 
 
 def _prealign(fix, mov,

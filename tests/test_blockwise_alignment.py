@@ -31,13 +31,15 @@ from bigstream.distributed_io_utility import (
     storage_write_unit,
     write_lock_grid,
 )
-from bigstream.distributed_align import (
+from bigstream.alignment_config import (
     AlignmentPass,
+    _alignment_passes_from_config,
+    _alignment_steps_from_config,
+)
+from bigstream.distributed_align import (
     DisplacementDiagnostics,
     blockwise_alignment_pipeline,
     _BlockLattice,
-    alignment_passes_from_config,
-    alignment_steps_from_config,
     _axis_block_starts,
     _compose_fields_block,
     default_blend_ramp_from_config,
@@ -55,7 +57,7 @@ from bigstream.image_data import ImageData
 
 
 def test_alignment_steps_converts_single_key_dicts():
-    steps = alignment_steps_from_config([
+    steps = _alignment_steps_from_config([
         {'ransac': {'alignment_spacing': 4}},
         {'deform': {'control_point_spacing': 128}},
     ])
@@ -64,11 +66,11 @@ def test_alignment_steps_converts_single_key_dicts():
 
 
 def test_alignment_steps_accepts_bare_step_names():
-    assert alignment_steps_from_config(['affine']) == [('affine', {})]
+    assert _alignment_steps_from_config(['affine']) == [('affine', {})]
 
 
 def test_alignment_steps_layers_over_defaults():
-    steps = alignment_steps_from_config(
+    steps = _alignment_steps_from_config(
         [{'deform': {'control_point_spacing': 128}}],
         step_defaults={'deform': {'control_point_spacing': 50, 'metric': 'MMI'}},
     )
@@ -77,14 +79,14 @@ def test_alignment_steps_layers_over_defaults():
 
 def test_alignment_steps_rejects_multi_key_entries():
     with pytest.raises(ValueError, match='single-key mapping'):
-        alignment_steps_from_config([{'affine': {}, 'deform': {}}])
+        _alignment_steps_from_config([{'affine': {}, 'deform': {}}])
 
 
 def test_config_parses_into_two_passes():
     with open('tests/configs/bigstream_config.yml') as f:
         config = yaml.safe_load(f)
     size, halo_factor = default_pass_geometry_from_config(config)
-    passes = alignment_passes_from_config(config)
+    passes = _alignment_passes_from_config(config, 'local_align')
 
     assert len(passes) == 2
     assert size == [192, 192, 192]
@@ -148,7 +150,7 @@ def test_blend_ramp_default_and_per_pass_override():
     default_ramp = default_blend_ramp_from_config(config)
     assert default_ramp == 'cosine'
 
-    passes = alignment_passes_from_config(config)
+    passes = _alignment_passes_from_config(config, 'local_align')
     resolved = [p.resolved(3, default_processing_size=(64, 64, 64),
                            default_halo_factor=0.25,
                            default_blend_ramp=default_ramp)
@@ -162,7 +164,7 @@ def test_blend_ramp_unset_everywhere_is_linear():
     config = yaml.safe_load(BLEND_RAMP_CONFIG.replace(
         '    blend_ramp: cosine\n', '', 1))
     assert default_blend_ramp_from_config(config) is None
-    resolved = alignment_passes_from_config(config)[0].resolved(
+    resolved = _alignment_passes_from_config(config, 'local_align')[0].resolved(
         3, default_processing_size=(64, 64, 64), default_halo_factor=0.25,
         default_blend_ramp=default_blend_ramp_from_config(config))
     assert resolved.blend_ramp == 'linear'

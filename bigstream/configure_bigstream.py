@@ -137,10 +137,11 @@ random:
 global_align:
   steps: [] # no default global steps
   # Passing a processing size to the global tool switches it from a single
-  # whole-image fit to one blockwise pass over the volume. Always exactly
-  # one pass: multi-pass cascading is a local-stage tool, and a global
-  # alignment runs on a downsampled volume looking for the low frequency
-  # part of the deformation, which one pass already carries.
+  # whole-image fit to a blockwise alignment over the volume. By default
+  # that is one pass running `steps`; an `alignment_passes` section here,
+  # written exactly as the local_align one below, replaces `steps` for the
+  # blockwise alignment. Without a processing size `alignment_passes` is
+  # not used.
 
 local_align:
   # A single flat list of steps is one alignment pass over the volume.

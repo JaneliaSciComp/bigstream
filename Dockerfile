@@ -1,27 +1,22 @@
-# ---- builder: compile SimpleITK 3.0.0b1 with Elastix bundled ----
-# SimpleITK_USE_ELASTIX is off by default, and a from-source build of this
-# same git ref without the flag was confirmed to be missing
-# ElastixImageFilter, so it must be built explicitly rather than relying on
-# a prebuilt wheel from --find-links.
-FROM ghcr.io/janeliascicomp/dask:2026.6.0-py12-ol9 AS simpleitk-builder
+FROM ghcr.io/janeliascicomp/dask:2026.6.0-py12-ol9 AS builder
 
-RUN dnf -y groupinstall "Development Tools" && \
-    dnf install -y \
-        git \
-        make \
-        cmake
+# git is needed for the git-pinned PyPI deps (fishspot, zarr-tools)
+RUN dnf install -y git
 
-RUN CMAKE_ARGS="-DSimpleITK_USE_ELASTIX=ON" CMAKE_BUILD_PARALLEL_LEVEL=$(nproc) \
-    pip wheel --no-deps -w /wheels \
-        "SimpleITK @ git+https://github.com/SimpleITK/SimpleITK@v3.0.0b1"
+ARG PIXI_VERSION=v0.82.0
+RUN curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=${PIXI_VERSION} PIXI_HOME=/opt/pixi bash
+ENV PATH=/opt/pixi/bin:${PATH}
 
-# ---- final image ----
+WORKDIR /app/bigstream
+# install the locked pixi environment
+COPY pyproject.toml pixi.lock setup.py ./
+COPY bigstream bigstream
+RUN pixi install --locked -e default
+
 FROM ghcr.io/janeliascicomp/dask:2026.6.0-py12-ol9
 
 RUN dnf install -y \
-        git \
-        mesa-libGL \
-        libzstd-devel
+        mesa-libGL
 
 WORKDIR /app/bigstream
 
@@ -34,14 +29,14 @@ ENV OMP_NUM_THREADS=
 
 ENV PYTHONPATH=/app/bigstream
 ENV ITKWASM_CACHE_DIR=/tmp
-ENV PIP_ROOT_USER_ACTION=ignore
 
-# Use the base environment from the baseImage and the conda-env
-# from current dir
-COPY conda-env.yaml .
-RUN mamba env update -n base -f conda-env.yaml
+# Same path as in the builder: conda envs hardcode their prefix, and the
+# editable bigstream install points at /app/bigstream.
+# The pixi env goes first on PATH so python and dask resolve to it
+# rather than to the base image's conda env.
+COPY --from=builder /app/bigstream/.pixi/envs/default /app/bigstream/.pixi/envs/default
+ENV PATH=/app/bigstream/.pixi/envs/default/bin:${PATH}
 
-# install bigstream
 COPY bigstream bigstream
 COPY configs configs
 
@@ -49,11 +44,4 @@ COPY *.py .
 COPY *.toml .
 COPY *.md .
 
-# Install the Elastix-enabled SimpleITK wheel built in simpleitk-builder.
-COPY --from=simpleitk-builder /wheels/*.whl /tmp/simpleitk-wheels/
-RUN pip install --no-deps /tmp/simpleitk-wheels/*.whl && \
-    rm -rf /tmp/simpleitk-wheels
-RUN python -c "import SimpleITK as sitk; assert hasattr(sitk, 'ElastixImageFilter'), 'SimpleITK built without Elastix support'"
-
-RUN pip install -e . && \
-    pip install "zarr-tools @ git+https://github.com/JaneliaSciComp/zarr-tools.git@525e55a"
+RUN python -c "import SimpleITK as sitk; print('SITK with Elastix support' if hasattr(sitk, 'ElastixImageFilter') else 'SITK without Elastix support')"

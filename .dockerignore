@@ -1,0 +1,4 @@
+.pixi
+build
+*.egg-info
+.claude

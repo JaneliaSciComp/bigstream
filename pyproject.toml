@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bigstream"
-version = "5.6.0"
+version = "5.6.1"
 description = "Tools for distributed alignment of massive images"
 license = "BSD-3-Clause"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     { name = "Greg M. Fleishman", email = "greg.nli10me@gmail.com" }
 ]
@@ -38,7 +38,41 @@ dependencies = [
 [project.urls]
 "Bug Tracker" = "https://github.com/JaneliaScicomp/bigstream/issues"
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+
 [tool.setuptools.packages.find]
 where = [
     "."
 ]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+
+# conda packages - same as conda-env.yaml; everything else comes from
+# [project.dependencies] through PyPI
+[tool.pixi.dependencies]
+python = "3.12.*"
+psutil = "7.2.2.*"
+zstd = "*"
+
+[tool.pixi.pypi-options]
+index-url = "https://pypi.org/simple"
+# SimpleITK 3.0.0b1 is not on PyPI - pick it up from the GitHub release assets
+find-links = [
+    { url = "https://github.com/SimpleITK/SimpleITK/releases/expanded_assets/v3.0.0b1" },
+]
+
+[tool.pixi.pypi-dependencies]
+bigstream = { path = ".", editable = true }
+zarr-tools = { git = "https://github.com/JaneliaSciComp/zarr-tools.git", rev = "525e55a" }
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+test = { features = ["test"], solve-group = "default" }
+
+[tool.pixi.feature.test.tasks]
+test = "pytest tests"

@@ -17,3 +17,5 @@ dist/
 .DS_Store
 
 .claude
+# pixi environments
+.pixi

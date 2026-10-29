@@ -25,6 +25,7 @@ import yaml
 
 import bigstream.distributed_align as da
 
+from bigstream.blend_ramp import blend_ramp_weights
 from bigstream.align_constraints import blend_safe_displacement_bound
 from bigstream.distributed_io_utility import (
     lock_cell_keys,
@@ -35,6 +36,7 @@ from bigstream.alignment_config import (
     AlignmentPass,
     _alignment_passes_from_config,
     _alignment_steps_from_config,
+    blend_halo,
 )
 from bigstream.distributed_align import (
     DisplacementDiagnostics,
@@ -197,10 +199,58 @@ def test_pass_without_a_block_size_is_an_error():
         AlignmentPass(alignment_steps=[]).resolved(3, default_halo_factor=0.2)
 
 
-def test_halo_factor_must_be_a_per_side_fraction():
-    with pytest.raises(ValueError, match=r'\(0, 1\)'):
+def test_halo_factor_must_be_positive():
+    with pytest.raises(ValueError, match='positive'):
         AlignmentPass(processing_size=(16,) * 3,
-                      processing_halo_factor=1.5).resolved(3)
+                      processing_halo_factor=0).resolved(3)
+
+
+def test_halo_above_half_is_kept_as_given():
+    """The pass halo is the alignment context; it is not clamped."""
+    resolved = AlignmentPass(processing_size=(400, 400, 700),
+                             processing_halo_factor=0.8).resolved(3)
+    assert resolved.processing_halo == (320, 320, 560)
+
+
+def test_blend_halo_at_half_the_block_is_unchanged():
+    assert blend_halo((200, 200, 350), (400, 400, 700)) == (200, 200, 350)
+
+
+def test_blend_halo_above_half_is_clamped(caplog):
+    with caplog.at_level('INFO'):
+        bounded = blend_halo((240, 240, 420), (400, 400, 700), name='affine')
+    assert bounded == (200, 200, 350)
+    assert 'affine' in caplog.text and 'exceeds half' in caplog.text
+
+
+def test_blend_halo_of_a_factor_of_one_or_more_is_clamped_too():
+    halo = AlignmentPass(processing_size=(16,) * 3,
+                         processing_halo_factor=1.5).resolved(3).processing_halo
+    assert blend_halo(halo, (16,) * 3) == (8, 8, 8)
+
+
+def test_blend_halo_in_voxels_is_clamped_per_axis():
+    assert blend_halo((300, 100, 350), (400, 400, 700)) == (200, 100, 350)
+
+
+def test_blend_halo_of_an_odd_block_stays_within_the_limit():
+    # round(7 * 0.5) == 4 would give 2h > B
+    halo = AlignmentPass(processing_size=(7, 7, 7),
+                         processing_halo_factor=0.5).resolved(3).processing_halo
+    assert all(2 * h <= b for h, b in zip(blend_halo(halo, (7, 7, 7)),
+                                          (7, 7, 7)))
+
+
+def test_blend_halo_gives_usable_blend_weights():
+    """The 0.6 factor that used to raise IndexError in blend_ramp_weights."""
+    size = (40, 40, 40)
+    halo = blend_halo(AlignmentPass(processing_size=size,
+                                    processing_halo_factor=0.6)
+                      .resolved(3).processing_halo, size)
+    core = tuple(max(s - 2 * h + 2, 0) for s, h in zip(size, halo))
+    pad = tuple((max(2 * h - 1, 0),) * 2 for h in halo)
+    weights = blend_ramp_weights(core, pad)
+    assert weights.shape == tuple(s + 2 * h for s, h in zip(size, halo))
 
 
 def test_explicit_halo_wins_over_the_factor():
@@ -295,6 +345,27 @@ def test_blending_weights_are_a_partition_of_unity(offset, blend_ramp):
                                          clip_before=before, clip_after=after)
         total[lattice.footprint_slices(index)] += weights
     np.testing.assert_allclose(total, 1.0, rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize('offset', [(0, 0, 0), (5, 3, 7)])
+def test_read_region_contains_the_footprint(offset):
+    lattice = _BlockLattice(block_size=(16, 16, 16), halo=(8, 8, 8),
+                            offset=offset, extent=(40, 44, 48),
+                            context_halo=(12, 12, 12))
+    for index in lattice.indices():
+        read = lattice.read_slices(index)
+        footprint = lattice.footprint_slices(index)
+        crop = lattice.footprint_within_read(index)
+        for r, f, c in zip(read, footprint, crop):
+            assert r.start <= f.start and f.stop <= r.stop
+            assert (c.start + r.start, c.stop + r.start) == (f.start, f.stop)
+
+
+def test_read_region_is_the_footprint_without_a_context_halo():
+    lattice = _BlockLattice(block_size=(16, 16, 16), halo=(4, 4, 4),
+                            offset=(0, 0, 0), extent=(40, 44, 48))
+    for index in lattice.indices():
+        assert lattice.read_slices(index) == lattice.footprint_slices(index)
 
 
 def test_explicit_clips_reproduce_the_index_derived_crop():
@@ -453,6 +524,55 @@ def test_two_passes_cascade_and_compose(cluster_client, synthetic_volumes,
     interior = (slice(8, -8),) * 3
     total = pass_fields[0][interior] + pass_fields[1][interior]
     assert np.allclose(output[interior], total, atol=0.5)
+
+
+def _coordinate_volume(shape):
+    """Each voxel holds its own index, packed as `z*10000 + y*100 + x`."""
+    z, y, x = np.indices(shape)
+    return (z * 10000 + y * 100 + x).astype(np.float32)
+
+
+@pytest.mark.parametrize('halo_factor', [0.25, 0.5, 0.75])
+def test_context_halo_crops_back_to_the_right_voxels(cluster_client,
+                                                     monkeypatch, halo_factor):
+    """
+    A block whose field is each voxel's own coordinate. If the crop from the
+    read region to the footprint were off by any amount, the blended output
+    would no longer be the coordinate grid. Also checks that a halo above
+    half the block really makes the blocks read more than they write.
+    """
+    read_shapes = []
+
+    def coordinate_pipeline(fix, mov, fix_spacing, mov_spacing, steps,
+                            **kwargs):
+        read_shapes.append(fix.shape)
+        v = np.rint(fix).astype(np.int64)
+        return np.stack([v // 10000, (v // 100) % 100, v % 100],
+                        axis=-1).astype(np.float32)
+
+    _patch_alignment_pipeline(monkeypatch, coordinate_pipeline)
+    shape = (40, 44, 48)
+    fix_image = ImageData(image_arraydata=_coordinate_volume(shape),
+                          read_attrs=False)
+    mov_image = ImageData(image_arraydata=_coordinate_volume(shape),
+                          read_attrs=False)
+    spacing = np.array([1.0, 1.0, 1.0])
+    output = np.zeros(shape + (3,), dtype=np.float32)
+    assert blockwise_alignment_pipeline(
+        fix_image, spacing, mov_image, spacing,
+        [AlignmentPass(alignment_steps=[('deform', {})])],
+        cluster_client,
+        processing_size=(16, 16, 16),
+        processing_halo_factor=halo_factor,
+        deformfield_final_result=output,
+    )
+    expected = np.stack(np.indices(shape), axis=-1).astype(np.float32)
+    assert np.allclose(output, expected, atol=1e-3)
+    # the middle block along z (core 16:32) reads its core grown by the
+    # context, clipped to the 40 voxel extent
+    context = int(round(16 * halo_factor))
+    assert max(s[0] for s in read_shapes) == (min(shape[0], 32 + context)
+                                              - max(0, 16 - context))
 
 
 def test_blend_ramp_reaches_the_weight_builder_per_pass(

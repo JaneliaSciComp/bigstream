@@ -68,7 +68,7 @@ def _align(images, monkeypatch, **kwargs):
     # volume is the stage the global tool keeps and this file does not
     # exercise
     _passes, transform, _aligned = gap._align_global_data(
-        fix, None, mov, None,
+        fix, kwargs.pop('fix_mask', None), mov, kwargs.pop('mov_mask', None),
         None,                            # no roi
         [],                              # no prealign steps
         [('deform', {})],                # the global steps
@@ -117,6 +117,31 @@ def test_the_new_knobs_reach_the_pipeline(images, patched, monkeypatch):
                      displacement_diagnostics='FINAL_STEP')
     assert seen['kwargs']['max_write_locks'] == 8
     assert seen['kwargs']['displacement_diagnostics'] == 'FINAL_STEP'
+
+
+def test_mask_image_data_reaches_the_pipeline_unloaded(images, patched,
+                                                       monkeypatch):
+    """
+    A loaded mask array is pickled into every task graph (hundreds of MiB at
+    production sizes); the ImageData is a reference the blocks read their
+    own crop from.
+    """
+    fix_mask = ImageData(image_arraydata=np.ones(SHAPE, dtype=np.uint8),
+                         read_attrs=False)
+    mov_mask = ImageData(image_arraydata=np.ones(SHAPE, dtype=np.uint8),
+                         read_attrs=False)
+    transform, seen = _align(images, monkeypatch,
+                             fix_mask=fix_mask, mov_mask=mov_mask)
+    assert seen['kwargs']['fix_mask'] is fix_mask
+    assert seen['kwargs']['mov_mask'] is mov_mask
+    assert np.any(transform)
+
+
+def test_mask_array_is_passed_through(images, patched, monkeypatch):
+    fix_mask = np.ones(SHAPE, dtype=np.uint8)
+    _, seen = _align(images, monkeypatch, fix_mask=fix_mask)
+    assert seen['kwargs']['fix_mask'] is fix_mask
+    assert seen['kwargs']['mov_mask'] is None
 
 
 def test_block_footprints_sharing_a_chunk_do_not_corrupt_the_field(

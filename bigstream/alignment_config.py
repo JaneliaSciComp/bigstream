@@ -59,10 +59,15 @@ class AlignmentPass:
         Halo as a fraction of `processing_size`, **per side**. This is the
         same quantity the old single-pass pipeline called `overlap_factor`;
         the name differs only to make the per-side reading explicit. Ignored
-        when `processing_halo` is given.
+        when `processing_halo` is given. See `processing_halo` for values
+        above 0.5.
 
     processing_halo : tuple of int (default: None)
-        Halo in voxels, per side. Takes precedence over the factor.
+        Halo in voxels, per side. Takes precedence over the factor. This is
+        the context a block is read and aligned over. The blending weights
+        use at most `processing_size // 2` of it (see `blend_halo`); a block
+        with a larger halo is aligned over the full halo and its result is
+        cropped to the blend halo before it is written.
 
     blend_ramp : str (default: None)
         Shape of the overlap-add blending weight ramp, `'linear'` or
@@ -98,7 +103,7 @@ class AlignmentPass:
         sensible fallback for it.
         """
         size = _as_int_tuple(
-            _first_not_none(self.processing_size, default_processing_size),
+            first_not_none(self.processing_size, default_processing_size),
             ndim, 'processing_size')
         if size is None:
             raise ValueError(
@@ -115,8 +120,8 @@ class AlignmentPass:
 
         halo = _as_int_tuple(self.processing_halo, ndim, 'processing_halo')
         if halo is None:
-            factor = _first_not_none(self.processing_halo_factor,
-                                     default_halo_factor)
+            factor = first_not_none(self.processing_halo_factor,
+                                    default_halo_factor)
             if factor is None:
                 raise ValueError(
                     'no processing_halo or processing_halo_factor for '
@@ -124,10 +129,10 @@ class AlignmentPass:
                 )
             factor = np.broadcast_to(
                 np.atleast_1d(np.asarray(factor, dtype=float)), (ndim,))
-            if np.any(factor <= 0) or np.any(factor >= 1):
+            if np.any(factor <= 0):
                 raise ValueError(
                     'processing_halo_factor is a per-side fraction of the '
-                    f'block size and must be in (0, 1), got {factor.tolist()}'
+                    f'block size and must be positive, got {factor.tolist()}'
                 )
             halo = tuple(int(h) for h in np.round(np.array(size) * factor))
         if any(h <= 0 for h in halo):
@@ -139,7 +144,7 @@ class AlignmentPass:
         # raises on an unknown name; a typo here would otherwise silently
         # blend with one ramp and bound the displacement with another
         ramp = parse_blend_ramp(
-            _first_not_none(self.blend_ramp, default_blend_ramp))
+            first_not_none(self.blend_ramp, default_blend_ramp))
 
         return AlignmentPass(
             alignment_steps=list(self.alignment_steps),
@@ -152,7 +157,31 @@ class AlignmentPass:
         )
 
 
-def _first_not_none(*values):
+def blend_halo(halo, size, name=None):
+    """
+    The part of `halo` the blending weights use: at most half the block
+    size, per axis.
+
+    The blend weights of a block have a full-weight interior of
+    `B - 2h + 2` voxels, and the overlap-add only sums to 1 when at most two
+    blocks overlap on an axis, i.e. `2h <= B`. The rest of a larger halo is
+    still read and aligned over, as context.
+    """
+    limit = tuple(s // 2 for s in size)
+    if all(h <= m for h, m in zip(halo, limit)):
+        return tuple(halo)
+    bounded = tuple(min(h, m) for h, m in zip(halo, limit))
+    read_ratio = np.prod(np.array(size) + 2 * np.array(halo)) / np.prod(size)
+    logger.info(
+        f'alignment pass {name or "(unnamed)"}: processing_halo {halo} '
+        f'exceeds half the processing_size {size}; blending with {bounded} '
+        f'and aligning over the full halo ({read_ratio:.1f}x the block core '
+        'volume)'
+    )
+    return bounded
+
+
+def first_not_none(*values):
     for v in values:
         if v is not None:
             return v

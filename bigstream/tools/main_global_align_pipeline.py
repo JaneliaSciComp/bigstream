@@ -512,8 +512,9 @@ def _align_global_data(
             processing_halo_factor=processing_overlap_factor,
             blend_ramp=blend_ramp,
             deformfield_output_factory=pass_output_factory,
-            fix_mask=fix_mask,
-            mov_mask=mov_mask,
+            # hand the masks as they came in not as in memory arrays
+            fix_mask=fix_mask_arg,
+            mov_mask=mov_mask_arg,
             roi=roi,
             foreground_percentage=foreground_percentage,
             mov_origin_transform=mov_origin_transform,

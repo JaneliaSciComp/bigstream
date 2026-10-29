@@ -76,7 +76,7 @@ import bigstream.utility as ut
 
 from .align import alignment_pipeline, _phys_roi_to_voxel
 from .align_constraints import DEFAULT_K, blend_safe_displacement_bound
-from .alignment_config import AlignmentPass, _first_not_none
+from .alignment_config import AlignmentPass, first_not_none, blend_halo
 from .blend_ramp import (DEFAULT_BLEND_RAMP, blend_ramp_weights,
                          ramp_gradient_gain)
 from .diagnostics import (deform_field_diagnostics,
@@ -418,7 +418,8 @@ def blockwise_alignment_pipeline(
             # client's memory at production sizes.
             last = resolved_passes[-1]
             tile = (np.array(last.processing_size)
-                    + 2 * np.array(last.processing_halo))
+                    + 2 * np.array(blend_halo(last.processing_halo,
+                                              last.processing_size)))
             ids, coords = _tile_volume(fix_spatial_dims, tile)
             _display_displacement_diagnostics(
                 deformfield_final_result, ids, coords, fix_spatial_spacing,
@@ -464,16 +465,22 @@ def _run_alignment_pass(alignment_pass,
                         label='pass'):
     """Run one pass of the multi-pass pipeline. See `blockwise_alignment_pipeline`."""
     block_size = np.array(alignment_pass.processing_size)
-    halo = np.array(alignment_pass.processing_halo)
+    # the halo as given is the context a block is aligned over; the blend
+    # uses at most half the block size of it
+    halo = np.array(blend_halo(alignment_pass.processing_halo,
+                               alignment_pass.processing_size,
+                               name=label))
 
     lattice = _BlockLattice(block_size=alignment_pass.processing_size,
-                           halo=alignment_pass.processing_halo,
+                           halo=tuple(halo),
                            offset=alignment_pass.processing_offset,
-                           extent=fix_spatial_dims)
+                           extent=fix_spatial_dims,
+                           context_halo=alignment_pass.processing_halo)
     nblocks = lattice.nblocks
     logger.info((
         f'{label}: partition {fix_spatial_dims} into {nblocks} blocks of '
-        f'{tuple(block_size)} with a {tuple(halo)} halo at lattice offset '
+        f'{tuple(block_size)} with a {tuple(halo)} halo '
+        f'(aligned over a {lattice.context_halo} context) at lattice offset '
         f'{lattice.offset}'
     ))
 
@@ -517,7 +524,10 @@ def _run_alignment_pass(alignment_pass,
          for o in neighbor_offsets}
         for index in blocks_ids
     ]
-    blocks_infos = list(zip(blocks_ids, blocks_coords, blocks_neighbors))
+    # blocks are read and aligned over their read region, which is the
+    # footprint unless the pass has a wider context halo
+    blocks_read_coords = [lattice.read_slices(index) for index in blocks_ids]
+    blocks_infos = list(zip(blocks_ids, blocks_read_coords, blocks_neighbors))
 
     fix_mask_spatial_dims = (fix_mask_image.spatial_dims
                              if fix_mask_image is not None else None)
@@ -557,7 +567,7 @@ def _run_alignment_pass(alignment_pass,
         block_index = aligned_block[0]
         clip_before, clip_after = lattice.clip_amounts(block_index)
         return _write_block_transform(
-            aligned_block,
+            _crop_to_footprint(aligned_block, lattice),
             block_size=block_size,
             block_overlaps=halo,
             nblocks=nblocks,
@@ -588,6 +598,21 @@ def _run_alignment_pass(alignment_pass,
                                           blocks_coords, fix_spatial_spacing,
                                           cluster_client, context=label)
     return result
+
+
+def _crop_to_footprint(aligned_block, lattice):
+    """
+    Cut an aligned block, computed over its read region, down to its
+    footprint - the part that is weighted and written. A no-op when the
+    read region is the footprint.
+    """
+    block_index, read_coords, block_neighbors, transform = aligned_block
+    footprint_coords = lattice.footprint_slices(block_index)
+    if footprint_coords == tuple(read_coords):
+        return aligned_block
+    crop = lattice.footprint_within_read(block_index)
+    return (block_index, footprint_coords, block_neighbors,
+            transform[crop + (slice(None),)])
 
 
 def _partition(items, max_cluster_jobs):
@@ -702,29 +727,38 @@ class _BlockLattice:
     """
     The block partition for one pass.
 
-    Two rectangles per block, both in absolute volume voxel coordinates:
+    Three rectangles per block, all in absolute volume voxel coordinates:
 
       * the **core**, `[start, start + B)`, the territory the block owns and
         where its blending weight is 1. Cores tile the volume exactly.
       * the **footprint**, the core grown by `halo` on every side. This is
-        what is read, aligned and written; footprints overlap, and the
-        overlap is where the blend ramp lives.
+        what is weighted and written; footprints overlap, and the overlap is
+        where the blend ramp lives.
+      * the **read region**, the core grown by `context_halo` (`>= halo`) on
+        every side. This is what is read and aligned; the resulting
+        transform is cropped back to the footprint before it is blended.
+        It equals the footprint unless the pass halo was larger than the
+        blend allows (see `blend_halo`).
 
-    Either rectangle can stick out of the volume, at both ends once the
-    lattice has a nonzero `offset`. The clipped footprint is what gets read;
-    `clip_amounts` reports how much was cut off each side so the weight array
-    can be cut to match.
+    Any rectangle can stick out of the volume, at both ends once the lattice
+    has a nonzero `offset`. The clipped read region is what gets read;
+    `clip_amounts` reports how much of the footprint was cut off each side so
+    the weight array can be cut to match.
     """
 
     block_size: Tuple[int, ...]
     halo: Tuple[int, ...]
     offset: Tuple[int, ...]
     extent: Tuple[int, ...]
+    context_halo: Optional[Tuple[int, ...]] = None
     starts: List[np.ndarray] = field(init=False)
 
     def __post_init__(self):
         self.block_size = tuple(int(v) for v in self.block_size)
         self.halo = tuple(int(v) for v in self.halo)
+        self.context_halo = (self.halo if self.context_halo is None
+                             else tuple(max(int(c), h) for c, h in
+                                        zip(self.context_halo, self.halo)))
         self.offset = tuple(int(v) % b
                             for v, b in zip(self.offset, self.block_size))
         self.extent = tuple(int(v) for v in self.extent)
@@ -767,6 +801,21 @@ class _BlockLattice:
         start = np.maximum(0, start)
         stop = np.minimum(self.extent, stop)
         return tuple(slice(int(a), int(b)) for a, b in zip(start, stop))
+
+    def read_slices(self, index):
+        """The block read region, clipped to the volume."""
+        start, stop = self.core_bounds(index)
+        context = np.array(self.context_halo)
+        start = np.maximum(0, start - context)
+        stop = np.minimum(self.extent, stop + context)
+        return tuple(slice(int(a), int(b)) for a, b in zip(start, stop))
+
+    def footprint_within_read(self, index):
+        """The footprint as a slice into the block's own (clipped) read array."""
+        read = self.read_slices(index)
+        footprint = self.footprint_slices(index)
+        return tuple(slice(f.start - r.start, f.stop - r.start)
+                     for f, r in zip(footprint, read))
 
     def clip_amounts(self, index):
         """
@@ -1404,8 +1453,7 @@ def _get_transform_weights(block_index,
 
     # rebalance only for the neighbors that are off the volume
     if rebalance_for_missing_neighbors and edge_neighbors:
-        logger.debug(f'Rebalance transform {weights.shape} weights for '
-                     f'{block_context}')
+        logger.debug(f'{block_context} - rebalance transform {weights.shape} weights ')
         # define overlap slices
         slices = {}
         slices[-1] = tuple(slice(0, 2*y) for y in block_overlaps)
@@ -1844,13 +1892,13 @@ def default_pass_geometry_from_config(config, context='local_align'):
     size), so any of them serves as the default.
     """
     context_config = config.get(context) or {}
-    halo_factor = _first_not_none(
+    halo_factor = first_not_none(
         context_config.get('processing_halo_factor'),
         context_config.get('block_overlap'),
         context_config.get('overlap_factor'),
     )
-    size = _first_not_none(context_config.get('processing_size'),
-                           context_config.get('block_size'))
+    size = first_not_none(context_config.get('processing_size'),
+                          context_config.get('block_size'))
     return size, halo_factor
 
 

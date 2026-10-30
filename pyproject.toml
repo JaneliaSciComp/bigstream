@@ -75,4 +75,4 @@ default = { solve-group = "default" }
 test = { features = ["test"], solve-group = "default" }
 
 [tool.pixi.feature.test.tasks]
-test = "pytest tests"
+test = { cmd = "pytest {{ tests }}", args = [{ arg = "tests", default = "tests" }] }

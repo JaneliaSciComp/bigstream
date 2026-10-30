@@ -3,6 +3,7 @@ import numpy as np
 import time
 
 from fishspot.filter import white_tophat, apply_foreground_mask
+from scipy.ndimage import gaussian_gradient_magnitude, maximum_filter
 from scipy.spatial import cKDTree
 from scipy.stats.mstats import winsorize
 from skimage.feature import blob_dog, blob_log
@@ -106,6 +107,58 @@ def blob_detection(
     intensities = image[ tuple(spots[:, iii] for iii in range(image.ndim)) ]
 
     return np.hstack((spots[:, :image.ndim], intensities[..., None]))
+
+
+def gradient_keypoints(image, blob_radius, cc_radius, mask=None):
+    """
+    Find keypoints at local maxima of the gradient magnitude
+
+    Parameters
+    ----------
+    image : nd-array
+        The image to find keypoints in
+    blob_radius : scalar float or tuple of float
+        Feature radius in voxel units; the gaussian sigma of the gradient is
+        blob_radius / sqrt(image.ndim), the same radius to sigma relation
+        blob_detection uses
+    cc_radius : scalar int or tuple of int
+        The halfwidth of the neighborhoods used for correlation. A keypoint
+        is the gradient maximum of the (2 * cc_radius + 1) window around it,
+        and keypoints closer than cc_radius to the border are dropped so
+        their whole neighborhood is inside the image
+    mask : nd-array (default: None)
+        If given, only keypoints in the foreground of the mask are kept
+
+    Returns
+    -------
+    keypoint_coordinates_and_gradients : nd-array Nx(ndim+1)
+        The first ndim columns are the keypoint coordinates, the last column
+        is the gradient magnitude at the keypoint.
+    """
+    start_time = time.time()
+    if not isinstance(blob_radius, (tuple, list, np.ndarray)):
+        blob_radius = (blob_radius,) * image.ndim
+    if not isinstance(cc_radius, (tuple, list, np.ndarray)):
+        cc_radius = (cc_radius,) * image.ndim
+    sigma = np.array(blob_radius) / np.sqrt(image.ndim)
+    nms_window = tuple(2 * int(r) + 1 for r in cc_radius)
+
+    grad = gaussian_gradient_magnitude(image.astype(np.float32), sigma=sigma)
+    local_max = (grad == maximum_filter(grad, size=nms_window)) & (grad > 0)
+    inside = tuple(slice(int(r), image.shape[i] - int(r))
+                   for i, r in enumerate(cc_radius))
+    candidates = np.zeros(image.shape, dtype=bool)
+    candidates[inside] = local_max[inside]
+
+    keypoints = np.argwhere(candidates)
+    if mask is not None:
+        keypoints = apply_foreground_mask(keypoints, mask)
+    gradients = grad[tuple(keypoints[:, i] for i in range(image.ndim))]
+    logger.debug((
+        f'Gradient keypoints (sigma {sigma}, nms window {nms_window}) '
+        f'found {len(keypoints)} keypoints in {time.time()-start_time}s'
+    ))
+    return np.hstack((keypoints, gradients[..., None]))
 
 
 def get_contexts(image, coords, radius):

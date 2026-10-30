@@ -22,7 +22,10 @@ from bigstream.metrics import local_correlation_coefficient
 
 from fishspot.filter import apply_foreground_mask
 
+from functools import partial
 from scipy.ndimage import zoom
+from skimage.measure import ransac as skimage_ransac
+from skimage.transform import AffineTransform
 
 
 logger = logging.getLogger(__name__)
@@ -414,6 +417,8 @@ def feature_point_ransac_affine_align(
     max_point_matches=-1,
     align_threshold=2.0,
     diagonal_constraint=0.25,
+    max_shear=None,
+    spot_detection_method='fishspots',
     fix_spot_detection_kwargs={},
     mov_spot_detection_kwargs={},
     fix_spots=None,
@@ -421,6 +426,7 @@ def feature_point_ransac_affine_align(
     mov_spots=None,
     mov_spots_count_threshold=100,
     confidence=0.999,
+    ransac_method='opencv',
     fix_mask=None,
     mov_mask=None,
     fix_roi=None,
@@ -561,12 +567,30 @@ def feature_point_ransac_affine_align(
         The maximum distance two points can be to be considered aligned
         by the affine transform; in microns.
 
-    diagonal_constraint : scalar float (default: 0.25)
+    diagonal_constraint : positive scalar float (default: 0.25)
         Diagonal entries of the affine matrix cannot be lower than
         1 - diagonal_contraint or higher than 1 + diagonal_contraint.
         Failing this condition is a safeguard test failure. Raising this
         value will allow increasingly extreme affine transforms to be
         returned.
+
+    max_shear : positive scalar float (default: None)
+        Only used when `ransac_method` is 'skimage'. The largest shear, in
+        radians, a ransac model may have: the shear is the largest deviation
+        from 90 degrees of the angle between two transformed axes (in 2D
+        this is skimage's AffineTransform.shear). Models above it are
+        rejected during the ransac search. None disables the check.
+
+    spot_detection_method : 'fishspots' or 'gradients' (default: 'fishspots')
+        How feature points are found when fix_spots / mov_spots are not given.
+        'fishspots' runs the LoG / DoG blob detector
+        bigstream.features.blob_detection with the spot detection kwargs
+        below. 'gradients' runs bigstream.features.gradient_keypoints: local
+        maxima of the gaussian gradient magnitude, with sigma
+        blob_sizes[0] / sqrt(ndim) and one maximum per (2 * cc_radius + 1)
+        window; the spot detection kwargs are ignored, and nspots keeps the
+        points with the strongest gradient. Background is not thresholded,
+        so give fix_mask / mov_mask to keep points off the background.
 
     fix_spot_detection_kwargs : dict (default {})
         Arguments passed to bigstream.features.blob_detection for fixed image
@@ -624,6 +648,19 @@ def feature_point_ransac_affine_align(
         can be different. I.e. the origin and span are the same (in phyiscal
         units) but the number of voxels can be different.
 
+    confidence : scalar float (default: 0.999)
+        The ransac confidence: `confidence` for cv2.estimateAffine3D,
+        `stop_probability` for skimage.measure.ransac.
+
+    ransac_method : 'opencv' or 'skimage' (default: 'opencv')
+        Which ransac estimates the affine from the matched points.
+        'opencv' uses cv2.estimateAffine3D and returns the model fitted to
+        the best minimal sample. 'skimage' uses skimage.measure.ransac with
+        a 3D AffineTransform, which refits the final model on all inliers
+        and accepts `is_data_valid` / `is_model_valid` checks. In both,
+        `align_threshold` is the inlier distance and `confidence` the ransac
+        confidence; every other argument comes from `kwargs`.
+
     default : 2d array 4x4 (default: identity)
         A default transform to return if the method fails to find a valid one
 
@@ -632,7 +669,9 @@ def feature_point_ransac_affine_align(
         - for local alignment it contains the block index that is being processed
 
     **kwargs : any additional keyword arguments
-        Passed to cv2.estimateAffine3D
+        Passed to cv2.estimateAffine3D, or to skimage.measure.ransac when
+        `ransac_method` is 'skimage' (for example `max_trials`, whose
+        skimage default is only 100, `rng`, ).
 
     Returns
     -------
@@ -640,6 +679,12 @@ def feature_point_ransac_affine_align(
         An affine matrix matching the moving image to the fixed image
     """
     logger.info(f'Ransac affine align {context} additional args: {kwargs}')
+    if not diagonal_constraint > 0:
+        raise ValueError(f'{context} diagonal_constraint must be positive, '
+                         f'got {diagonal_constraint}')
+    if max_shear is not None and not max_shear > 0:
+        raise ValueError(f'{context} max_shear must be positive, '
+                         f'got {max_shear}')
     initial_fix_shape = fix.shape
     initial_fix_spacing = np.asarray(fix_spacing, dtype=np.float64)
     max_displacement = validate_affine_displacement_bound(max_displacement, fix.ndim)
@@ -736,22 +781,11 @@ def feature_point_ransac_affine_align(
         B = (B,)*fix.ndim
     blob_sizes = (np.array(A), np.array(B))
 
-    num_sigma = int(min(np.max(blob_sizes[1] - blob_sizes[0]), num_sigma_max))
-    assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
-
     if fix_spots is None:
-        # get fix spots
-        fix_kwargs = {
-            'num_sigma':num_sigma,
-            'exclude_border':cc_radius,
-        }
-        fix_kwargs = {**fix_kwargs, **fix_spot_detection_kwargs}
-        logger.debug(f'{context} fixed spots detection using {fix_kwargs}')
-        fix_spots = features.blob_detection(
-            fix, blob_sizes[0], blob_sizes[1],
-            mask=fix_mask,
-            **fix_kwargs,
-        )
+        fix_spots = _detect_spots(fix, fix_mask, spot_detection_method,
+                                  blob_sizes, num_sigma_max, cc_radius,
+                                  fix_spot_detection_kwargs,
+                                  context=f'{context} fixed')
     else:
         logger.info(f'{context} use provided {len(fix_spots)} fixed spots')
 
@@ -769,18 +803,10 @@ def feature_point_ransac_affine_align(
             return default
 
     if mov_spots is None:
-        # get mov spots
-        mov_kwargs = {
-            'num_sigma':num_sigma,
-            'exclude_border':cc_radius,
-        }
-        mov_kwargs = {**mov_kwargs, **mov_spot_detection_kwargs}
-        logger.debug(f'{context} moving spots detection using {mov_kwargs}')
-        mov_spots = features.blob_detection(
-            mov, blob_sizes[0], blob_sizes[1],
-            mask=mov_mask,
-            **mov_kwargs,
-        )
+        mov_spots = _detect_spots(mov, mov_mask, spot_detection_method,
+                                  blob_sizes, num_sigma_max, cc_radius,
+                                  mov_spot_detection_kwargs,
+                                  context=f'{context} moving')
     else:
         logger.info(f'{context} use provided {len(mov_spots)} moving spots')
 
@@ -860,12 +886,16 @@ def feature_point_ransac_affine_align(
         fix_spots = fix_spots[:max_point_matches,:]
         mov_spots = mov_spots[:max_point_matches,:]
 
-    _, Aff, _ = cv2.estimateAffine3D(
-        fix_spots, mov_spots,
-        ransacThreshold=align_threshold,
-        confidence=confidence,
-        **kwargs,
-    )
+    Aff = _ransac_affine(fix_spots, mov_spots, align_threshold,
+                         confidence, diagonal_constraint,
+                         ransac_method, max_shear=max_shear,
+                         context=context, **kwargs)
+    if Aff is None:
+        if safeguard_exceptions:
+            raise ValueError(f'{context} {ransac_method} ransac found no affine')
+        else:
+            logger.info(f'{context} - RANSAC failed (no model found) - returning default affine')
+            return default
 
     # ensure affine is sensible
     if np.any( np.abs(np.diag(Aff) - 1) > diagonal_constraint ):
@@ -886,6 +916,114 @@ def feature_point_ransac_affine_align(
 
     logger.debug(f'{context} - RANSAC successful affine: {Aff}')
     return affine
+
+
+def _detect_spots(image, mask, spot_detection_method, blob_sizes,
+                  num_sigma_max, cc_radius, spot_detection_kwargs,
+                  context=''):
+    """
+    Spots of `image` as an Nx(ndim+1) array: voxel coordinates, then the
+    value used to rank them (intensity for 'fishspots', gradient magnitude
+    for 'gradients').
+    """
+    if spot_detection_method == 'fishspots':
+        num_sigma = int(min(np.max(blob_sizes[1] - blob_sizes[0]), num_sigma_max))
+        assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
+        detection_kwargs = {
+            'num_sigma':num_sigma,
+            'exclude_border':cc_radius,
+            **spot_detection_kwargs,
+        }
+        logger.debug(f'{context} spots detection using {detection_kwargs}')
+        return features.blob_detection(
+            image, blob_sizes[0], blob_sizes[1],
+            mask=mask,
+            **detection_kwargs,
+        )
+    elif spot_detection_method == 'gradients':
+        if spot_detection_kwargs:
+            logger.debug(f'{context} gradients spot detection ignores '
+                         f'{spot_detection_kwargs}')
+        return features.gradient_keypoints(image, blob_sizes[0], cc_radius,
+                                           mask=mask)
+    else:
+        raise ValueError(f"unknown spot_detection_method {spot_detection_method!r}; "
+                         "expected 'fishspots' or 'gradients'")
+
+
+def _ransac_affine(fix_spots, mov_spots, align_threshold,
+                   confidence, diagonal_constraint,
+                   ransac_method, max_shear=None, context='', **kwargs):
+    """
+    The 3x4 affine mapping `fix_spots` to `mov_spots` (physical units), or
+    None when the ransac finds no model. `max_shear` is only used by the
+    skimage ransac.
+    """
+    if ransac_method == 'opencv':
+        _, Aff, _ = cv2.estimateAffine3D(
+            fix_spots, mov_spots,
+            ransacThreshold=align_threshold,
+            confidence=confidence,
+            **kwargs,
+        )
+        return Aff
+    elif ransac_method == 'skimage':
+        _is_model_valid = partial(_is_affine_valid,
+                                  min_scale=1-diagonal_constraint,
+                                  max_scale=1+diagonal_constraint,
+                                  max_shear=max_shear)
+        ransac_args = {'min_samples': fix_spots.shape[1] + 1,
+                       'residual_threshold': align_threshold,
+                       'stop_probability': confidence,
+                       'is_model_valid': _is_model_valid,
+                       **kwargs}
+        model, inliers = skimage_ransac((fix_spots, mov_spots),
+                                        AffineTransform, **ransac_args)
+        if model is None:
+            return None
+        logger.info(f'{context} skimage ransac: {np.sum(inliers)} of '
+                    f'{len(fix_spots)} matches are inliers')
+        return model.params[:-1, :]
+    else:
+        raise ValueError(f"unknown ransac_method {ransac_method!r}; "
+                         "expected 'opencv' or 'skimage'")
+
+
+def _is_affine_valid(model, *samples, min_scale=.5, max_scale=2., max_shear=None):
+    """
+    skimage ransac `is_model_valid` check, called as
+    `is_model_valid(model, *samples)`; the samples are not used.
+    The model is finite, not degenerate, scales every axis by a factor in
+    [min_scale, max_scale] and, when max_shear is given, has no shear above
+    max_shear (radians).
+    Works for any dimension.
+    """
+    params = getattr(model, "params", None)
+    if params is None or not np.all(np.isfinite(params)):
+        return False
+
+    # linear part of the (ndim+1)x(ndim+1) homogeneous matrix
+    linear = params[:-1, :-1]
+
+    # Degenerate (collinear / coplanar sample points)
+    if abs(np.linalg.det(linear)) < 1e-8:
+        return False
+
+    # Scale along each axis (column norms of the linear part)
+    scales = np.linalg.norm(linear, axis=0)
+    if not bool(np.all((scales >= min_scale) & (scales <= max_scale))):
+        return False
+
+    if max_shear is not None:
+        # shear = largest deviation of a pair of axes from 90 degrees
+        # (radians); in 2D this is |AffineTransform.shear|
+        axes = linear / scales
+        i, j = np.triu_indices(len(scales), 1)
+        angles = np.arccos(np.clip(np.sum(axes[:, i] * axes[:, j], axis=0), -1, 1))
+        if np.any(np.abs(np.pi / 2 - angles) > max_shear):
+            return False
+
+    return True
 
 
 def random_affine_search(

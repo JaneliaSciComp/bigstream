@@ -537,10 +537,11 @@ def feature_point_ransac_affine_align(
     num_sigma_max : scalar int (default: 15)
         The maximum number of laplacians to use in the feature point LoG detector
 
-    cc_radius : scalar int or tuple of int (default: 12)
+    cc_radius : scalar int or tuple/list of int (default: 12)
         The halfwidth of neighborhoods around feature points used to determine
         correlation and correspondence. If an int, the same value is used for all
-        axes. If a tuple, the tuple length must equal the number of image axes.
+        axes. If a tuple or list (a YAML list), its length must equal the number
+        of image axes.
         Best practice is to use a tuple for anisotropic data.
 
     nspots : scalar int (default: 5000)
@@ -772,8 +773,10 @@ def feature_point_ransac_affine_align(
             mov_mask_spacing = fix_spacing
 
     # format inputs
-    if type(cc_radius) not in (tuple,):
-        cc_radius = (cc_radius,) * fix.ndim
+    if isinstance(cc_radius, (tuple, list, np.ndarray)):
+        cc_radius = tuple(int(r) for r in cc_radius)
+    else:
+        cc_radius = (int(cc_radius),) * fix.ndim
     A, B = blob_sizes[0], blob_sizes[1]
     if not isinstance(A, (tuple, list, np.ndarray)):
         A = (A,)*fix.ndim
@@ -926,7 +929,7 @@ def _detect_spots(image, mask, spot_detection_method, blob_sizes,
     value used to rank them (intensity for 'fishspots', gradient magnitude
     for 'gradients').
     """
-    if spot_detection_method == 'fishspots':
+    if spot_detection_method == 'fishspots' or spot_detection_method == 'fishspot':
         num_sigma = int(min(np.max(blob_sizes[1] - blob_sizes[0]), num_sigma_max))
         assert num_sigma > 0, 'num_sigma must be greater than 0, make sure blob_sizes[1] > blob_sizes[0]'
         detection_kwargs = {
@@ -940,7 +943,7 @@ def _detect_spots(image, mask, spot_detection_method, blob_sizes,
             mask=mask,
             **detection_kwargs,
         )
-    elif spot_detection_method == 'gradients':
+    elif spot_detection_method == 'gradient' or spot_detection_method == 'gradients':
         if spot_detection_kwargs:
             logger.debug(f'{context} gradients spot detection ignores '
                          f'{spot_detection_kwargs}')

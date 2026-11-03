@@ -12,6 +12,7 @@ authors = [
     { name = "Greg M. Fleishman", email = "greg.nli10me@gmail.com" }
 ]
 dependencies = [
+    "bokeh>=3.1",
     "ClusterWrap>=1.0.3",
     "dask==2026.6.0",
     "distributed==2026.6.0",

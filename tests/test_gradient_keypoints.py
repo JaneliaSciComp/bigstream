@@ -73,3 +73,24 @@ def test_unknown_spot_detection_method_is_refused(texture):
             texture, texture, np.ones(3), np.ones(3),
             blob_sizes=[2, 4], spot_detection_method='harris',
         )
+
+
+@pytest.mark.parametrize('method', ['fishspots', 'gradients'])
+def test_cc_radius_can_be_a_list(texture, method):
+    # YAML gives per-axis values as a list, not a tuple
+    offset = np.array([2.0, -3.0, 4.0])
+    mov = shift(texture, offset, order=1)
+    affine = feature_point_ransac_affine_align(
+        texture, mov, np.ones(3), np.ones(3),
+        blob_sizes=[2, 4],
+        cc_radius=[4, 6, 6],
+        spot_detection_method=method,
+        fix_spot_detection_kwargs={'blob_method': 'dog', 'threshold': 1e-6, 'threshold_rel': 0},
+        mov_spot_detection_kwargs={'blob_method': 'dog', 'threshold': 1e-6, 'threshold_rel': 0},
+        match_threshold=0.9,
+        max_spot_match_distance=10,
+        point_matches_threshold=20,
+        fix_spots_count_threshold=20,
+        mov_spots_count_threshold=20,
+    )
+    assert affine.shape == (4, 4)

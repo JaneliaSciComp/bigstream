@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def deform_field_diagnostics(field, spacing, context='', level=None):
     """
-    Compute diagnostics for a displacement vector field: jacobian determinant
+    Compute diagnostics for a displacement vector field: jacobian
     (folding), field sanity (NaN/Inf), displacement magnitude statistics, and
     a crude discontinuity check in voxel index space.
 
@@ -21,7 +21,7 @@ def deform_field_diagnostics(field, spacing, context='', level=None):
     to also log on the spot; `log_deform_field_diagnostics` renders the same
     lines from the returned dict.
 
-    Note that this always computes. The jacobian determinant is one of the
+    Note that this always computes. The jacobian is one of the
     largest allocations in a block's alignment, so a caller that only wants
     the numbers for a log line nobody will read should not call at all -
     see the `logger.isEnabledFor` guard on the per-block call site.
@@ -54,14 +54,15 @@ def deform_field_diagnostics(field, spacing, context='', level=None):
     """
     # build a sitk displacement field image (xyz vector order) from the
     # numpy field (zyx order, components in zyx)
-    # float32 rather than float64: the jacobian determinant comes out
+    # float32 rather than float64: the jacobian comes out
     # identical, and this is a diagnostic-only check that was otherwise one
     # of the largest single allocations in a block's alignment
     disp = ut.numpy_to_sitk(
         np.ascontiguousarray(field[..., ::-1], dtype=np.float32),
         spacing, vector=True,
     )
-    # Jacobian determinant: det(I + grad(u)); values <= 0 indicate folding
+    # Jacobian: det(I + grad(u)), the determinant of the jacobian matrix
+    # I + grad(u); values <= 0 indicate folding
     jac = sitk.DisplacementFieldJacobianDeterminant(disp)
     del disp
     jac_arr = sitk.GetArrayViewFromImage(jac)
@@ -145,7 +146,7 @@ def log_deform_field_diagnostics(stats, context='', level=logging.INFO):
     size = stats['size']
     n_folded = stats['n_folded']
     logger.log(level, (
-        f'{context} Deform align jacobian determinant: '
+        f'{context} Deform align jacobian: '
         f'min={stats["jacobian_min"]}, max={stats["jacobian_max"]}, '
         f'mean={stats["jacobian_mean"]}, '
         f'folded voxels (det<=0)={n_folded} '

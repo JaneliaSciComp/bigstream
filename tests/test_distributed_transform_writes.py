@@ -48,7 +48,8 @@ def cluster_client_mt():
     collide and the locking has something to do."""
     distributed = pytest.importorskip('dask.distributed')
     cluster = distributed.LocalCluster(n_workers=4, threads_per_worker=1,
-                                       processes=False, dashboard_address=':0')
+                                       processes=False, dashboard_address=':0',
+                                       scheduler_kwargs={'dashboard': False})
     client = distributed.Client(cluster)
     yield client
     client.close()

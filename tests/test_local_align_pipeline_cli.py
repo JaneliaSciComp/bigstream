@@ -52,6 +52,7 @@ def shared_cluster():
     distributed = pytest.importorskip('dask.distributed')
     cluster = distributed.LocalCluster(n_workers=2, threads_per_worker=1,
                                        processes=False, dashboard_address=':0',
+                                       scheduler_kwargs={'dashboard': False},
                                        silence_logs=logging.CRITICAL)
     yield cluster
     cluster.close()

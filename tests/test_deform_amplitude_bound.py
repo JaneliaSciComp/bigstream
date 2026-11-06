@@ -171,7 +171,7 @@ def test_blend_safe_bound_matches_the_hand_worked_example():
     U <= (1 - sum(k) - m) * L / (2*ndim), with L = (2*overlap - 1) * spacing.
 
     The `ndim` divisor matters: Lemma 2 sums the effective derivative bound
-    over every row of the jacobian, so each row picks up its own 2U/L blend
+    over every row of the jacobian matrix, so each row picks up its own 2U/L blend
     term - see `test_bound_excludes_the_measured_folding_threshold`.
     """
     overlaps = np.array([102, 102, 102])

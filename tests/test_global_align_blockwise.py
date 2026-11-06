@@ -50,6 +50,7 @@ def patched(monkeypatch):
                                                  threads_per_worker=1,
                                                  processes=False,
                                                  dashboard_address=':0',
+                                                 scheduler_kwargs={'dashboard': False},
                                                  silence_logs=logging.CRITICAL))
 
 

@@ -96,7 +96,7 @@ def test_reporting_renders_every_section(capture):
     stats = deform_field_diagnostics(_smooth_field(), SPACING)
     log_deform_field_diagnostics(stats, context='CTX', level=logging.INFO)
     text = capture.text
-    assert 'CTX Deform align jacobian determinant' in text
+    assert 'CTX Deform align jacobian' in text
     assert 'CTX Deform align field stats' in text
     for axis in ('dx', 'dy', 'dz'):
         assert f'CTX Deform align field smoothness {axis}' in text

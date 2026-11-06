@@ -313,7 +313,7 @@ def test_pipeline_default_case_demons():
 # ---------------------------------------------------------------------------
 
 def test_diffeomorphic_positive_jacobian():
-    """Jacobian determinant of the diffeomorphic field should be positive in the interior."""
+    """Jacobian of the diffeomorphic field should be positive in the interior."""
     fix = _random_smooth_volume(SHAPE)
     shift = np.array([2.0, 2.0, 2.0])
     mov = _apply_translation_sitk(fix, SPACING, shift)
@@ -326,7 +326,7 @@ def test_diffeomorphic_positive_jacobian():
         shrink_factors=[2, 1],
     )
     # field: (Z, Y, X, 3), components in ZYX order (bigstream convention)
-    # approximate Jacobian determinant via 1 + divergence of displacement
+    # approximate Jacobian via 1 + divergence of displacement
     dz = np.gradient(field[..., 0], axis=0)
     dy = np.gradient(field[..., 1], axis=1)
     dx = np.gradient(field[..., 2], axis=2)

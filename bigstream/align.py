@@ -1688,7 +1688,7 @@ def deformable_align(
         Keys, all optional:
             'k': float or zyx list (default 0.32), per-component allowance.
                  `sum(k) < 1` is required and guarantees a jacobian
-                 determinant of at least `1 - sum(k)` everywhere. Smaller is
+                 of at least `1 - sum(k)` everywhere. Smaller is
                  smoother and safer, larger fits the data more closely.
             'K': float or zyx list (default: same as 'k'), per-component
                  allowance for local expansion along the same axis. Set larger

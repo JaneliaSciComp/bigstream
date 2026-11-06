@@ -111,7 +111,7 @@ class DisplacementDiagnostics(str, Enum):
                     single pass's field when there is only one
 
     Running these is not free: each one walks the assembled field block by
-    block and computes a jacobian determinant per block.
+    block and computes a jacobian per block.
     """
 
     PER_STEP = 'PER_STEP'
@@ -669,7 +669,7 @@ def _display_displacement_diagnostics(output_transform, blocks_ids,
 
     Region by region rather than all at once because an assembled field is
     far too large to hold in the client at production sizes - and one task
-    per region, on the cluster, because the jacobian determinant is
+    per region, on the cluster, because the jacobian is
     expensive enough that sweeping a production field serially in the client
     is the slowest thing left in a run.
 
@@ -1281,7 +1281,7 @@ def _align_block(compute_transform_params,
             # debug only: this is the block's own field, before blending,
             # so a fold here is not yet a fold in the result. Guarded rather
             # than left to the log level, because the diagnostics compute
-            # unconditionally now and the jacobian determinant is one of the
+            # unconditionally now and the jacobian is one of the
             # largest allocations in a block's alignment
             if logger.isEnabledFor(logging.DEBUG):
                 deform_field_diagnostics(
@@ -1538,7 +1538,7 @@ def _overlapping_block_lock_keys(block_index, block_neighbors, namespace):
 # -------------------------------------------------------------------------
 
 
-# jacobian determinant held in reserve for the blend term when deriving the
+# jacobian held in reserve for the blend term when deriving the
 # safe displacement ceiling. Shared by the computation and the messages so the
 # two cannot drift apart.
 _BLEND_MIN_JACOBIAN = 0.1

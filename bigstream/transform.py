@@ -758,7 +758,7 @@ def displacement_field_composition_square_root(
 
     jacobian_term : float in range [0, 1] (default: 0)
         The percent of iterations at each scale level that should use the
-        Jacobian term in the gradient. Set to 0 for maximum speed, set to a
+        Jacobian matrix term in the gradient. Set to 0 for maximum speed, set to a
         small number for a slight improvement in diffeomorphic accuracy, set
         to a large number if you want to be rigorous and wait a long time.
 
@@ -902,6 +902,9 @@ def displacement_field_composition_square_root(
 
 def displacement_field_jacobian(field, spacing):
     """
+    Jacobian matrix of the position field `x + field(x)` at every voxel,
+    shape `field.shape + (ndim,)`. See
+    `displacement_field_jacobian_determinant` for the jacobian itself.
     """
 
     # convert to position field
@@ -919,6 +922,8 @@ def displacement_field_jacobian(field, spacing):
 
 def displacement_field_jacobian_determinant(field, spacing):
     """
+    Jacobian of the position field `x + field(x)` at every voxel: the
+    determinant of the matrix from `displacement_field_jacobian`.
     """
 
     jacobian = displacement_field_jacobian(field, spacing)
@@ -1259,7 +1264,7 @@ def bspline_to_displacement_field(
     -----
     A b-spline evaluates to zero displacement outside its transform domain, so
     any requested voxel falling outside it would get a step down to zero and a
-    non-positive jacobian determinant there - a folded field, no matter how
+    non-positive jacobian there - a folded field, no matter how
     well behaved the coefficients are. Those voxels are given the nearest
     in-domain displacement instead, which extends the deformation outward as a
     constant and keeps the field fold free.

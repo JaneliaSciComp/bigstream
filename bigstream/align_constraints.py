@@ -22,7 +22,7 @@ The condition, on differences of adjacent B-spline coefficients:
     -m_r*k_q <= dc^q/dr <= +m_r*k_q      (r != q, off diagonal)
     -m_q*k_q <= dc^q/dq <= +m_q*K_q      (r == q, diagonal)
 
-where `q` indexes the displacement component (the Jacobian row), `r` the
+where `q` indexes the displacement component (the Jacobian matrix row), `r` the
 difference direction, `m_r` the knot spacing along `r`, and `sum(k) < 1`.
 Satisfying it guarantees
 
@@ -305,7 +305,7 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
     So with per-component displacements bounded by U the blend raises the
     effective derivative bound for every component from k_q to k_q + 2*g*U/L,
     and Chun & Fessler's Lemma 2 sums that over all ndim rows of the
-    jacobian:
+    jacobian matrix:
 
         min|J| >= 1 - sum_q (k_q + 2*g*U/L) = 1 - sum(k) - 2*ndim*g*U/L
 
@@ -338,7 +338,7 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
         The C4 allowance the deform step is configured with.
 
     min_jacobian : float (default: 0.1)
-        Jacobian determinant to keep in reserve for the blend.
+        Minimum Jacobian to keep in reserve for the blend.
 
     blend_ramp : str (default: 'linear')
         Shape of the blending weight ramp, `'linear'` or `'cosine'`. Must be

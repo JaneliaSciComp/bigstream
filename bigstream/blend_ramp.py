@@ -19,7 +19,7 @@ weights are built as a separable product over the axes, and a product of
 per-axis partitions of unity is a partition of unity in N-D.
 
 The two are not interchangeable for fold safety. The blend contributes a
-`grad(w) * (u_A - u_B)` term to the jacobian of the stitched field, so what
+`grad(w) * (u_A - u_B)` term to the jacobian matrix of the stitched field, so what
 bounds the safe displacement is the *steepest* part of the ramp, not its
 length. The relevant number is the **ramp gradient gain**
 

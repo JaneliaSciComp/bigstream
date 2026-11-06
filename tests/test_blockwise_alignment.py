@@ -442,7 +442,8 @@ def cluster_client():
     which is what makes the bit-for-bit comparison below meaningful."""
     distributed = pytest.importorskip('dask.distributed')
     cluster = distributed.LocalCluster(n_workers=1, threads_per_worker=1,
-                                       processes=False, dashboard_address=':0')
+                                       processes=False, dashboard_address=':0',
+                                       scheduler_kwargs={'dashboard': False})
     client = distributed.Client(cluster)
     yield client
     client.close()
@@ -455,7 +456,8 @@ def cluster_client_mt():
     can collide and the locking has something to do."""
     distributed = pytest.importorskip('dask.distributed')
     cluster = distributed.LocalCluster(n_workers=4, threads_per_worker=1,
-                                       processes=False, dashboard_address=':0')
+                                       processes=False, dashboard_address=':0',
+                                       scheduler_kwargs={'dashboard': False})
     client = distributed.Client(cluster)
     yield client
     client.close()
@@ -1421,7 +1423,7 @@ def test_the_field_sweep_runs_on_the_cluster(cluster_client):
     """
     Every region is a cluster task, not a client-side loop.
 
-    The jacobian determinant is the expensive part of a sweep, and on a
+    The jacobian is the expensive part of a sweep, and on a
     production field there are many regions of it, so this is the whole
     reason the sweep is distributed. Asserted by counting what was
     submitted - one task per region - rather than by timing it.

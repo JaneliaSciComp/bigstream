@@ -43,6 +43,13 @@ dependencies = [
 test = [
     "pytest",
 ]
+fireants = [
+    "torch>=2.3",
+    # source archive of commit f8a9cc2 rather than a git+ URL: the repo has a
+    # `cookbook` submodule pointing at a repository that is not reachable,
+    # and git sources always initialize submodules
+    "fireants @ https://github.com/rohitrango/FireANTs/archive/f8a9cc259ab9113fc43bd99797000fa8fc34eb59.tar.gz",
+]
 
 [tool.setuptools.packages.find]
 where = [
@@ -51,7 +58,10 @@ where = [
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+# macOS 14 floor: torch wheels for macOS are tagged macosx_14_0 since 2.12;
+# below that the solver falls back to torch 2.11, which has no MPS kernel
+# for grid_sampler_3d_backward (needed by the fireants step)
+platforms = ["linux-64", "linux-aarch64", { platform = "osx-arm64", macos = "14.0" }]
 
 # conda packages - same as conda-env.yaml; everything else comes from
 # [project.dependencies] through PyPI
@@ -73,7 +83,11 @@ zarr-tools = { git = "https://github.com/JaneliaSciComp/zarr-tools.git", rev = "
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
-test = { features = ["test"], solve-group = "default" }
+test = { features = ["test", "fireants"], solve-group = "default" }
+fireants = { features = ["fireants"], solve-group = "default" }
+
+[tool.pixi.feature.fireants.pypi-dependencies]
+fireants = { url = "https://github.com/rohitrango/FireANTs/archive/f8a9cc259ab9113fc43bd99797000fa8fc34eb59.tar.gz" }
 
 [tool.pixi.feature.test.tasks]
 test = { cmd = "pytest {{ tests }}", args = [{ arg = "tests", default = "tests" }] }

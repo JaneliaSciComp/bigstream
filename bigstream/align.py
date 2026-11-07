@@ -2024,6 +2024,8 @@ def alignment_pipeline(
         'affine' : run `affine_align`
         'deform' : run `deformable_align`
         'demons' : run `demons_align`
+        'fireants_affine' : run `fireants_affine_align` (needs the optional fireants dependencies)
+        'fireants_deform' : run `fireants_deformable_align` (needs the optional fireants dependencies)
         'elastix' : run `elastix_align`
         For each tuple, the dict specifies the arguments to that alignment function
         Arguments specified here override any global arguments given through kwargs
@@ -2110,7 +2112,7 @@ def alignment_pipeline(
     # check default case
     if fix is None or mov is None:
         ndim = len(fix_spacing)
-        field_steps = {'deform', 'demons', 'elastix_deform'}
+        field_steps = {'deform', 'demons', 'fireants_deform', 'elastix_deform'}
         if field_steps & {x[0] for x in steps}:
             # if a field-producing step is present, create a zero displacement field
             shape = fix.shape if fix is not None else mov.shape
@@ -2122,6 +2124,7 @@ def alignment_pipeline(
     # lazy imports so bigstream.align has no hard dependency on bigstream.contrib
     from bigstream.contrib.demons_align import demons_align
     from bigstream.contrib.elastix_align import elastix_affine_align, elastix_deformable_align
+    from bigstream.contrib.fireants_align import fireants_affine_align, fireants_deformable_align
 
     full_fix_shape = fix.shape
     fix_spacing = np.asarray(fix_spacing, dtype=np.float64)
@@ -2147,6 +2150,8 @@ def alignment_pipeline(
              'affine':lambda **c: affine_align(*a, **{**b, **c}),
              'deform':lambda **c: deformable_align(*a, **{**b, **c})[1],
              'demons':lambda **c: demons_align(*a, **{**b, **c})[1],
+             'fireants_affine':lambda **c: fireants_affine_align(*a, **{**b, **c}),
+             'fireants_deform':lambda **c: fireants_deformable_align(*a, **{**b, **c})[1],
              'elastix_affine':lambda **c: elastix_affine_align(*a, **{**b, **c}),
              'elastix_deform':lambda **c: elastix_deformable_align(*a, **{**b, **c})[1],
              }
@@ -2174,6 +2179,33 @@ def alignment_pipeline(
     elif return_format == 'compressed':
         return bst.compress_transform_list(new_transforms, [fix_spacing,]*len(new_transforms))[0]
     elif return_format == 'flatten':
+        affines_found = any(t.ndim == 2 for t in new_transforms)
+        fields_found = any(t.ndim != 2 for t in new_transforms)
+        if fix_origin is not None and affines_found and fields_found:
+            # Write the affine as A x = L x + t (L its linear part, t its
+            # translation) and let o = fix_origin. To compose A with a field,
+            # compose_transform_list converts A to a field on the fix grid by
+            # evaluating it at the grid positions g = index * spacing, i.e. as
+            # if the grid started at 0, so each voxel gets A g - g. But the
+            # voxel's physical position is o + g, so the displacement should
+            # be A (o + g) - (o + g) = (L - I) (o + g) + t.
+            # So the converted field is off by -(L - I) o at every voxel
+            # (zero for a pure translation, growing with |o|).
+            # Fix: express each affine in the grid's own frame,
+            # T(-o) A T(o) with T(o) the translation by o, which maps g to
+            # A (o + g) - o, so the converted field is right. This is not
+            # removing o from A: only A's translation changes, by (L - I) o.
+            # Affines alone compose as matrices in the physical frame, and
+            # fields alone share the fix grid so o cancels between them:
+            # neither case needs this.
+            to_origin = np.eye(len(fix_spacing) + 1)
+            to_origin[:-1, -1] = fix_origin
+            from_origin = np.eye(len(fix_spacing) + 1)
+            from_origin[:-1, -1] = -np.asarray(fix_origin)
+            new_transforms = [
+                from_origin @ t @ to_origin if t.ndim == 2 else t
+                for t in new_transforms
+            ]
         return bst.compose_transform_list(new_transforms, fix_spacing)
 
 
@@ -2246,6 +2278,8 @@ def ransac_masks_meta_align(
         'affine' : run `affine_align`
         'deform' : run `deformable_align`
         'demons' : run `demons_align`
+        'fireants_affine' : run `fireants_affine_align` (needs the optional fireants dependencies)
+        'fireants_deform' : run `fireants_deformable_align` (needs the optional fireants dependencies)
         'elastix_affine' : run `elastix_affine_align`
         'elastix_deform' : run `elastix_deformable_align`
         For each tuple, the dict specifies the arguments to that alignment function

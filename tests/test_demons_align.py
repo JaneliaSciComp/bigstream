@@ -335,3 +335,22 @@ def test_diffeomorphic_positive_jacobian():
     assert np.min(interior) > 0.0, (
         f"Jacobian has non-positive values in interior: min={np.min(interior):.4f}"
     )
+
+
+def test_alignment_spacing_extrapolates_trailing_voxels():
+    """Voxels past the last skip-sampled one get the edge displacement, not 0."""
+    # 36 voxels skip-sampled by 4 keep indices 0..32: voxel 35 lies 0.75 of
+    # a working voxel past the grid, beyond the half voxel ITK interpolates
+    shape = (36, 36, 36)
+    fix = _random_smooth_volume(shape)
+    mov = _apply_translation_sitk(fix, SPACING, np.array([1.0, 1.0, 1.0]))
+    _, field = demons_align(
+        fix, mov, SPACING, SPACING,
+        iterations=[20], smooth_sigmas=[1.0], shrink_factors=[1],
+        alignment_spacing=4.0, final_metric_check=False,
+    )
+    assert field.shape == shape + (3,)
+    for axis in range(3):
+        last = np.abs(np.take(field, -1, axis=axis)).mean()
+        inner = np.abs(np.take(field, -3, axis=axis)).mean()
+        assert last > 0.5 * inner, (axis, last, inner)

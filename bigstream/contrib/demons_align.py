@@ -367,8 +367,11 @@ def demons_align(
         np.asarray(initial_fix_spacing, dtype=np.float64),
         ref_origin,
     )
+    # skip-sampling can end the working grid up to stride - 1 voxels before
+    # the last fix voxel; extrapolate there instead of returning zero
     disp_full = sitk.Resample(
         disp, ref, initial_tx, sitk.sitkLinear, 0.0, sitk.sitkVectorFloat64,
+        useNearestNeighborExtrapolator=True,
     )
 
     # convert from SITK XYZ vector components to bigstream ZYX convention

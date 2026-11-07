@@ -10,6 +10,19 @@ BigStream is a library of tools for 3D registration including images too large t
 ---
 > pip install bigstream
 
+### Optional: FireANTs steps (GPU)
+The `fireants_affine` and `fireants_deform` alignment steps use
+[FireANTs](https://github.com/rohitrango/FireANTs) and run on CUDA, Apple
+MPS or CPU. They need torch and FireANTs, which are optional:
+
+> pip install "bigstream[fireants]"
+
+or, with pixi, the `fireants` environment (`pixi install -e fireants`; the
+`test` environment includes it too). On macOS this needs macOS 14 or later.
+Example step settings, including the device and the memory per block, are
+in `configs/contrib_configs_example.yml`. For a container with these steps,
+build the image with `--build-arg PIXI_ENV=fireants`.
+
 ## Updates
 ---
 BigStream has just undergone a major change to prepare for releasing v1.0.0.

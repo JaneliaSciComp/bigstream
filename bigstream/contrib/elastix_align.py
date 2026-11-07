@@ -634,8 +634,11 @@ def elastix_deformable_align(
     )
     # resample straight to float32: the field is returned as float32 anyway, so
     # a float64 intermediate here cost 24 bytes/voxel for nothing
+    # skip-sampling can end the working grid up to stride - 1 voxels before
+    # the last fix voxel; extrapolate there instead of returning zero
     disp_full = sitk.Resample(
         disp, ref, identity_tx, sitk.sitkLinear, 0.0, sitk.sitkVectorFloat32,
+        useNearestNeighborExtrapolator=True,
     )
     del disp, ref
 

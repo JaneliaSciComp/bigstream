@@ -293,7 +293,13 @@ def _run_global_align(reg_args:RegistrationInputs,
             if len(static_transforms) > 0:
                 logger.info(f'Composing global transformation result with {len(static_transforms)} static transforms')
                 final_transforms = static_transforms + [transform]
-                final_transforms_spacings = static_transforms_spacings + (fix.voxel_spacing,)
+                # compose_transform_list takes per-transform spacings as a list
+                # (anything else is one spacing for all transforms). The global
+                # transform lives in the alignment frame: spatial axes only,
+                # scaled by the expansion factor
+                transform_spacing = (np.asarray(get_spatial_values(fix.voxel_spacing),
+                                                dtype=np.float64) / fix.expansion_factor)
+                final_transforms_spacings = list(static_transforms_spacings) + [transform_spacing]
                 transform_to_save = bst.compose_transform_list(final_transforms, final_transforms_spacings)
             else:
                 transform_to_save = transform

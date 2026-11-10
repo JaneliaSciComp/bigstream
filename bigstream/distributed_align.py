@@ -991,7 +991,7 @@ def _select_blocks(lattice,
 # -------------------------------------------------------------------------
 
 
-def _block_context(pass_label, block_index):
+def _get_block_name(pass_label, block_index):
     """
     How a block names itself in a log line: `<pass label> <block index>`.
 
@@ -1017,11 +1017,11 @@ def _prepare_compute_block_spatial_transform_params(block_info,
                                                     static_transform_list=[],
                                                     pass_label=''):
     block_index, fix_block_coords, fix_block_neighbors = block_info
-    block_context = _block_context(pass_label, block_index)
-    logger.debug(f'Prepare block coords {block_context}: {block_info[1:]}')
+    block_name = _get_block_name(pass_label, block_index)
+    logger.debug(f'Prepare block coords {block_name}: {block_info[1:]}')
     fix_block_voxel_coords, fix_block_phys_coords = _get_spatial_block_corner_coords(fix_block_coords, fix_spacing)
     logger.debug((
-        f'Block index: {block_context} - '
+        f'Block index: {block_name} - '
         f'fix block corner physical coords: {fix_block_phys_coords} '
         f'using fix spacing = {fix_spacing}'
     ))
@@ -1048,7 +1048,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
         updated_block_transform_list.append(block_transform)
 
     logger.debug((
-        f'Block {block_context} :'
+        f'Block {block_name} :'
         f'moving block physical coords {mov_block_phys_coords}, '
         f'using moving spacing = {mov_spacing}'
     ))
@@ -1059,7 +1059,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     mov_stop_phys_coords = np.max(mov_block_phys_coords, axis=0)
 
     logger.debug((
-        f'Block {block_context}\n'
+        f'Block {block_name}\n'
         f'fix block start physical coords: {fix_block_voxel_coords[0]}\n'
         f'fix block stop physical coords: {fix_block_voxel_coords[-1]}\n'
         f'moving block start physical coords: {mov_start_phys_coords}\n'
@@ -1070,7 +1070,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     mov_block_coords = mov_block_phys_coords / mov_spacing
 
     logger.debug((
-        f'Block {block_context} :'
+        f'Block {block_name} :'
         f'moving block voxel coords {mov_block_coords},'
     ))
 
@@ -1079,7 +1079,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     mov_stop = np.max(np.ceil(mov_block_coords).astype(int), axis=0) + 1
 
     logger.debug((
-        f'Block {block_context} \n'
+        f'Block {block_name} \n'
         f'non-truncated moving block start (voxel coords): {mov_start}\n'
         f'non-truncated moving block stop (voxel coords): {mov_stop}'
     ))
@@ -1092,7 +1092,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
     mov_origin = mov_start * mov_spacing - fix_block_phys_coords[0]
 
     logger.debug((
-        f'Block {block_context}:\n'
+        f'Block {block_name}:\n'
         f'fix block voxel coords:\n{fix_block_voxel_coords}\n'
         f'fix block phys coords:\n{fix_block_phys_coords}\n'
         f'mov origin relative to fix origin phys coords: {mov_origin}\n'
@@ -1111,7 +1111,7 @@ def _prepare_compute_block_spatial_transform_params(block_info,
                                      for a, b in zip(fix_mask_start,
                                                      fix_mask_stop))
         logger.debug((
-            f'Fix mask block {block_context} coords: {fix_blockmask_coords}'
+            f'Fix mask block {block_name} coords: {fix_blockmask_coords}'
         ))
 
     if mov_fullmask_shape is not None:
@@ -1123,12 +1123,12 @@ def _prepare_compute_block_spatial_transform_params(block_info,
                                         for a, b in zip(mov_mask_start,
                                                         mov_mask_stop))
         logger.debug((
-            f'Mov mask block {block_context} coords: {mov_blockmask_coords}'
+            f'Mov mask block {block_name} coords: {mov_blockmask_coords}'
         ))
 
     logger.debug((
         'Return blocks data: '
-        f'{block_context}, {fix_block_coords}, '
+        f'{block_name}, {fix_block_coords}, '
         f'{mov_origin}, {mov_slices}, '
         f'{fix_blockmask_coords}, {mov_blockmask_coords}'
     ))
@@ -1212,7 +1212,7 @@ def _read_blocks_for_processing(blocks_info,
     #    6:mov_origin,
     #    7:block_transforms
     # do not log block_transform, the last field - it is a whole array
-    logger.debug(f'Read blocks {_block_context(pass_label, blocks_info[0])}: '
+    logger.debug(f'Read blocks {_get_block_name(pass_label, blocks_info[0])}: '
                  f'{blocks_info[1:-1]}')
     fix_block = _read_imagedata_block(blocks_info[1], fix, fix_block_reader)
 
@@ -1221,7 +1221,7 @@ def _read_blocks_for_processing(blocks_info,
             or any(s.stop <= 0 for s in mov_block_coords)
             or any(s.stop <= s.start for s in mov_block_coords)):
         logger.info('Moving block corresponding to '
-                    f'{_block_context(pass_label, blocks_info[0])} '
+                    f'{_get_block_name(pass_label, blocks_info[0])} '
                     'is out of range')
         mov_block = None
     else:
@@ -1300,10 +1300,10 @@ def _align_block(compute_transform_params,
      fix_mask_block, # this can be a mask descriptor
      mov_mask_block, # this can be a mask descriptor
      ) = compute_transform_params
-    block_context = _block_context(pass_label, block_index)
+    block_name = _get_block_name(pass_label, block_index)
     logger.info((
         'Compute block transform '
-        f'{block_context}: {block_coords}, {new_origin_phys} '
+        f'{block_name}: {block_coords}, {new_origin_phys} '
         f'fix shape: {fix_block.shape if fix_block is not None else 0}, '
         f'mov_shape: {mov_block.shape if mov_block is not None else 0} '
         f'using {len(block_static_transform_list)} transforms '
@@ -1312,7 +1312,7 @@ def _align_block(compute_transform_params,
     # check if blocks have sufficient foreground content
     skip_alignment = False
     if fix_block is None or mov_block is None:
-        logger.warning(f'Block {block_context} has no data, skipping alignment')
+        logger.warning(f'Block {block_name} has no data, skipping alignment')
         skip_alignment = True
 
     if skip_alignment:
@@ -1332,7 +1332,7 @@ def _align_block(compute_transform_params,
             mov_mask=mov_mask_block,
             mov_origin=new_origin_phys,
             static_transform_list=block_static_transform_list,
-            context=block_context,
+            context=block_name,
         )
         # ensure transform is a vector field
         if len(transform.shape) == 2:
@@ -1349,14 +1349,14 @@ def _align_block(compute_transform_params,
             if logger.isEnabledFor(logging.DEBUG):
                 deform_field_diagnostics(
                     transform, fix_spacing,
-                    context=f'{block_context} block displacement diagnostics',
+                    context=f'{block_name} block displacement diagnostics',
                     level=logging.DEBUG,
                 )
 
     # Finished computing transformation for current block_index
     logger.info((
         'Finished block alignment for '
-        f'{block_context}:{block_coords} -> {transform.shape} '
+        f'{block_name}:{block_coords} -> {transform.shape} '
         f'in {time.time()-start_time}s '
     ))
 
@@ -1409,7 +1409,7 @@ def _write_block_transform(aligned_block,
             clip_after=clip_after,
             pass_label=pass_label
     )
-    block_context = _block_context(pass_label, block_index)
+    block_name = _get_block_name(pass_label, block_index)
 
     if output_transform is not None:
         if lock_grid is not None:
@@ -1419,13 +1419,13 @@ def _write_block_transform(aligned_block,
             lock_keys = _overlapping_block_lock_keys(block_index,
                                                      block_neighbors,
                                                      lock_namespace)
-        with write_lock(lock_keys, context=f'Block {block_context}'):
+        with write_lock(lock_keys, context=f'Block {block_name}'):
             # read-modify-write: every overlapping block adds its weighted
             # share, and the sum only reaches 1 once they all have
             output_block = output_transform[block_coords] + transform
-            logger.info(f'Writing {output_block.shape} block {block_context} at {block_coords}')
+            logger.info(f'Writing {output_block.shape} block {block_name} at {block_coords}')
             output_transform[block_coords] = output_block
-            logger.info(f'Finished writing block {block_context} at {block_coords}')
+            logger.info(f'Finished writing block {block_name} at {block_coords}')
 
     return block_index, block_coords
 
@@ -1447,7 +1447,7 @@ def _weight_block_transform(aligned_block,
     """
     start_time = time.time()
     block_index, block_coords, block_neighbors, transform = aligned_block
-    block_context = _block_context(pass_label, block_index)
+    block_name = _get_block_name(pass_label, block_index)
 
     weights = _get_transform_weights(block_index,
                                      block_size,
@@ -1463,12 +1463,12 @@ def _weight_block_transform(aligned_block,
     # handle end blocks
     if np.any(weights.shape != transform.shape[:-1]):
         crop = tuple(slice(0, s) for s in transform.shape[:-1])
-        logger.debug(f'Crop weights for {block_context} ' +
+        logger.debug(f'Crop weights for {block_name} ' +
                      f'from {transform.shape} to {weights.shape}')
         weights = weights[crop]
 
     # apply weights
-    logger.debug(f'Block {block_context} :' +
+    logger.debug(f'Block {block_name} :' +
                  f'Apply weights {weights.shape},' +
                  f'to transform {transform.shape}')
     transform = transform * weights[..., None]
@@ -1476,7 +1476,7 @@ def _weight_block_transform(aligned_block,
     end_time = time.time()
 
     logger.debug(f'Finished computing {transform.shape} ' +
-                 f'block  {block_context} transform in {end_time-start_time}s')
+                 f'block  {block_name} transform in {end_time-start_time}s')
 
     return block_index, block_coords, block_neighbors, transform
 
@@ -1512,8 +1512,8 @@ def _get_transform_weights(block_index,
         at voxel 0. A lattice with a nonzero phase offset has partial blocks
         at both ends and must pass the amounts explicitly.
     """
-    block_context = _block_context(pass_label, block_index)
-    logger.debug(f'Adjust transform for {block_context}')
+    block_name = _get_block_name(pass_label, block_index)
+    logger.debug(f'Adjust transform for {block_name}')
 
     # create the standard weights array
     core = tuple(max(x - 2*y + 2, 0) for x, y in zip(block_size, block_overlaps))
@@ -1546,14 +1546,14 @@ def _get_transform_weights(block_index,
 
     if unaligned_neighbors:
         logger.debug((
-            f'Block {block_context} keeps its blending ramp toward '
+            f'Block {block_name} keeps its blending ramp toward '
             f'{len(unaligned_neighbors)} unaligned neighbors: '
             f'{unaligned_neighbors}'
         ))
 
     # rebalance only for the neighbors that are off the volume
     if rebalance_for_missing_neighbors and edge_neighbors:
-        logger.debug(f'{block_context} - rebalance transform {weights.shape} weights ')
+        logger.debug(f'{block_name} - rebalance transform {weights.shape} weights ')
         # define overlap slices
         slices = {}
         slices[-1] = tuple(slice(0, 2*y) for y in block_overlaps)

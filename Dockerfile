@@ -8,7 +8,7 @@ ARG PIXI_ENV
 # git is needed for the git-pinned PyPI deps (fishspot, zarr-tools)
 RUN dnf install -y git
 
-ARG PIXI_VERSION=v0.82.0
+ARG PIXI_VERSION=v0.84.1
 RUN curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=${PIXI_VERSION} PIXI_HOME=/opt/pixi bash
 ENV PATH=/opt/pixi/bin:${PATH}
 

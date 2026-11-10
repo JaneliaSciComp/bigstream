@@ -221,6 +221,27 @@ def distributed_apply_transform(
     return aligned_data
 
 
+# extra field voxels read around the tracked points of a block, and extra
+# moving voxels around their bounding box: the points are a coarse grid, so
+# this covers what moves further between samples plus the interpolation
+# footprint
+_FIELD_READ_MARGIN = 2
+_MOV_READ_MARGIN = 4
+# grid step (fixed voxels) of the points tracked through the transforms
+_BLOCK_SAMPLE_STEP = 16
+
+
+def _block_sample_points(block_coords, fix_spacing, step=_BLOCK_SAMPLE_STEP):
+    """
+    Physical coordinates of a grid over the block, every `step` voxels along
+    each axis plus the last voxel, so the corners and faces are included
+    """
+    axes = [np.unique(np.r_[np.arange(s.start, s.stop, step), s.stop - 1])
+            for s in block_coords]
+    grid = np.stack(np.meshgrid(*axes, indexing='ij'), axis=-1)
+    return grid.reshape(-1, len(axes)) * np.asarray(fix_spacing, dtype=np.float64)
+
+
 def _transform_single_block(fix_block_read_method,
                             mov_block_read_method,
                             block_info,
@@ -266,68 +287,76 @@ def _transform_single_block(fix_block_read_method,
         logger.exception(f'Error reading fixed block {block_index} at {block_coords}: {e}')
         raise e
 
-    # read relevant region of transforms
-    applied_transform_list = []
+    # Follow a coarse grid of the block's points through the transforms in
+    # the order they are applied (last in the list first) and read each field
+    # over where those points actually are at that step - not over the fixed
+    # block itself. A field applied after another one is sampled at the
+    # displaced positions, and outside the slice read for it its value would
+    # be clamped (nearest extrapolation). With a large linear part in that
+    # field, e.g. a global field carrying a 180 degree rotation, clamping
+    # sends points far away from the moving crop and leaves black boxes at
+    # the block boundaries. The same tracked points bound the moving crop.
+    points = _block_sample_points(block_coords, fix_spacing)
+    applied_transform_list = [None] * len(transform_list)
     transform_origin = [np.array(fix_origin_physical_coords) for _ in transform_list]
-    for iii, transform in enumerate(transform_list):
-        if len(transform.shape) != 2:
-            # for deformation fields find the corresponding block
-            t_spacing = transform_spacing_list[iii]
-            if t_spacing is None:
-                # assume same spacing as the fix image
-                t_spacing = fix_spacing
-            t_spacing = np.array(t_spacing)
-
-            start = np.floor(fix_origin_physical_coords / t_spacing).astype(int)
-            # Stops are exclusive; +1 ensures transformed max corner is included.
-            max_fix_corner_phys = (np.array([s.stop for s in block_coords]) - 1) * fix_spacing
-            stop = np.ceil(max_fix_corner_phys / t_spacing).astype(int) + 1
-            stop = np.minimum(np.array(transform.shape[:-1]), stop)
-            transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
-            transform_origin[iii] = start * t_spacing
-            try:
-                transform_block = deform_block_reader.get_slice(transform, transform_slice)
-                logger.info(f'Transform slice and origin for block {block_index} at {block_coords}:' +
-                            f'{transform_slice}, {transform_origin[iii]}')
-                applied_transform_list.append(transform_block)
-            except Exception as e:
-                logger.error((
-                    f'Error reading deform field at {transform_slice} '
-                    f'for fixed block {block_index} at {block_coords} '
-                    f'deform field origin: {transform_origin[iii]} '
-                    f'error was {e} '
-                ))
-                raise e
-        else:
-            # append the affine transform
-            applied_transform_list.append(transform)
+    for iii in reversed(range(len(transform_list))):
+        transform = transform_list[iii]
+        if len(transform.shape) == 2:
+            # affines are evaluated exactly, no region to read
+            applied_transform_list[iii] = transform
+            points = bs_transform.apply_transform_to_coordinates(
+                points, [transform])
+            continue
+        t_spacing = transform_spacing_list[iii]
+        if t_spacing is None:
+            # assume same spacing as the fix image
+            t_spacing = fix_spacing
+        t_spacing = np.array(t_spacing)
+        field_shape = np.array(transform.shape[:-1])
+        start = np.floor(points.min(axis=0) / t_spacing).astype(int) - _FIELD_READ_MARGIN
+        stop = np.ceil(points.max(axis=0) / t_spacing).astype(int) + 1 + _FIELD_READ_MARGIN
+        # keep at least one voxel inside the field: points beyond its domain
+        # take the nearest edge value, as for a whole-image apply
+        start = np.clip(start, 0, field_shape - 1)
+        stop = np.clip(stop, start + 1, field_shape)
+        transform_slice = tuple(slice(a, b) for a, b in zip(start, stop))
+        transform_origin[iii] = start * t_spacing
+        try:
+            transform_block = deform_block_reader.get_slice(transform, transform_slice)
+            logger.info(f'Transform slice and origin for block {block_index} at {block_coords}:' +
+                        f'{transform_slice}, {transform_origin[iii]}')
+        except Exception as e:
+            logger.error((
+                f'Error reading deform field at {transform_slice} '
+                f'for fixed block {block_index} at {block_coords} '
+                f'deform field origin: {transform_origin[iii]} '
+                f'error was {e} '
+            ))
+            raise e
+        applied_transform_list[iii] = transform_block
+        points = bs_transform.apply_transform_to_coordinates(
+            points, [transform_block],
+            # one-element tuples: a bare array would be taken as a stack
+            transform_spacing=(t_spacing,),
+            transform_origin=(transform_origin[iii],),
+        )
 
     transform_origin = tuple(transform_origin)
     logger.info(f'Transform origin for block {block_index} at {block_coords}: ' +
                 f'{transform_origin}')
 
     try:
-        # transform fixed block corners, read moving data
-        fix_block_voxel_coords = []
-        for corner in list(product([0, 1], repeat=len(block_coords))):
-            a = [x.stop-1 if y else x.start for x, y in zip(block_coords, corner)]
-            fix_block_voxel_coords.append(a)
-        fix_block_phys_coords = np.array(fix_block_voxel_coords) * fix_spacing
-        mov_block_phys_coords = bs_transform.apply_transform_to_coordinates(
-            fix_block_phys_coords,
-            applied_transform_list,
-            transform_spacing=transform_spacing_list,
-            transform_origin=transform_origin,
-        )
-        mov_block_voxel_coords = mov_block_phys_coords / mov_spacing
-        mov_start = np.min(np.floor(mov_block_voxel_coords), axis=0).astype(int)
-        mov_stop = np.max(np.ceil(mov_block_voxel_coords), axis=0).astype(int) + 1
+        # moving crop: bounding box of the tracked points, padded for what
+        # lies between the grid samples and for the interpolation footprint
+        mov_block_voxel_coords = points / mov_spacing
+        mov_start = (np.floor(mov_block_voxel_coords.min(axis=0)).astype(int)
+                     - _MOV_READ_MARGIN)
+        mov_stop = (np.ceil(mov_block_voxel_coords.max(axis=0)).astype(int)
+                    + 1 + _MOV_READ_MARGIN)
 
         logger.info((
             f'Transformed moving block {block_index} at {block_coords}:\n'
-            f'mov block origin (phys coords) unclipped min: {np.min(mov_block_phys_coords, axis=0)}\n'
-            f'change in physical coords {fix_block_phys_coords} -> {mov_block_phys_coords}\n'
-            f'change in voxel coords {fix_block_voxel_coords} -> (unrounded) {mov_block_voxel_coords}\n'
+            f'mov block origin (phys coords) unclipped min: {np.min(points, axis=0)}\n'
             f'mov block start (voxels - unclipped): {mov_start}\n'
             f'mov block end (voxels - unclipped): {mov_stop}\n'
         ))

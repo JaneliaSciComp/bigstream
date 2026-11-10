@@ -20,6 +20,7 @@ from bigstream.configure_bigstream import (configure_logging,
 from bigstream.diagnostics import dice_score
 from bigstream.distributed_align import (MAX_WRITE_LOCKS,
                                         DisplacementDiagnostics,
+                                        StageBlockWrites,
                                         blockwise_alignment_pipeline,
                                         default_blend_ramp_from_config,
                                         default_pass_geometry_from_config)
@@ -120,6 +121,23 @@ def _define_args(args_descriptor):
                                   'when a processing size selects the '
                                   'blockwise path; per-block diagnostics are '
                                   'separate and always go to the debug log.')
+    args_parser.add_argument('--stage-block-writes', '--stage_block_writes',
+                             dest='stage_block_writes',
+                             type=str.upper,
+                             choices=[m.value for m in StageBlockWrites],
+                             default=StageBlockWrites.AUTO.value,
+                             help='How a blockwise pass assembles its blended '
+                                  'field in zarr. ALWAYS: every block writes '
+                                  'its weighted share to its own file, then '
+                                  'one task per tile of whole shards sums '
+                                  'them and writes the tile once - safe when '
+                                  'workers on several hosts share an NFS '
+                                  'file system, at the cost of temporary '
+                                  'disk (~8x a pass field) and one extra '
+                                  'read. NEVER: blocks add into the output in '
+                                  'place under write locks. AUTO (default): '
+                                  'stage only when the dask workers run on '
+                                  'more than one host.')
     args_parser.add_argument('--max-write-locks', '--max_write_locks',
                              dest='max_write_locks',
                              type=int, default=MAX_WRITE_LOCKS,
@@ -198,7 +216,8 @@ def _run_global_align(reg_args:RegistrationInputs,
                       inv_transform_args=None,
                       displacement_diagnostics=None,
                       max_write_locks=MAX_WRITE_LOCKS,
-                      local_workers=1):
+                      local_workers=1,
+                      stage_block_writes=StageBlockWrites.AUTO):
     global_steps, _ = get_algorithm_parameters(align_config,
                                                'global_align',
                                                reg_args.registration_steps)
@@ -255,7 +274,8 @@ def _run_global_align(reg_args:RegistrationInputs,
             blend_ramp=default_blend_ramp,
             displacement_diagnostics=displacement_diagnostics,
             max_write_locks=max_write_locks,
-            local_workers=local_workers
+            local_workers=local_workers,
+            stage_block_writes=stage_block_writes,
         )
         if len(transform.shape) == 2:
             logger.info(f'Global affine transform: {transform}')
@@ -363,6 +383,7 @@ def _align_global_data(
         displacement_diagnostics=None,
         max_write_locks=MAX_WRITE_LOCKS,
         local_workers=1,
+        stage_block_writes=StageBlockWrites.AUTO,
 ):
     """
     `steps` drive the whole-image alignment (no `processing_size`).
@@ -528,6 +549,7 @@ def _align_global_data(
             deformfield_final_result=transform,
             max_write_locks=max_write_locks,
             displacement_diagnostics=displacement_diagnostics,
+            stage_block_writes=stage_block_writes,
         )
         logger.info((
             f'Finished computing the {transform.shape} deformation field '
@@ -1037,7 +1059,8 @@ def main():
                           inv_transform_args=inv_transform_args,
                           displacement_diagnostics=args.displacement_diagnostics,
                           max_write_locks=args.max_write_locks,
-                          local_workers=args.local_dask_workers)
+                          local_workers=args.local_dask_workers,
+                          stage_block_writes=args.stage_block_writes)
     else:
         # global transform found -> just apply it
         _apply_global_transform(reg_inputs,

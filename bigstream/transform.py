@@ -408,11 +408,31 @@ def compose_transforms(
         return np.matmul(first_transform, second_transform)
 
     # one affine, two field
+    # evaluate the affine exactly at the positions the
+    # field moves the grid to, d(x) = A (x + s(x)) - x. Converting the affine
+    # to a field on the second field's grid and interpolating it there would
+    # clamp (nn extrapolation) wherever x + s(x) leaves the grid, which drops
+    # the affine's linear part there - e.g. a 180 degree rotation turns into
+    # a plain translation near the edges, mirroring the warped image
     elif len(first_transform.shape) == 2:
-        first_transform = matrix_to_displacement_field(
-            first_transform, second_transform.shape[:-1], second_spacing,
-        )
-        first_spacing = second_spacing
+        ndim = second_transform.shape[-1]
+        matrix = np.asarray(first_transform, dtype=np.float64)
+        linear, translation = matrix[:ndim, :ndim], matrix[:ndim, -1]
+        spacing = np.asarray(second_spacing, dtype=np.float64)
+        composite = np.empty(second_transform.shape, dtype=second_transform.dtype)
+        # slab by slab along the first axis to bound the float64 temporaries
+        grid_rest = np.stack(np.meshgrid(
+            *[np.arange(n) * s for n, s in zip(second_transform.shape[1:-1], spacing[1:])],
+            indexing='ij',
+        ), axis=-1)
+        for iii in range(second_transform.shape[0]):
+            grid = np.concatenate(
+                (np.full(grid_rest.shape[:-1] + (1,), iii * spacing[0]), grid_rest),
+                axis=-1,
+            )
+            position = grid + second_transform[iii]
+            composite[iii] = position @ linear.T + translation - grid
+        return composite
 
     # one field, two affine
     elif len(second_transform.shape) == 2:

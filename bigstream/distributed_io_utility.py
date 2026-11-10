@@ -1,7 +1,7 @@
 """
 Distributed I/O helpers.
 
-Two unrelated groups of things live here:
+Three groups of things live here:
 
   * **bulk format conversion** - `distributed_directory_of_hdf5_to_zarr` and
     `distributed_directory_of_stack_to_zarr`, one-shot converters that each
@@ -10,8 +10,13 @@ Two unrelated groups of things live here:
     what lets a distributed writer use any block size against a chunked or
     sharded zarr output, instead of having to pick a block size that suits
     the chunk grid.
+  * **staged writes** - `StageBlockWrites`, `create_block_staging`,
+    `wait_for_file_visible` and `write_unit_tile`. Locks order writers but
+    cannot make a write unit's read-modify-write safe across hosts on a
+    shared file system, where a node can read a stale copy; these let a
+    writer give every file exactly one writer instead.
 
-They share nothing except that both are about getting bytes into a store
+They share nothing except that they are about getting bytes into a store
 from more than one worker at a time.
 
 `h5py` and `glob` are imported inside the two converters rather than at
@@ -21,14 +26,21 @@ invocation for something it never calls.
 """
 
 import logging
+import os
+import time
 import numpy as np
+import zarr
 
 from contextlib import contextmanager
+from enum import Enum
+from pathlib import Path
 
 import bigstream.utility as ut
 
 from ClusterWrap.decorator import cluster
 from dask.distributed import MultiLock
+from zarr.core.sync import sync
+from zarr.storage import LocalStore
 
 
 logger = logging.getLogger(__name__)
@@ -502,3 +514,202 @@ class BlockWriter:
                 f'{block_coords} to {self.output}({self.output.shape})'
             ))
         return block_coords
+
+
+# -------------------------------------------------------------------------
+# staged writes: one writer per file
+# -------------------------------------------------------------------------
+#
+# The locks above order the writers of a write unit, which is enough when
+# they all see the same file system state. Across hosts on NFS they do not:
+# the store replaces a unit by writing a new file and renaming it over the
+# old one, and another node's client can keep resolving the name to the old
+# file for a while. A writer that takes the lock then reads the unit as it
+# was before its predecessor's write, merges its part and writes it back -
+# and the predecessor's part is gone.
+#
+# What is safe is giving every file exactly one writer, and reading a file
+# only after its writer finished and only as a file this node has never
+# seen before - which NFS close-to-open consistency does guarantee once the
+# name resolves (`wait_for_file_visible`). The helpers here are the generic
+# parts of that: a staging array with one shard per block, tiles of whole
+# write units for the final single write, and the switch that decides
+# whether a run needs any of it.
+
+
+class StageBlockWrites(str, Enum):
+    """
+    Whether a distributed writer stages its blocks instead of merging them
+    into a shared zarr output in place.
+
+        AUTO    stage when the dask workers run on more than one host, else
+                write in place under the write locks
+        ALWAYS  stage: every block writes its own file, then one task per
+                tile of whole write units combines them and writes the tile
+                once
+        NEVER   write in place under the write locks
+
+    In-place writes are only safe when every writer sees the same file
+    system state; across hosts on NFS a read-modify-write can read a stale
+    copy of a write unit even under the lock. Staging costs temporary disk
+    and one extra read. An in-memory output is always written in place.
+    """
+
+    AUTO = 'AUTO'
+    ALWAYS = 'ALWAYS'
+    NEVER = 'NEVER'
+
+
+def parse_stage_block_writes(value):
+    """`None` (AUTO), a `StageBlockWrites`, or its name (any case)."""
+    if value is None:
+        return StageBlockWrites.AUTO
+    if isinstance(value, StageBlockWrites):
+        return value
+    try:
+        return StageBlockWrites(str(value).strip().upper())
+    except ValueError:
+        raise ValueError(
+            f'unsupported stage_block_writes {value!r}; expected one of '
+            f'{[m.value for m in StageBlockWrites]}'
+        ) from None
+
+
+def cluster_worker_hosts(cluster_client):
+    """The distinct hosts the cluster's workers run on."""
+    workers = cluster_client.scheduler_info().get('workers', {})
+    return {w.get('host') or address.rsplit(':', 1)[0].split('://')[-1]
+            for address, w in workers.items()}
+
+
+def resolve_stage_block_writes(value, cluster_client):
+    """Decide AUTO once per run: True to stage, False to write in place."""
+    mode = parse_stage_block_writes(value)
+    if mode is StageBlockWrites.ALWAYS:
+        return True
+    if mode is StageBlockWrites.NEVER:
+        return False
+    hosts = cluster_worker_hosts(cluster_client)
+    stage = len(hosts) > 1
+    logger.info((
+        f'stage_block_writes=AUTO: dask workers on {len(hosts)} host(s) -> '
+        f'{"stage block writes" if stage else "write blocks in place"}'
+    ))
+    return stage
+
+
+def write_unit_tile(output_array, ndim, min_size=None):
+    """
+    A tile of whole write units over the leading `ndim` axes, grown to at
+    least `min_size` per axis. Tiles on this grid never share a write unit,
+    so one task per tile is one writer per file. None for an in-memory
+    array, which has no write unit.
+    """
+    unit = storage_write_unit(output_array)
+    if unit is None:
+        return None
+    unit = np.array(unit[:ndim], dtype=int)
+    if min_size is not None:
+        unit = unit * np.maximum(1, -(-np.array(min_size, dtype=int) // unit))
+    return tuple(int(t) for t in unit)
+
+
+# how long a reader waits for a file another task reported as written but
+# this node's lookup cache does not show yet
+FILE_VISIBILITY_WAIT_SECONDS = 120
+
+
+def wait_for_file_visible(path, context=''):
+    """
+    Wait until a file another node wrote is visible here.
+
+    An NFS client caches lookups, including failed ones, so a file another
+    node created can stay invisible for a while. Reading a zarr chunk
+    through that returns the fill value and silently drops the data, so wait
+    instead, and fail loudly if the file never shows up.
+    """
+    path = Path(path)
+    deadline = time.time() + FILE_VISIBILITY_WAIT_SECONDS
+    delay = 0.5
+    while not path.exists():
+        if time.time() > deadline:
+            raise RuntimeError(
+                f'{context}: {path} is not visible after '
+                f'{FILE_VISIBILITY_WAIT_SECONDS}s although its writer '
+                'completed')
+        # listing a directory revalidates this client's cached view of it
+        for parent in path.parents:
+            try:
+                os.listdir(parent)
+                break
+            except FileNotFoundError:
+                continue
+        time.sleep(delay)
+        delay = min(2 * delay, 5.)
+
+
+def create_block_staging(output_array, block_grid, block_shape, label):
+    """
+    Staging array for per-block data headed for `output_array`, shaped
+    `block_grid + block_shape + trailing`, where `trailing` are the output's
+    axes past `block_shape` (e.g. the vector axis of a displacement field),
+    with one shard per block so each block is one file with one writer.
+
+    It goes next to the output: in the same store when the output sits under
+    a path in it, else in a sibling store. Returns None when the output is
+    not a zarr array on a local (shared) file system store.
+    """
+    if (not isinstance(output_array, zarr.Array)
+            or not isinstance(output_array.store, LocalStore)):
+        return None
+    block_grid = tuple(int(n) for n in block_grid)
+    block_shape = tuple(int(b) for b in block_shape)
+    trailing = tuple(output_array.shape[len(block_shape):])
+    # inner chunks only for cheap partial reads; they have to divide the
+    # shard, so an axis that 64 does not divide stays one chunk
+    inner = tuple(min(64, b) if b % min(64, b) == 0 else b
+                  for b in block_shape)
+    if output_array.path:
+        store = output_array.store
+        name = f'{output_array.path}-blocks'
+    else:
+        root = Path(output_array.store.root)
+        store = LocalStore(root.with_name(f'{root.name}.{label}-blocks'))
+        name = None
+    staging = zarr.create_array(
+        store=store, name=name,
+        shape=block_grid + block_shape + trailing,
+        chunks=(1,) * len(block_grid) + inner + trailing,
+        shards=(1,) * len(block_grid) + block_shape + trailing,
+        dtype=output_array.dtype, fill_value=0, overwrite=True,
+        # an all-zero block must still produce its file, or a reader could
+        # not tell it from one that is not visible yet
+        config={'write_empty_chunks': True},
+    )
+    logger.info((
+        f'{label}: stage block data in {Path(store.root) / (name or "")} '
+        f'{staging.shape}, one shard per block'
+    ))
+    return staging
+
+
+def staged_block_path(staging, block_index):
+    """The file holding one block's shard of a staging array."""
+    chunk_coords = (tuple(int(i) for i in block_index)
+                    + (0,) * (staging.ndim - len(block_index)))
+    key = staging.metadata.encode_chunk_key(chunk_coords)
+    return Path(staging.store.root) / staging.path / key
+
+
+def delete_block_staging(staging, label=''):
+    """Remove a staging array made by `create_block_staging`."""
+    location = Path(staging.store.root) / staging.path
+    try:
+        if staging.path:
+            sync(staging.store.delete_dir(staging.path))
+        else:
+            sync(staging.store.clear())
+            location.rmdir()
+    except Exception as e:
+        logger.warning(f'{label}: could not remove the block staging at '
+                       f'{location}: {e}')

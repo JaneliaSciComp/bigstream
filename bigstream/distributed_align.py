@@ -64,6 +64,7 @@ import traceback
 from dataclasses import dataclass, field
 from enum import Enum
 from itertools import product
+from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -82,12 +83,18 @@ from .blend_ramp import (DEFAULT_BLEND_RAMP, blend_ramp_weights,
 from .diagnostics import (deform_field_diagnostics,
                           log_deform_field_diagnostics)
 from .distributed_io_utility import (MAX_WRITE_LOCKS,
+                                     StageBlockWrites,
+                                     create_block_staging,
+                                     delete_block_staging,
                                      lock_cell_keys,
                                      log_write_locking,
-                                     storage_write_unit,
+                                     resolve_stage_block_writes,
+                                     staged_block_path,
+                                     wait_for_file_visible,
                                      write_lock,
                                      write_lock_grid,
-                                     write_lock_namespace)
+                                     write_lock_namespace,
+                                     write_unit_tile)
 from .distutils import ThrottledArraySliceReader
 from .image_data import (ImageData, as_image_data)
 from .transform import apply_transform_to_coordinates
@@ -163,6 +170,7 @@ def blockwise_alignment_pipeline(
     error_if_displacement_check_fails=False,
     start_pass=1,
     resumed_pass_fields: Sequence[np.ndarray | zarr.Array] = (),
+    stage_block_writes=StageBlockWrites.AUTO,
 ):
     """
     Multi-pass piecewise alignment of a moving image to a fixed image.
@@ -268,6 +276,12 @@ def blockwise_alignment_pipeline(
         order. Required (and must match that length) whenever `start_pass`
         selects a pass beyond the first; ignored otherwise.
 
+    stage_block_writes : StageBlockWrites or str (default: AUTO)
+        How a zarr pass field is assembled: staged per block and reduced
+        (`ALWAYS`), added in place under the write locks (`NEVER`), or
+        staged only when the workers run on more than one host (`AUTO`). See
+        `StageBlockWrites`.
+
     Other parameters behave as they did in the single-pass pipeline this
     replaces.
 
@@ -307,6 +321,8 @@ def blockwise_alignment_pipeline(
 
     npasses = len(resolved_passes)
     diagnostics = _parse_displacement_diagnostics(displacement_diagnostics)
+    stage_writes = resolve_stage_block_writes(stage_block_writes,
+                                              cluster_client)
     # a single pass writes straight to the output, so that pass *is* the
     # final step and there is no composed field to report on afterwards
     per_pass_diagnostics = (
@@ -384,6 +400,7 @@ def blockwise_alignment_pipeline(
             rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
             run_displacement_diagnostics=per_pass_diagnostics,
             error_if_displacement_check_fails=error_if_displacement_check_fails,
+            stage_block_writes=stage_writes,
             label=label,
         )
         # a failed pass does not stop the run - later passes still have
@@ -462,8 +479,14 @@ def _run_alignment_pass(alignment_pass,
                         run_displacement_diagnostics=False,
                         error_if_displacement_check_fails=False,
                         max_write_locks=MAX_WRITE_LOCKS,
+                        stage_block_writes=True,
                         label='pass'):
-    """Run one pass of the multi-pass pipeline. See `blockwise_alignment_pipeline`."""
+    """
+    Run one pass of the multi-pass pipeline. See `blockwise_alignment_pipeline`.
+
+    `stage_block_writes` is already resolved here: True stages a zarr output
+    per block and reduces it, False adds blocks in place under the locks.
+    """
     block_size = np.array(alignment_pass.processing_size)
     # the halo as given is the context a block is aligned over; the blend
     # uses at most half the block size of it
@@ -496,11 +519,16 @@ def _run_alignment_pass(alignment_pass,
     # chunk.
     # Nothing requires the block footprint to be a multiple of that unit -
     # blocks that land in a shared chunk are simply serialized.
+    # A staged zarr output is reduced afterwards instead (see
+    # `create_block_staging`); the locks guard an in-place one.
+    staging = (create_block_staging(output_transform, lattice.nblocks,
+                                    tuple(block_size + 2 * halo), label)
+               if stage_block_writes else None)
     footprint = block_size + 2 * halo
     lock_grid = write_lock_grid(output_transform, footprint,
                                 max_locks=max_write_locks)
     lock_namespace = write_lock_namespace(output_transform, label)
-    if output_transform is not None:
+    if output_transform is not None and staging is None:
         log_write_locking(output_transform, lock_grid, footprint, label)
 
     blocks_ids, blocks_coords = _select_blocks(
@@ -566,6 +594,20 @@ def _run_alignment_pass(alignment_pass,
     def write_method(aligned_block):
         block_index = aligned_block[0]
         clip_before, clip_after = lattice.clip_amounts(block_index)
+        if staging is not None:
+            weighted = _weight_block_transform(
+                _crop_to_footprint(aligned_block, lattice),
+                block_size=block_size,
+                block_overlaps=halo,
+                nblocks=nblocks,
+                rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
+                blend_ramp=alignment_pass.blend_ramp,
+                clip_before=clip_before,
+                clip_after=clip_after,
+                pass_label=label,
+            )
+            return _stage_block_transform(weighted, staging, lattice)
+        # no staging
         return _write_block_transform(
             _crop_to_footprint(aligned_block, lattice),
             block_size=block_size,
@@ -587,11 +629,30 @@ def _run_alignment_pass(alignment_pass,
     partitions = _partition(blocks_infos, max_cluster_jobs)
 
     result = True
+    completed = []
     for part_index, part in enumerate(partitions):
         logger.info(f'{label}: process partition {part_index} '
                     f'({len(part)} blocks)')
         futures = cluster_client.map(align_and_write_method, part, pure=False)
-        result = _collect_results(futures, context=label) and result
+        result = _collect_results(futures, context=label,
+                                  completed=completed) and result
+
+    if staging is not None:
+        # a block that failed has no staged share; it is left out of the
+        # reduce exactly as the in-place add left it out of the output
+        reduced = _reduce_staged_blocks(staging, lattice, completed,
+                                        output_transform, cluster_client,
+                                        max_cluster_jobs=max_cluster_jobs,
+                                        label=label)
+        if reduced:
+            delete_block_staging(staging, label=label)
+        else:
+            logger.error((
+                f'{label}: some output tiles failed to reduce; keeping the '
+                f'block staging at {Path(staging.store.root) / staging.path} '
+                'for inspection'
+            ))
+        result = reduced and result
 
     if output_transform is not None and run_displacement_diagnostics:
         _display_displacement_diagnostics(output_transform, blocks_ids,
@@ -622,7 +683,7 @@ def _partition(items, max_cluster_jobs):
     return [items]
 
 
-def _collect_results(futures, context=''):
+def _collect_results(futures, context='', completed=None):
     """
     Drain a batch of block futures, logging and releasing each as it lands.
 
@@ -644,6 +705,8 @@ def _collect_results(futures, context=''):
         else:
             bi, bc = r
             n_remaining_results = n_remaining_results - 1
+            if completed is not None:
+                completed.append(bi)
             logger.debug((
                 f'{prefix}Finished computing deformation field for {bi} '
                 f'at {bc} (remaining {n_remaining_results}) '
@@ -1328,6 +1391,59 @@ def _write_block_transform(aligned_block,
       * an in-memory output has no write unit; the only hazard is two
         overlapping blocks interleaving their accumulate, so it locks the
         block and its neighbours.
+
+    A staged zarr output does not go through here; it is reduced instead
+    (`_stage_block_transform`, `_reduce_staged_tile`): on a shared file
+    system across hosts the read in a read-modify-write can return a stale
+    copy of the write unit even under the lock, and the add is then lost.
+    See `StageBlockWrites`.
+    """
+    block_index, block_coords, block_neighbors, transform = _weight_block_transform(
+            aligned_block,
+            block_size=block_size,
+            block_overlaps=block_overlaps,
+            nblocks=nblocks,
+            rebalance_for_missing_neighbors=rebalance_for_missing_neighbors,
+            blend_ramp=blend_ramp,
+            clip_before=clip_before,
+            clip_after=clip_after,
+            pass_label=pass_label
+    )
+    block_context = _block_context(pass_label, block_index)
+
+    if output_transform is not None:
+        if lock_grid is not None:
+            lock_keys = lock_cell_keys(output_transform, block_coords,
+                                       lock_grid, lock_namespace)
+        else:
+            lock_keys = _overlapping_block_lock_keys(block_index,
+                                                     block_neighbors,
+                                                     lock_namespace)
+        with write_lock(lock_keys, context=f'Block {block_context}'):
+            # read-modify-write: every overlapping block adds its weighted
+            # share, and the sum only reaches 1 once they all have
+            output_block = output_transform[block_coords] + transform
+            logger.info(f'Writing {output_block.shape} block {block_context} at {block_coords}')
+            output_transform[block_coords] = output_block
+            logger.info(f'Finished writing block {block_context} at {block_coords}')
+
+    return block_index, block_coords
+
+
+def _weight_block_transform(aligned_block,
+                            block_size=None,
+                            block_overlaps=None,
+                            nblocks=None,
+                            rebalance_for_missing_neighbors=True,
+                            blend_ramp=None,
+                            clip_before=None,
+                            clip_after=None,
+                            pass_label=''):
+    """
+    Multiply one aligned block's field by its blending weights.
+
+    Returns `aligned_block` with the transform replaced by its weighted
+    share, the part it contributes to the overlap-add.
     """
     start_time = time.time()
     block_index, block_coords, block_neighbors, transform = aligned_block
@@ -1362,23 +1478,7 @@ def _write_block_transform(aligned_block,
     logger.debug(f'Finished computing {transform.shape} ' +
                  f'block  {block_context} transform in {end_time-start_time}s')
 
-    if output_transform is not None:
-        if lock_grid is not None:
-            lock_keys = lock_cell_keys(output_transform, block_coords,
-                                       lock_grid, lock_namespace)
-        else:
-            lock_keys = _overlapping_block_lock_keys(block_index,
-                                                     block_neighbors,
-                                                     lock_namespace)
-        with write_lock(lock_keys, context=f'Block {block_context}'):
-            # read-modify-write: every overlapping block adds its weighted
-            # share, and the sum only reaches 1 once they all have
-            output_block = output_transform[block_coords] + transform
-            logger.info(f'Writing {output_block.shape} block {block_context} at {block_coords}')
-            output_transform[block_coords] = output_block
-            logger.info(f'Finished writing block {block_context} at {block_coords}')
-
-    return block_index, block_coords
+    return block_index, block_coords, block_neighbors, transform
 
 
 def _get_transform_weights(block_index,
@@ -1500,6 +1600,122 @@ def _get_transform_weights(block_index,
             weights = weights[tuple(region)]
 
     return weights
+
+
+# -------------------------------------------------------------------------
+# staged overlap-add for a zarr output
+# -------------------------------------------------------------------------
+#
+# Overlapping blocks cannot add into a shared zarr output in place on a
+# shared file system, locks or not. The store replaces a whole write unit
+# (chunk or shard) by writing a new file and renaming it over the old one,
+# and another node's NFS client can keep resolving the name to the old file
+# for a while after the rename. A block that then takes the lock reads the
+# unit as it was before its predecessor's write, adds its own share and
+# writes it back - and the predecessor's share is gone from that unit. It
+# shows up as a step in the field at write unit boundaries.
+#
+# So a zarr output is never read back while it is being built:
+#
+#   compute  every block writes its weighted share into its own shard of a
+#            staging array indexed by block. One writer per file, written
+#            whole, so the store never has to read anything to merge.
+#   reduce   once every block is done, one task per tile of whole output
+#            write units sums the shares of the blocks whose footprints reach
+#            the tile, and writes the tile once.
+#
+# Every file is then written by exactly one task, and read only after that
+# task finished and only as a file this node has never seen before - which
+# NFS close-to-open consistency does guarantee, once the name resolves (see
+# `wait_for_file_visible`). The staging array itself, the host check behind
+# `StageBlockWrites` and the write unit tiling are generic and live in
+# `bigstream.distributed_io_utility`; what stays here is the lattice: where
+# a block's share sits and which blocks reach a tile.
+
+def _stage_block_transform(weighted_block, staging, lattice):
+    """
+    Write one block's weighted share into its shard of the staging array,
+    placed at its position within the block's unclipped footprint.
+    """
+    block_index, block_coords, _, transform = weighted_block
+    clip_before, _ = lattice.clip_amounts(block_index)
+    share = np.zeros(staging.shape[lattice.ndim:], dtype=staging.dtype)
+    share[tuple(slice(int(b), int(b) + s)
+                for b, s in zip(clip_before, transform.shape[:-1]))] = transform
+    staging[tuple(int(i) for i in block_index)] = share
+    return block_index, block_coords
+
+
+def _reduce_tiles(output_transform, lattice, staged_ids):
+    """
+    The reduce tasks: tiles of whole output write units, each with the
+    blocks, in submission order, whose footprints reach it. Tiles no block
+    reaches are left out - the output already holds zeros there.
+    """
+    extent = np.array(lattice.extent)
+    # at least a block step per axis, to keep the number of tasks down
+    tile = np.array(write_unit_tile(output_transform, lattice.ndim,
+                                    min_size=lattice.block_size))
+    contributors = {}
+    for index in sorted(staged_ids):
+        footprint = lattice.footprint_slices(index)
+        first = [s.start // t for s, t in zip(footprint, tile)]
+        last = [(s.stop - 1) // t for s, t in zip(footprint, tile)]
+        for tile_index in product(*[range(a, b + 1)
+                                    for a, b in zip(first, last)]):
+            contributors.setdefault(tile_index, []).append(index)
+    tiles = []
+    for tile_index in sorted(contributors):
+        start = tile * np.array(tile_index)
+        stop = np.minimum(extent, start + tile)
+        tiles.append((tile_index,
+                      tuple(slice(int(a), int(b)) for a, b in zip(start, stop)),
+                      contributors[tile_index]))
+    return tile, tiles
+
+
+def _reduce_staged_tile(tile_info, staging=None, lattice=None, output=None,
+                        pass_label=''):
+    """Sum the staged shares reaching one tile and write the tile once."""
+    tile_index, tile_coords, block_ids = tile_info
+    context = f'{pass_label} reduce tile {tile_index}'
+    tile_shape = tuple(s.stop - s.start for s in tile_coords)
+    total = np.zeros(tile_shape + (lattice.ndim,), dtype=output.dtype)
+    for index in block_ids:
+        wait_for_file_visible(staged_block_path(staging, index), context)
+        nominal_start, _ = lattice.footprint_bounds(index)
+        footprint = lattice.footprint_slices(index)
+        low = [max(t.start, f.start) for t, f in zip(tile_coords, footprint)]
+        high = [min(t.stop, f.stop) for t, f in zip(tile_coords, footprint)]
+        source = tuple(slice(int(a - n), int(b - n))
+                       for a, b, n in zip(low, high, nominal_start))
+        target = tuple(slice(int(a - t.start), int(b - t.start))
+                       for a, b, t in zip(low, high, tile_coords))
+        total[target] += staging[tuple(int(i) for i in index) + source]
+    output[tile_coords] = total
+    logger.debug(f'{context}: wrote {tile_coords} from {len(block_ids)} blocks')
+    return tile_index, tile_coords
+
+
+def _reduce_staged_blocks(staging, lattice, staged_ids, output_transform,
+                          cluster_client, max_cluster_jobs=0, label=''):
+    """Reduce every staged block share into the output. See above."""
+    tile, tiles = _reduce_tiles(output_transform, lattice, staged_ids)
+    logger.info((
+        f'{label}: reduce {len(staged_ids)} staged blocks into the output in '
+        f'{len(tiles)} tiles of {tuple(int(t) for t in tile)}'
+    ))
+
+    def reduce_method(tile_info):
+        return _reduce_staged_tile(tile_info, staging=staging,
+                                   lattice=lattice, output=output_transform,
+                                   pass_label=label)
+
+    result = True
+    for part in _partition(tiles, max_cluster_jobs):
+        futures = cluster_client.map(reduce_method, part, pure=False)
+        result = _collect_results(futures, context=f'{label} reduce') and result
+    return result
 
 
 # -------------------------------------------------------------------------
@@ -1779,15 +1995,11 @@ def _distributed_compose_displacement_fields(fields, spacing, output,
     at all.
     """
     shape = tuple(output.shape[:-1])
-    unit = storage_write_unit(output)
     if processing_size is None:
-        if unit is not None:
-            # one task per write unit: no write unit is then shared by
-            # two tasks and the locks below never contend. `unit` covers the
-            # vector axis too, so take only its spatial leading entries -
-            # the blocks below are spatial.
-            processing_size = tuple(int(u) for u in unit[:len(shape)])
-        else:
+        # one task per write unit: no write unit is then shared by two tasks
+        # and the locks below never contend
+        processing_size = write_unit_tile(output, len(shape))
+        if processing_size is None:
             # an in-memory output has no natural unit; keep the per task
             # coordinate arrays bounded rather than walking the whole volume
             processing_size = tuple(min(s, 128) for s in shape)

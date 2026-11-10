@@ -38,6 +38,52 @@ def test_compose_affine_with_field_spacings_as_list_with_none():
     assert composed.shape == SHAPE + (3,)
 
 
+def _grid(shape=SHAPE, spacing=SPACING):
+    return np.stack(np.meshgrid(
+        *[np.arange(n) * s for n, s in zip(shape, spacing)], indexing='ij',
+    ), axis=-1)
+
+
+@pytest.mark.parametrize('affine', [
+    AFFINE,
+    # 180 degree rotation in yx about the grid center: the prealign case
+    # (rounds imaged rotated) that used to mirror the image near the edges
+    np.array([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0, (SHAPE[1] - 1) * SPACING[1]],
+        [0.0, 0.0, -1.0, (SHAPE[2] - 1) * SPACING[2]],
+        [0.0, 0.0, 0.0, 1.0],
+    ]),
+])
+def test_compose_affine_with_field_is_exact(affine):
+    # d(x) = A (x + s(x)) - x must hold everywhere, including where the
+    # field pushes x + s(x) outside the grid: a large field guarantees that
+    field = _smooth_field(amplitude=4.0)
+    grid = _grid()
+    expected = (grid + field) @ affine[:3, :3].T + affine[:3, -1] - grid
+    composed = bst.compose_transforms(affine, field, None, SPACING)
+    assert composed.shape == field.shape
+    assert composed.dtype == field.dtype
+    np.testing.assert_allclose(composed, expected, atol=1e-4)
+
+
+def test_compose_affine_with_field_off_grid_keeps_linear_part():
+    # a field pushing the whole grid outside along x: the composite must
+    # still flip x, not collapse to the edge value of the affine
+    flip_x = np.eye(4)
+    flip_x[2, 2] = -1.0
+    flip_x[2, 3] = (SHAPE[2] - 1) * SPACING[2]
+    field = np.zeros(SHAPE + (3,), dtype=np.float32)
+    field[..., 2] = -SHAPE[2] * SPACING[2]
+    composed = bst.compose_transforms(flip_x, field, None, SPACING)
+    mov_x = _grid()[..., 2] + composed[..., 2]
+    # x + s(x) = x - W, so the flip maps it to (W - 1) s - (x - W): decreasing in x
+    assert np.all(np.diff(mov_x, axis=2) < 0)
+    np.testing.assert_allclose(
+        np.diff(mov_x, axis=2), -SPACING[2], atol=1e-5,
+    )
+
+
 def test_alignment_pipeline_flatten_with_fix_origin():
     # 'flatten' composes the affine step into the field step's grid, which
     # starts at fix_origin

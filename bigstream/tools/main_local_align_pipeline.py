@@ -30,6 +30,7 @@ from bigstream.configure_dask import (ConfigureWorkerPlugin, load_dask_config)
 from bigstream.distributed_align import (
     MAX_WRITE_LOCKS,
     DisplacementDiagnostics,
+    StageBlockWrites,
     blockwise_alignment_pipeline,
     default_blend_ramp_from_config,
     default_pass_geometry_from_config,
@@ -132,6 +133,23 @@ def _define_args(local_descriptor):
                                   'written them. A value greater than the '
                                   'number of configured passes is ignored '
                                   'and the run starts from pass 1.')
+    args_parser.add_argument('--stage-block-writes', '--stage_block_writes',
+                             dest='stage_block_writes',
+                             type=str.upper,
+                             choices=[m.value for m in StageBlockWrites],
+                             default=StageBlockWrites.AUTO.value,
+                             help='How a blockwise pass assembles its blended '
+                                  'field in zarr. ALWAYS: every block writes '
+                                  'its weighted share to its own file, then '
+                                  'one task per tile of whole shards sums '
+                                  'them and writes the tile once - safe when '
+                                  'workers on several hosts share an NFS '
+                                  'file system, at the cost of temporary '
+                                  'disk (~8x a pass field) and one extra '
+                                  'read. NEVER: blocks add into the output in '
+                                  'place under write locks. AUTO (default): '
+                                  'stage only when the dask workers run on '
+                                  'more than one host.')
     args_parser.add_argument('--max-write-locks', '--max_write_locks',
                              dest='max_write_locks',
                              type=int, default=MAX_WRITE_LOCKS,
@@ -282,7 +300,8 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          max_concurrent_zarr_reads=0,
                          max_cluster_jobs=0,
                          displacement_diagnostics=None,
-                         error_if_displacement_check_fails=False):
+                         error_if_displacement_check_fails=False,
+                         stage_block_writes=StageBlockWrites.AUTO):
     config = load_align_config(align_config)
     alignment_passes = get_alignment_passes(config, reg_args.registration_steps,
                                             'local_align')
@@ -402,6 +421,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             displacement_diagnostics,
             error_if_displacement_check_fails,
             not reg_args.norebalance_missing_neighbors,
+            stage_block_writes=stage_block_writes,
         )
         if not align_path:
             logger.info('No aligned output was given, so the moving image '
@@ -467,7 +487,8 @@ def _compute_deform_field(fix_image: ImageData,
                           max_write_locks,
                           displacement_diagnostics,
                           error_if_displacement_check_fails,
-                          rebalance_for_missing_neighbors):
+                          rebalance_for_missing_neighbors,
+                          stage_block_writes=StageBlockWrites.AUTO):
     """
     Run the passes and write the composed field.
 
@@ -540,6 +561,7 @@ def _compute_deform_field(fix_image: ImageData,
         error_if_displacement_check_fails=error_if_displacement_check_fails,
         start_pass=resume_from_pass or 1,
         resumed_pass_fields=resumed_pass_fields,
+        stage_block_writes=stage_block_writes,
     )
     if deform_ok:
         logger.info(f'Wrote the deformation field to '
@@ -811,6 +833,7 @@ def main():
         max_cluster_jobs=args.max_cluster_jobs,
         displacement_diagnostics=args.displacement_diagnostics,
         error_if_displacement_check_fails=args.error_if_displacement_check_fails,
+        stage_block_writes=args.stage_block_writes,
     )
     if not ok:
         raise SystemExit(1)

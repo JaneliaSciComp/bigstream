@@ -24,6 +24,7 @@ import pytest
 import yaml
 
 import bigstream.distributed_align as da
+import bigstream.distributed_io_utility as diu
 
 from bigstream.blend_ramp import blend_ramp_weights
 from bigstream.align_constraints import blend_safe_displacement_bound
@@ -1104,6 +1105,16 @@ def test_write_unit_is_the_shard_when_sharded_else_the_chunk(tmp_path):
     assert storage_write_unit(np.zeros(shape, dtype=np.float32)) is None
 
 
+def test_write_unit_tile_is_whole_units_grown_to_the_minimum(tmp_path):
+    sharded = _zarr_field(tmp_path, 's', (64, 64, 64, 3), (8, 8, 8, 3),
+                          shards=(16, 16, 16, 3))
+    # spatial axes only, one unit by default
+    assert diu.write_unit_tile(sharded, 3) == (16, 16, 16)
+    # grown per axis to the smallest whole multiple covering min_size
+    assert diu.write_unit_tile(sharded, 3, min_size=(16, 20, 40)) == (16, 32, 48)
+    assert diu.write_unit_tile(np.zeros((8, 8, 8, 3)), 3) is None
+
+
 def test_no_lock_grid_for_an_in_memory_output():
     assert write_lock_grid(np.zeros((32, 32, 32, 3)), (16, 16, 16)) is None
 
@@ -1322,6 +1333,138 @@ def test_field_is_correct_whatever_the_block_to_shard_ratio(
 
     assert np.any(reference)
     np.testing.assert_allclose(field[...], reference, rtol=0, atol=1e-5)
+
+
+@pytest.mark.parametrize('nested', [False, True],
+                         ids=['array-at-store-root', 'array-under-a-path'])
+def test_zarr_output_is_staged_and_never_read_while_it_is_built(
+        cluster_client_mt, synthetic_volumes, monkeypatch, tmp_path, nested):
+    """
+    On a shared file system a read-modify-write of a shard can read a stale
+    copy even under the lock and drop a neighbour's share. So blocks stage
+    their weighted shares and the output is only ever written, one tile of
+    whole write units per task: nothing may read it while the pass runs.
+    """
+    import zarr
+    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
+    fix_image, mov_image = synthetic_volumes
+    shape = tuple(fix_image.spatial_dims)
+    spacing = np.array([1.0, 1.0, 1.0])
+    # a staggered lattice, so footprints straddle shard boundaries
+    passes = [AlignmentPass(alignment_steps=[('deform', {})],
+                            processing_offset=(5, 3, 7))]
+    kwargs = dict(processing_size=(16, 16, 16), processing_halo_factor=0.25)
+
+    reference = np.zeros(shape + (3,), dtype=np.float32)
+    assert blockwise_alignment_pipeline(
+        fix_image, spacing, mov_image, spacing, passes, cluster_client_mt,
+        deformfield_final_result=reference, **kwargs)
+
+    if nested:
+        field = zarr.create_array(store=str(tmp_path / 'deform.zarr'),
+                                  name='r/1_passes/pass1',
+                                  shape=shape + (3,), chunks=(10, 10, 10, 3),
+                                  shards=(20, 20, 20, 3), dtype='f4')
+    else:
+        field = _zarr_field(tmp_path, 'out', shape + (3,), (10, 10, 10, 3),
+                            shards=(20, 20, 20, 3))
+
+    reads = []
+    original_getitem = zarr.Array.__getitem__
+
+    def recording_getitem(self, selection):
+        if (str(self.store.root) == str(field.store.root)
+                and self.path == field.path):
+            reads.append(selection)
+        return original_getitem(self, selection)
+
+    monkeypatch.setattr(zarr.Array, '__getitem__', recording_getitem)
+    assert blockwise_alignment_pipeline(
+        fix_image, spacing, mov_image, spacing, passes, cluster_client_mt,
+        deformfield_final_result=field, stage_block_writes='always', **kwargs)
+    monkeypatch.setattr(zarr.Array, '__getitem__', original_getitem)
+
+    assert reads == []
+    assert np.any(reference)
+    # the reduce adds the shares in block order, as one thread writing in
+    # place would; only float32 rounding between orders is left
+    np.testing.assert_allclose(field[...], reference, rtol=0, atol=1e-5)
+    # the staging is gone once the reduce succeeded
+    leftovers = [p.name for p in tmp_path.rglob('*blocks*')]
+    assert leftovers == []
+
+
+class _FakeClient:
+    def __init__(self, hosts):
+        self._workers = {f'tcp://{h}:{4000 + i}': {'host': h}
+                         for i, h in enumerate(hosts)}
+
+    def scheduler_info(self):
+        return {'workers': self._workers}
+
+
+@pytest.mark.parametrize('value,hosts,expected', [
+    (None, ['10.0.0.1', '10.0.0.1'], False),     # AUTO, one host
+    ('auto', ['10.0.0.1', '10.0.0.2'], True),    # AUTO, several hosts
+    ('ALWAYS', ['10.0.0.1'], True),
+    ('never', ['10.0.0.1', '10.0.0.2'], False),
+    (diu.StageBlockWrites.ALWAYS, ['10.0.0.1'], True),
+])
+def test_stage_block_writes_resolution(value, hosts, expected):
+    assert diu.resolve_stage_block_writes(value, _FakeClient(hosts)) is expected
+
+
+def test_stage_block_writes_rejects_unknown_values():
+    with pytest.raises(ValueError, match='stage_block_writes'):
+        diu.parse_stage_block_writes('sometimes')
+
+
+def test_auto_on_one_host_adds_in_place(cluster_client_mt, synthetic_volumes,
+                                        monkeypatch, tmp_path):
+    """A LocalCluster is one host: AUTO adds in place and stages nothing."""
+    _patch_alignment_pipeline(monkeypatch, _fake_alignment_pipeline)
+    fix_image, mov_image = synthetic_volumes
+    shape = tuple(fix_image.spatial_dims)
+    spacing = np.array([1.0, 1.0, 1.0])
+    passes = [AlignmentPass(alignment_steps=[('deform', {})])]
+    field = _zarr_field(tmp_path, 'out', shape + (3,), (10, 10, 10, 3),
+                        shards=(20, 20, 20, 3))
+    created = []
+    original = da.create_block_staging
+    monkeypatch.setattr(da, 'create_block_staging',
+                        lambda *a, **k: created.append(a) or original(*a, **k))
+    assert blockwise_alignment_pipeline(
+        fix_image, spacing, mov_image, spacing, passes, cluster_client_mt,
+        deformfield_final_result=field, processing_size=(16, 16, 16),
+        processing_halo_factor=0.25)
+    assert created == []
+    assert np.any(field[...])
+
+
+def test_reduce_waits_for_a_staged_block_and_fails_if_it_never_shows(
+        tmp_path, monkeypatch):
+    """
+    A staged file another node created can stay invisible to this node's
+    NFS lookup cache for a while. Reading through that would return zeros
+    and silently drop the block, so the reduce waits - and fails loudly if
+    the file never appears.
+    """
+    monkeypatch.setattr(diu, 'FILE_VISIBILITY_WAIT_SECONDS', 1.0)
+    late = tmp_path / 'c' / '0' / 'late'
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        late.parent.mkdir(parents=True, exist_ok=True)
+        late.touch()
+
+    monkeypatch.setattr(diu.time, 'sleep', fake_sleep)
+    diu.wait_for_file_visible(late, context='test')
+    assert len(sleeps) == 1
+
+    monkeypatch.setattr(diu.time, 'sleep', lambda seconds: None)
+    with pytest.raises(RuntimeError, match='not visible'):
+        diu.wait_for_file_visible(tmp_path / 'never', context='test')
 
 
 # --------------------------------------------------------------------------

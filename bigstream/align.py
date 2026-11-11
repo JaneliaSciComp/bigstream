@@ -25,6 +25,7 @@ from fishspot.filter import apply_foreground_mask
 from functools import partial
 from scipy.ndimage import zoom
 from skimage.measure import ransac as skimage_ransac
+from skimage.registration import phase_cross_correlation
 from skimage.transform import AffineTransform
 
 
@@ -1369,9 +1370,14 @@ def affine_align(
         Restrict the alignment to rigid motion only
 
     initial_condition : str or 4x4 ndarray (default: None)
-        How to begin the optimization. Only one string value is allowed:
-        "CENTER" in which case the alignment is initialized by a center
-        of mass alignment. If a 4x4 ndarray is given the optimization
+        How to begin the optimization. String values are:
+        "CENTER" - initialize with a center of mass alignment,
+        "CENTER_MASKS" - initialize using the MOMENTS initializer,
+        "PHASE_CORRELATION" - initialize with the translation that
+        maximizes the cross-correlation of the fixed and moving images
+        (useful when the images are offset by more than the capture range
+        of the optimizer; falls back to the identity transform on failure).
+        If a 4x4 ndarray is given the optimization
         is initialized with that transform. static_transform_list is
         ignored.
 
@@ -1559,6 +1565,10 @@ def affine_align(
                     sitk.CenteredTransformInitializerFilter.MOMENTS,
                 )
                 logger.debug(f'CENTER_MASKS initial condition: {transform}')
+            elif initial_condition == 'PHASE_CORRELATION':
+                transform = _phase_correlation_based_initial_transform(
+                    fix, mov, transform, context=context,
+                )
         except RuntimeError as e:
             logger.warning(
                 f'{context} centered transform initializer failed ({e}); '
@@ -1607,6 +1617,45 @@ def affine_align(
             f'affine matrix: {affine_ndarray} '
         ))
         return affine_ndarray
+
+
+def _phase_correlation_based_initial_transform(fix, mov, transform, context=''):
+    """
+    Set the translation of `transform` to the integer voxel shift that
+    maximizes the cross-correlation between the sitk images `fix` and `mov`.
+    The linear part of `transform` is left untouched. If the shift cannot be
+    estimated, `transform` is returned unchanged.
+    """
+    try:
+        fix_arr = sitk.GetArrayFromImage(fix).astype(np.float32)
+        mov_arr = sitk.GetArrayFromImage(mov).astype(np.float32)
+        if fix_arr.shape != mov_arr.shape:
+            # the correlation needs equal shapes; pad the smaller image
+            shape = np.maximum(fix_arr.shape, mov_arr.shape)
+            fix_arr = np.pad(fix_arr, [(0, n - m) for n, m in zip(shape, fix_arr.shape)])
+            mov_arr = np.pad(mov_arr, [(0, n - m) for n, m in zip(shape, mov_arr.shape)])
+        shift, _, _ = phase_cross_correlation(
+            fix_arr, mov_arr, normalization=None, upsample_factor=1,
+        )
+        # sitk maps fixed physical points to moving physical points:
+        # T(p) = p + (mov_origin - fix_origin) - shift * spacing
+        # shift is in array order (z, y, x), sitk is (x, y, z)
+        offset = (
+            np.asarray(mov.GetOrigin()) - np.asarray(fix.GetOrigin())
+            - np.asarray(shift)[::-1] * np.asarray(fix.GetSpacing())
+        )
+        transform.SetTranslation(offset.tolist())
+        logger.info(
+            f'{context} PHASE_CORRELATION shift (voxels, zyx): {shift}, '
+            f'translation (physical, xyz): {offset}'
+        )
+        return transform
+    except Exception as e:
+        logger.warning(
+            f'{context} phase correlation initializer failed ({e}); '
+            'using the given transform'
+        )
+        return transform
 
 
 def deformable_align(

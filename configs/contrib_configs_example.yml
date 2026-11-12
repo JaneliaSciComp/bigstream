@@ -28,6 +28,7 @@ local_align:
         max_tolerance_iters: 10
         device: auto                # auto | cuda | cuda:N | mps | cpu
         clip_percentiles: [0.01, 99.99]
+        # initial_condition: PHASE_CORRELATION   # start from a cross-correlation shift
         # alignment_spacing: 4.0
 
     # FireANTs diffeomorphic deformable step (needs the pixi `fireants`

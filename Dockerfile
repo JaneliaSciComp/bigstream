@@ -1,9 +1,11 @@
 # pixi environment baked into the image: `default`, or `fireants` for the
 # FireANTs step (adds torch + fireants), e.g. --build-arg PIXI_ENV=fireants
 ARG PIXI_ENV=default
+ARG GIT_HASH=43d43d4
 
 FROM ghcr.io/janeliascicomp/dask:2026.6.0-py12-ol9 AS builder
 ARG PIXI_ENV
+ARG GIT_HASH
 
 # git is needed for the git-pinned PyPI deps (fishspot, zarr-tools)
 RUN dnf install -y git
@@ -20,6 +22,7 @@ RUN pixi install --locked -e ${PIXI_ENV}
 
 FROM ghcr.io/janeliascicomp/dask:2026.6.0-py12-ol9
 ARG PIXI_ENV
+ARG GIT_HASH
 
 RUN dnf install -y \
         mesa-libGL
@@ -52,3 +55,5 @@ COPY *.md .
 
 RUN python -c "import SimpleITK as sitk; print('SITK with Elastix support' if hasattr(sitk, 'ElastixImageFilter') else 'SITK without Elastix support')"
 RUN if [ "${PIXI_ENV}" = "fireants" ]; then python -c "import torch, fireants; print(f'torch {torch.__version__}, CUDA build {torch.version.cuda}')"; fi
+
+RUN echo "${GIT_HASH}" > /app/bigstream/.commit-hash

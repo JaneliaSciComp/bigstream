@@ -1619,6 +1619,32 @@ def affine_align(
         return affine_ndarray
 
 
+def phase_correlation_translation(fix, mov):
+    """
+    Translation, in physical units and xyz order, that maps fixed physical
+    points to moving physical points, T(p) = p + offset, when it is the
+    integer voxel shift that maximizes the cross-correlation between the
+    sitk images `fix` and `mov`. Also returns that shift in voxels, zyx.
+    """
+    fix_arr = sitk.GetArrayFromImage(fix).astype(np.float32)
+    mov_arr = sitk.GetArrayFromImage(mov).astype(np.float32)
+    if fix_arr.shape != mov_arr.shape:
+        # the correlation needs equal shapes; pad the smaller image
+        shape = np.maximum(fix_arr.shape, mov_arr.shape)
+        fix_arr = np.pad(fix_arr, [(0, n - m) for n, m in zip(shape, fix_arr.shape)])
+        mov_arr = np.pad(mov_arr, [(0, n - m) for n, m in zip(shape, mov_arr.shape)])
+    shift, _, _ = phase_cross_correlation(
+        fix_arr, mov_arr, normalization=None, upsample_factor=1,
+    )
+    # T(p) = p + (mov_origin - fix_origin) - shift * spacing
+    # shift is in array order (z, y, x), sitk is (x, y, z)
+    offset = (
+        np.asarray(mov.GetOrigin()) - np.asarray(fix.GetOrigin())
+        - np.asarray(shift)[::-1] * np.asarray(fix.GetSpacing())
+    )
+    return offset, shift
+
+
 def _phase_correlation_based_initial_transform(fix, mov, transform, context=''):
     """
     Set the translation of `transform` to the integer voxel shift that
@@ -1627,23 +1653,7 @@ def _phase_correlation_based_initial_transform(fix, mov, transform, context=''):
     estimated, `transform` is returned unchanged.
     """
     try:
-        fix_arr = sitk.GetArrayFromImage(fix).astype(np.float32)
-        mov_arr = sitk.GetArrayFromImage(mov).astype(np.float32)
-        if fix_arr.shape != mov_arr.shape:
-            # the correlation needs equal shapes; pad the smaller image
-            shape = np.maximum(fix_arr.shape, mov_arr.shape)
-            fix_arr = np.pad(fix_arr, [(0, n - m) for n, m in zip(shape, fix_arr.shape)])
-            mov_arr = np.pad(mov_arr, [(0, n - m) for n, m in zip(shape, mov_arr.shape)])
-        shift, _, _ = phase_cross_correlation(
-            fix_arr, mov_arr, normalization=None, upsample_factor=1,
-        )
-        # sitk maps fixed physical points to moving physical points:
-        # T(p) = p + (mov_origin - fix_origin) - shift * spacing
-        # shift is in array order (z, y, x), sitk is (x, y, z)
-        offset = (
-            np.asarray(mov.GetOrigin()) - np.asarray(fix.GetOrigin())
-            - np.asarray(shift)[::-1] * np.asarray(fix.GetSpacing())
-        )
+        offset, shift = phase_correlation_translation(fix, mov)
         transform.SetTranslation(offset.tolist())
         logger.info(
             f'{context} PHASE_CORRELATION shift (voxels, zyx): {shift}, '

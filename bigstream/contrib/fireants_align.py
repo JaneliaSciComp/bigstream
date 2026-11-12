@@ -10,6 +10,7 @@ from bigstream.align import (
     apply_alignment_spacing,
     images_to_sitk,
     format_static_transform_data,
+    phase_correlation_translation,
 )
 
 
@@ -307,6 +308,16 @@ def _batched_images(fix, mov, fix_mask, mov_mask, loss, dev):
     fixed.set_device(dev)
     moving.set_device(dev)
     return fixed, moving, loss_type
+
+
+def _translated_image(image, offset):
+    """
+    Copy of the sitk image moved by -offset in physical space, so that its
+    content at p is the content of `image` at p + offset: no resampling
+    """
+    shifted = sitk.Image(image)
+    shifted.SetOrigin((np.asarray(image.GetOrigin()) - offset).tolist())
+    return shifted
 
 
 def _metric_improved(fix, mov, fix_mask, moved, context):
@@ -689,6 +700,7 @@ def fireants_affine_align(
     torch_threads=None,
     seed=None,
     clip_percentiles=(0.01, 99.99),
+    initial_condition=None,
     alignment_spacing=None,
     fix_mask=None,
     mov_mask=None,
@@ -765,6 +777,19 @@ def fireants_affine_align(
         Clip each image to these intensity percentiles before registering.
         None disables clipping.
 
+    initial_condition : str or (ndim + 1, ndim + 1) ndarray (default: None)
+        How to begin the optimization; FireANTs starts from the identity,
+        which only converges when the images are already within about a
+        feature size of each other. The string 'PHASE_CORRELATION' starts
+        from the integer voxel translation that maximizes the
+        cross-correlation of the images at the alignment spacing (the
+        identity if it cannot be estimated). A matrix, in physical units
+        and zyx order mapping fixed to moving coordinates as returned by
+        affine_align, starts from that transform. FireANTs refines from
+        there and the starting transform is composed into the returned
+        matrix. The final metric check and `default` also start from it,
+        as in affine_align; `default` is the identity for a string.
+
     alignment_spacing : float (default: None)
         Skip-sample fix and mov to approximately this voxel spacing before
         registering.
@@ -827,6 +852,14 @@ def fireants_affine_align(
     _check_schedule(scales, iterations)
     if method not in ('affine', 'rigid'):
         raise ValueError(f"method must be 'affine' or 'rigid'; got {method!r}")
+    initial_matrix = None
+    if isinstance(initial_condition, str):
+        if initial_condition != 'PHASE_CORRELATION':
+            raise ValueError(
+                f"initial_condition string must be 'PHASE_CORRELATION'; got {initial_condition!r}"
+            )
+    elif initial_condition is not None:
+        initial_matrix = np.asarray(initial_condition, dtype=np.float64)
 
     fix, mov, fix_mask, mov_mask = _prepare_images(
         fix, mov, fix_spacing, mov_spacing,
@@ -836,15 +869,46 @@ def fireants_affine_align(
     )
     ndim = fix.GetDimension()
 
-    # default identity affine
+    if initial_matrix is not None and initial_matrix.shape != (ndim + 1, ndim + 1):
+        raise ValueError(
+            f'initial_condition matrix must be {(ndim + 1, ndim + 1)}; got {initial_matrix.shape}'
+        )
+
+    # default identity affine, or the given initial transform
     if default is None:
-        default = np.eye(ndim + 1)
+        default = np.eye(ndim + 1) if initial_matrix is None else initial_matrix
 
     # a constant image (e.g. a background block) has nothing to register to,
     # and FireANTs still moves it
     if _is_flat(fix) or _is_flat(mov):
         logger.info(f'{context} constant fixed or moving image, returning default')
         return default
+
+    # start FireANTs from the initial condition instead of the identity,
+    # as xyz matrix mapping fixed to moving physical points
+    initial_xyz = None
+    if initial_condition == 'PHASE_CORRELATION':
+        try:
+            offset, voxels = phase_correlation_translation(fix, mov)
+            # a pure translation: move the images' origin, no resampling
+            mov = _translated_image(mov, offset)
+            if mov_mask is not None:
+                mov_mask = _translated_image(mov_mask, offset)
+            initial_xyz = np.eye(ndim + 1)
+            initial_xyz[:ndim, ndim] = offset
+            logger.info((
+                f'{context} PHASE_CORRELATION shift (voxels, zyx): {voxels}, '
+                f'translation (physical, xyz): {offset}'
+            ))
+        except Exception as e:
+            logger.warning(f'{context} phase correlation failed ({e}); starting from identity')
+    elif initial_matrix is not None:
+        tx = bst.matrix_to_affine_transform(initial_matrix)
+        mov = sitk.Resample(mov, fix, tx, sitk.sitkLinear, 0.0)
+        if mov_mask is not None:
+            mov_mask = sitk.Resample(mov_mask, fix, tx, sitk.sitkNearestNeighbor, 0, sitk.sitkUInt8)
+        initial_xyz = bst.invert_matrix_axes(initial_matrix)
+        logger.info(f'{context} initial condition matrix: {initial_matrix}')
 
     # torch/fireants are optional dependencies: import them only when the
     # step actually runs
@@ -882,6 +946,10 @@ def fireants_affine_align(
             if not np.all(np.isfinite(matrix_xyz)):
                 raise ValueError('non-finite affine matrix')
             moved = reg.evaluate(fixed, moving)[0, 0].cpu().numpy() if final_metric_check else None
+            if initial_xyz is not None:
+                # the matrix maps fixed points to the moving image after the
+                # initial condition: follow it by the initial condition
+                matrix_xyz = initial_xyz @ matrix_xyz
     except NotImplementedError:
         # an op missing on the device is a configuration error, not a block failure
         raise

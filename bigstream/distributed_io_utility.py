@@ -577,7 +577,9 @@ def parse_stage_block_writes(value):
 
 def cluster_worker_hosts(cluster_client):
     """The distinct hosts the cluster's workers run on."""
-    workers = cluster_client.scheduler_info().get('workers', {})
+    # n_workers=-1: the client only reports 5 workers by default, which on a
+    # cluster whose workers register host by host is often a single host
+    workers = cluster_client.scheduler_info(n_workers=-1).get('workers', {})
     return {w.get('host') or address.rsplit(':', 1)[0].split('://')[-1]
             for address, w in workers.items()}
 

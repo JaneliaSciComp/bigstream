@@ -1399,8 +1399,13 @@ class _FakeClient:
         self._workers = {f'tcp://{h}:{4000 + i}': {'host': h}
                          for i, h in enumerate(hosts)}
 
-    def scheduler_info(self):
-        return {'workers': self._workers}
+    def scheduler_info(self, n_workers=5):
+        # like distributed.Client.scheduler_info: only the first n_workers
+        # are reported unless asked for all of them with -1
+        workers = list(self._workers.items())
+        if n_workers >= 0:
+            workers = workers[:n_workers]
+        return {'workers': dict(workers)}
 
 
 @pytest.mark.parametrize('value,hosts,expected', [
@@ -1412,6 +1417,19 @@ class _FakeClient:
 ])
 def test_stage_block_writes_resolution(value, hosts, expected):
     assert diu.resolve_stage_block_writes(value, _FakeClient(hosts)) is expected
+
+
+def test_auto_counts_hosts_of_all_workers_not_just_the_first_few():
+    """
+    Workers register host by host, so the first few can all share one host
+    while the cluster spans several. AUTO must look at every worker: judging
+    by the first five wrote a multi-host pass in place on NFS.
+    """
+    hosts = ['10.0.0.1'] * 5 + ['10.0.0.2'] * 3
+    client = _FakeClient(hosts)
+    assert len(client.scheduler_info()['workers']) == 5
+    assert diu.cluster_worker_hosts(client) == {'10.0.0.1', '10.0.0.2'}
+    assert diu.resolve_stage_block_writes(None, client) is True
 
 
 def test_stage_block_writes_rejects_unknown_values():

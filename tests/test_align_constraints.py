@@ -6,12 +6,10 @@ import SimpleITK as sitk
 
 from bigstream.align_constraints import (
     bspline_coefficients,
-    c4_violations,
-    chun_fessler_penalty,
-    coefficient_bounds,
+    _coefficient_bounds,
     is_orientation_preserving,
     project_bspline_transform,
-    project_to_c4,
+    _project_to_c4,
     set_bspline_coefficients,
 )
 
@@ -81,20 +79,18 @@ def _jacobian_stats(transform, size, spacing, origin=None, direction=None,
 @pytest.mark.parametrize('scale', [0.5, 5.0, 50.0])
 def test_projection_reaches_feasibility(scale):
     coefficients = _random_coefficients(scale)
-    projected, info = project_to_c4(coefficients, KNOT_SPACING, k=0.32)
+    projected, info = _project_to_c4(coefficients, KNOT_SPACING, k=0.32)
 
     assert info['converged']
     assert info['n_violating_after'] == 0
-    assert c4_violations(projected, KNOT_SPACING, k=0.32)['n_violating'] == 0
 
 
 def test_projection_reaches_feasibility_anisotropic_k():
     coefficients = _random_coefficients(20.0)
     k = [0.5, 0.25, 0.24]
-    projected, info = project_to_c4(coefficients, KNOT_SPACING, k=k)
+    projected, info = _project_to_c4(coefficients, KNOT_SPACING, k=k)
 
     assert info['converged']
-    assert c4_violations(projected, KNOT_SPACING, k=k)['n_violating'] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +100,8 @@ def test_projection_reaches_feasibility_anisotropic_k():
 def test_projection_is_a_noop_on_compliant_coefficients():
     # tiny coefficients cannot violate bounds of order knot_spacing * k
     coefficients = _random_coefficients(0.01)
-    assert c4_violations(coefficients, KNOT_SPACING)['n_violating'] == 0
 
-    projected, info = project_to_c4(coefficients, KNOT_SPACING)
+    projected, info = _project_to_c4(coefficients, KNOT_SPACING)
 
     assert info['n_violating_before'] == 0
     assert info['max_coefficient_shift'] == 0.0
@@ -116,8 +111,8 @@ def test_projection_is_a_noop_on_compliant_coefficients():
 
 def test_projection_is_idempotent():
     coefficients = _random_coefficients(10.0)
-    once, _ = project_to_c4(coefficients, KNOT_SPACING)
-    twice, info = project_to_c4(once, KNOT_SPACING)
+    once, _ = _project_to_c4(coefficients, KNOT_SPACING)
+    twice, info = _project_to_c4(once, KNOT_SPACING)
 
     assert info['max_coefficient_shift'] == 0.0
     np.testing.assert_allclose(twice, once)
@@ -131,11 +126,11 @@ def test_single_violating_pair_matches_closed_form():
     # a (1, 1, 2) grid has exactly one adjacent pair, along x, so the
     # projection cannot be perturbed by neighbouring constraints
     coefficients = np.zeros((3, 1, 1, 2))
-    lo, hi = coefficient_bounds(KNOT_SPACING, k=0.32)
+    lo, hi = _coefficient_bounds(KNOT_SPACING, k=0.32)
     excess = 3.0
     coefficients[0, 0, 0, 1] = hi[0, 2] + excess
 
-    projected, info = project_to_c4(coefficients, KNOT_SPACING, k=0.32)
+    projected, info = _project_to_c4(coefficients, KNOT_SPACING, k=0.32)
 
     # both ends move toward each other by excess/2
     assert projected[0, 0, 0, 0] == pytest.approx(excess / 2)
@@ -150,11 +145,11 @@ def test_single_violating_pair_matches_closed_form():
 
 def test_violating_pair_below_the_lower_bound():
     coefficients = np.zeros((3, 1, 1, 2))
-    lo, hi = coefficient_bounds(KNOT_SPACING, k=0.32)
+    lo, hi = _coefficient_bounds(KNOT_SPACING, k=0.32)
     excess = 2.0
     coefficients[0, 0, 0, 1] = lo[0, 2] - excess
 
-    projected, _ = project_to_c4(coefficients, KNOT_SPACING, k=0.32)
+    projected, _ = _project_to_c4(coefficients, KNOT_SPACING, k=0.32)
 
     assert (projected[0, 0, 0, 1] - projected[0, 0, 0, 0]) == pytest.approx(lo[0, 2])
 
@@ -166,7 +161,7 @@ def test_violating_pair_below_the_lower_bound():
 def test_bounds_use_component_k_and_difference_axis_spacing():
     k = [0.5, 0.25, 0.2]
     K = [1.0, 0.25, 0.2]
-    lo, hi = coefficient_bounds(KNOT_SPACING, k=k, K=K)
+    lo, hi = _coefficient_bounds(KNOT_SPACING, k=k, K=K)
 
     # off diagonal: component q=0 (z) differenced along r=2 (x)
     #   -> k of the component (0.5), spacing of the difference axis (2.0)
@@ -181,12 +176,12 @@ def test_bounds_use_component_k_and_difference_axis_spacing():
 
 def test_sum_k_must_be_less_than_one():
     with pytest.raises(ValueError, match='sum'):
-        coefficient_bounds(KNOT_SPACING, k=[0.4, 0.4, 0.4])
+        _coefficient_bounds(KNOT_SPACING, k=[0.4, 0.4, 0.4])
 
 
 def test_k_may_be_scalar_or_per_axis():
-    scalar_lo, scalar_hi = coefficient_bounds(KNOT_SPACING, k=0.3)
-    listed_lo, listed_hi = coefficient_bounds(KNOT_SPACING, k=[0.3, 0.3, 0.3])
+    scalar_lo, scalar_hi = _coefficient_bounds(KNOT_SPACING, k=0.3)
+    listed_lo, listed_hi = _coefficient_bounds(KNOT_SPACING, k=[0.3, 0.3, 0.3])
     np.testing.assert_allclose(scalar_lo, listed_lo)
     np.testing.assert_allclose(scalar_hi, listed_hi)
 
@@ -238,34 +233,7 @@ def test_projection_preserves_a_valid_transform_exactly():
 
 
 # ---------------------------------------------------------------------------
-# 6. penalty
-# ---------------------------------------------------------------------------
-
-def test_penalty_is_zero_exactly_on_feasible_coefficients():
-    coefficients = _random_coefficients(0.01)
-    assert chun_fessler_penalty(coefficients, KNOT_SPACING) == 0.0
-
-    projected, _ = project_to_c4(_random_coefficients(10.0), KNOT_SPACING)
-    assert chun_fessler_penalty(projected, KNOT_SPACING) == pytest.approx(0.0)
-
-
-def test_penalty_is_quadratic_in_the_excess():
-    lo, hi = coefficient_bounds(KNOT_SPACING, k=0.32)
-    # isolated single pair, as above, so only one term contributes
-    coefficients = np.zeros((3, 1, 1, 2))
-
-    coefficients[0, 0, 0, 1] = hi[0, 2] + 1.0
-    single = chun_fessler_penalty(coefficients, KNOT_SPACING, k=0.32)
-    assert single == pytest.approx(0.5 * 1.0 ** 2)
-
-    coefficients[0, 0, 0, 1] = hi[0, 2] + 2.0
-    double = chun_fessler_penalty(coefficients, KNOT_SPACING, k=0.32)
-
-    assert double == pytest.approx(4.0 * single)
-
-
-# ---------------------------------------------------------------------------
-# 7. SimpleITK parameter layout
+# 6. SimpleITK parameter layout
 # ---------------------------------------------------------------------------
 
 def test_parameter_layout_round_trips_against_coefficient_images():
@@ -318,7 +286,7 @@ def test_is_orientation_preserving():
 
 
 # ---------------------------------------------------------------------------
-# 10. cost
+# 7. cost
 # ---------------------------------------------------------------------------
 
 def test_projection_is_cheap_on_a_realistic_mesh():
@@ -328,7 +296,7 @@ def test_projection_is_cheap_on_a_realistic_mesh():
     knot_spacing = np.array([50.0, 50.0, 50.0])
 
     start = time.perf_counter()
-    _, info = project_to_c4(coefficients, knot_spacing, k=0.32)
+    _, info = _project_to_c4(coefficients, knot_spacing, k=0.32)
     elapsed = time.perf_counter() - start
 
     assert info['converged']

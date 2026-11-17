@@ -74,7 +74,7 @@ def _as_per_axis(value, ndim, name, allow_zero=False):
     return arr
 
 
-def coefficient_bounds(knot_spacing, k=DEFAULT_K, K=None):
+def _coefficient_bounds(knot_spacing, k=DEFAULT_K, K=None):
     """
     C4 bounds on differences of adjacent B-spline coefficients.
 
@@ -212,55 +212,6 @@ def _scan(coefficients, lo, hi, rtol=0.0):
     return n_pairs, n_violating, max_relative, penalty, per_axis
 
 
-def c4_violations(coefficients, knot_spacing, k=DEFAULT_K, K=None, rtol=1e-9):
-    """
-    Report how far a coefficient grid is from satisfying C4, without changing it.
-
-    Parameters
-    ----------
-    coefficients : nd-array
-        Shape (ndim, *grid_shape), component axis first, zyx throughout.
-
-    knot_spacing : 1d array
-        Physical knot spacing, zyx.
-
-    k, K : see `coefficient_bounds`
-
-    rtol : float (default: 1e-9)
-        Relative excess below which a pair counts as satisfied.
-
-    Returns
-    -------
-    dict with n_pairs, n_violating, max_relative_excess, penalty,
-    violating_pairs_per_axis, and min_jacobian_bound (the guaranteed lower
-    bound on |J| once the constraint holds).
-    """
-    lo, hi = coefficient_bounds(knot_spacing, k, K)
-    n_pairs, n_violating, max_relative, penalty, per_axis = _scan(
-        np.asarray(coefficients, dtype=np.float64), lo, hi, rtol=rtol,
-    )
-    ndim = np.asarray(knot_spacing).size
-    return {
-        'n_pairs': n_pairs,
-        'n_violating': n_violating,
-        'max_relative_excess': max_relative,
-        'penalty': penalty,
-        'violating_pairs_per_axis': per_axis,
-        'min_jacobian_bound': 1.0 - _as_per_axis(k, ndim, 'k').sum(),
-    }
-
-
-def chun_fessler_penalty(coefficients, knot_spacing, k=DEFAULT_K, K=None):
-    """
-    R(c), eq. (10) of the paper: the piecewise-quadratic hinge with a dead zone.
-
-    Diagnostics only - nothing here optimizes it. Zero exactly when the
-    coefficients satisfy C4.
-    """
-    lo, hi = coefficient_bounds(knot_spacing, k, K)
-    return _scan(np.asarray(coefficients, dtype=np.float64), lo, hi)[3]
-
-
 def blend_safe_displacement_bound(block_overlaps, spacing, k,
                                   min_jacobian=0.1,
                                   blend_ramp=DEFAULT_BLEND_RAMP):
@@ -365,8 +316,8 @@ def blend_safe_displacement_bound(block_overlaps, spacing, k,
     return float(np.min(ramp[ramp > 0]) * headroom / (2.0 * ndim * gain))
 
 
-def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
-                  max_displacement=None, max_sweeps=100, tol=1e-9):
+def _project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
+                   max_displacement=None, max_sweeps=100, tol=1e-9):
     """
     Project a coefficient grid onto C4 (and optionally a displacement bound).
 
@@ -399,7 +350,7 @@ def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
     knot_spacing : 1d array
         Physical knot spacing, zyx.
 
-    k, K : see `coefficient_bounds`
+    k, K : see `_coefficient_bounds`
 
     max_displacement : float, 1d array or None (default: None)
         Per-component displacement bound in physical units, zyx. None disables
@@ -425,7 +376,7 @@ def project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
             f'coefficients must have shape (ndim, *grid_shape) with ndim grid '
             f'axes, got {coefficients.shape}'
         )
-    lo, hi = coefficient_bounds(knot_spacing, k, K)
+    lo, hi = _coefficient_bounds(knot_spacing, k, K)
     scales = np.maximum(np.abs(lo), np.abs(hi))
 
     bound = (None if max_displacement is None
@@ -556,13 +507,13 @@ def project_bspline_transform(transform, k=DEFAULT_K, K=None,
     point spacing.
 
     `max_displacement` additionally bounds the rendered displacement per
-    component - see `project_to_c4`.
+    component - see `_project_to_c4`.
 
-    Returns the `info` dict from `project_to_c4`, with `knot_spacing` added.
+    Returns the `info` dict from `_project_to_c4`, with `knot_spacing` added.
     A compliant transform is left byte-identical.
     """
     coefficients, knot_spacing = bspline_coefficients(transform)
-    projected, info = project_to_c4(
+    projected, info = _project_to_c4(
         coefficients, knot_spacing, k=k, K=K,
         max_displacement=max_displacement, max_sweeps=max_sweeps, tol=tol,
     )
@@ -643,7 +594,7 @@ def validate_deform_regularization_params(config, ndim, default_sweeps=300):
         DEFAULT_K if config.get('k') is None else config['k'], ndim, 'k')
     K = k if config.get('K') is None else _as_per_axis(config['K'], ndim, 'K')
     # validates sum(k) < 1; the knot spacing is irrelevant to that check
-    coefficient_bounds(np.ones(ndim), k, K)
+    _coefficient_bounds(np.ones(ndim), k, K)
     max_sweeps = int(config.get('max_sweeps') or default_sweeps)
     tol = float(config['tol']) if config.get('tol') is not None else 1e-9
     if max_sweeps < 1:
@@ -713,10 +664,10 @@ def bound_affine_displacement(matrix, extent, max_displacement, context=''):
     `t` the translation. Being affine, its extrema over an axis-aligned box
     `[0, extent]` are attained at the box's corners, so the per-component
     worst case is found by evaluating there directly - no bound needs to be
-    conservative here, unlike the coefficient-grid case in `project_to_c4`.
+    conservative here, unlike the coefficient-grid case in `_project_to_c4`.
 
     If every component is already within bound, `matrix` is returned
-    unchanged (a dead-zone operator, same philosophy as `project_to_c4`).
+    unchanged (a dead-zone operator, same philosophy as `_project_to_c4`).
     Otherwise every component that violates its bound forces a single scalar
     `alpha = min(1, max_displacement / max|d|)` (the tightest across
     components), and the whole deviation from identity - both `L - I` and

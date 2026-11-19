@@ -70,7 +70,7 @@ from typing import Any, Callable, List, Optional, Sequence, Tuple
 import numpy as np
 import zarr
 
-from dask.distributed import as_completed
+from distributed import as_completed
 
 import bigstream.transform as bst
 import bigstream.utility as ut
@@ -624,6 +624,10 @@ def _run_alignment_pass(alignment_pass,
         )
 
     def align_and_write_method(block_info):
+        logger.info((
+            f'{label}: Start align block {block_info[0]} '
+            f'at {block_info[1]} - task: {_get_current_task_key()}'
+        ))
         return write_method(align_method(block_info))
 
     partitions = _partition(blocks_infos, max_cluster_jobs)
@@ -681,6 +685,13 @@ def _partition(items, max_cluster_jobs):
         return [items[i:i + max_cluster_jobs]
                 for i in range(0, len(items), max_cluster_jobs)]
     return [items]
+
+
+def _get_current_task_key():
+    # this needs to be like as is because thread_state is not serializable
+    from distributed.worker import thread_state
+
+    return getattr(thread_state, 'key', '-')
 
 
 def _collect_results(futures, context='', completed=None):

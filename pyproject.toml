@@ -17,7 +17,7 @@ dependencies = [
     "dask==2026.6.0",
     "distributed==2026.6.0",
     "flatten_json==0.1.14",
-    "fishspot @ git+https://github.com/GFleishman/fishspot.git@84f5b8187b",
+    "fishspot @ git+https://github.com/cgoina/fishspot.git@f2a752d",
     "h5py>=3.15.1",
     "morphsnakes>=2.0.0",
     "numcodecs>=0.16.5",
@@ -79,7 +79,7 @@ find-links = [
 
 [tool.pixi.pypi-dependencies]
 bigstream = { path = ".", editable = true }
-zarr-tools = { git = "https://github.com/JaneliaSciComp/zarr-tools.git", rev = "525e55a" }
+zarr-tools = { git = "https://github.com/JaneliaSciComp/zarr-tools.git", rev = "5c58014" }
 
 [tool.pixi.environments]
 default = { solve-group = "default" }

@@ -452,7 +452,7 @@ def _project_to_c4(coefficients, knot_spacing, k=DEFAULT_K, K=None,
     return c, info
 
 
-def bspline_coefficients(transform):
+def _get_bspline_coefficients(transform):
     """
     Extract a sitk.BSplineTransform's coefficients as a zyx numpy array.
 
@@ -489,7 +489,7 @@ def bspline_coefficients(transform):
     return coefficients[::-1].copy(), knot_spacing
 
 
-def set_bspline_coefficients(transform, coefficients):
+def _set_bspline_coefficients(transform, coefficients):
     """Write a zyx coefficient array back into a sitk.BSplineTransform."""
     flat = np.asarray(coefficients, dtype=np.float64)[::-1].reshape(-1)
     transform.SetParameters([float(v) for v in flat])
@@ -512,7 +512,7 @@ def project_bspline_transform(transform, k=DEFAULT_K, K=None,
     Returns the `info` dict from `_project_to_c4`, with `knot_spacing` added.
     A compliant transform is left byte-identical.
     """
-    coefficients, knot_spacing = bspline_coefficients(transform)
+    coefficients, knot_spacing = _get_bspline_coefficients(transform)
     projected, info = _project_to_c4(
         coefficients, knot_spacing, k=k, K=K,
         max_displacement=max_displacement, max_sweeps=max_sweeps, tol=tol,
@@ -520,7 +520,7 @@ def project_bspline_transform(transform, k=DEFAULT_K, K=None,
     info['knot_spacing'] = knot_spacing.tolist()
     changed = info['n_violating_before'] > 0 or info['n_clamped'] > 0
     if changed:
-        set_bspline_coefficients(transform, projected)
+        _set_bspline_coefficients(transform, projected)
         logger.info((
             f'{context} C4 projection: '
             f"{info['n_violating_before']}/{info['n_pairs']} coefficient pairs "

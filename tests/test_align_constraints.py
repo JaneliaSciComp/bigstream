@@ -5,12 +5,12 @@ import pytest
 import SimpleITK as sitk
 
 from bigstream.align_constraints import (
-    bspline_coefficients,
+    _get_bspline_coefficients,
     _coefficient_bounds,
     is_orientation_preserving,
     project_bspline_transform,
     _project_to_c4,
-    set_bspline_coefficients,
+    _set_bspline_coefficients,
 )
 
 
@@ -241,7 +241,7 @@ def test_parameter_layout_round_trips_against_coefficient_images():
     n = len(transform.GetParameters())
     transform.SetParameters([float(v) for v in np.arange(n)])
 
-    coefficients, knot_spacing = bspline_coefficients(transform)
+    coefficients, knot_spacing = _get_bspline_coefficients(transform)
 
     images = transform.GetCoefficientImages()
     # component axis is reversed to zyx, so component 0 is the last image
@@ -262,12 +262,12 @@ def test_parameter_layout_round_trips_against_coefficient_images():
 
 def test_set_coefficients_round_trips():
     transform = _bspline_transform()
-    coefficients, _ = bspline_coefficients(transform)
+    coefficients, _ = _get_bspline_coefficients(transform)
     coefficients = coefficients + np.arange(coefficients.size).reshape(
         coefficients.shape)
 
-    set_bspline_coefficients(transform, coefficients)
-    read_back, _ = bspline_coefficients(transform)
+    _set_bspline_coefficients(transform, coefficients)
+    read_back, _ = _get_bspline_coefficients(transform)
 
     np.testing.assert_allclose(read_back, coefficients)
 

@@ -53,8 +53,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.12-9_cp312.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
+      - pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
       - pypi: https://files.pythonhosted.org/packages/02/17/b82b537a30be67ba178fc0b0fbda8fcbaeda188fb039d6ad8a84e89353a2/dask-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/09/be/4ddd61b3d4beb21eced10d0d100a4dca26f13303d4952e48fb5e89167869/ujson-6.0.0-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl
@@ -162,8 +162,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.12-9_cp312.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
+      - pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
       - pypi: https://files.pythonhosted.org/packages/02/17/b82b537a30be67ba178fc0b0fbda8fcbaeda188fb039d6ad8a84e89353a2/dask-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0a/3a/aa9c580aea1314529a0f3562461479780b0d254b064f0880956bfbcc74a8/msgpack-1.2.3-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl
@@ -265,8 +265,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tk-8.6.13-hbeba79b_4.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
-      - pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
+      - pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
       - pypi: https://files.pythonhosted.org/packages/02/17/b82b537a30be67ba178fc0b0fbda8fcbaeda188fb039d6ad8a84e89353a2/dask-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0a/66/9a06c2227fedfd4919f0eaaa8b94377d9730882a7e4f95823c9a331ab5e1/tzdata-2026.6-py2.py3-none-any.whl
@@ -384,8 +384,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - pypi: ./
       - pypi: direct+https://github.com/rohitrango/FireANTs/archive/f8a9cc259ab9113fc43bd99797000fa8fc34eb59.tar.gz
-      - pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
+      - pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
       - pypi: https://files.pythonhosted.org/packages/00/05/76184fe08339723d643ab47887a8e4de8f2921ca4e008617ab7490af7857/filelock-4.2.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/17/b82b537a30be67ba178fc0b0fbda8fcbaeda188fb039d6ad8a84e89353a2/dask-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
@@ -527,8 +527,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - pypi: ./
       - pypi: direct+https://github.com/rohitrango/FireANTs/archive/f8a9cc259ab9113fc43bd99797000fa8fc34eb59.tar.gz
-      - pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
+      - pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
       - pypi: https://files.pythonhosted.org/packages/00/05/76184fe08339723d643ab47887a8e4de8f2921ca4e008617ab7490af7857/filelock-4.2.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/17/b82b537a30be67ba178fc0b0fbda8fcbaeda188fb039d6ad8a84e89353a2/dask-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
@@ -664,8 +664,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
       - pypi: direct+https://github.com/rohitrango/FireANTs/archive/f8a9cc259ab9113fc43bd99797000fa8fc34eb59.tar.gz
-      - pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
+      - pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
       - pypi: https://files.pythonhosted.org/packages/00/05/76184fe08339723d643ab47887a8e4de8f2921ca4e008617ab7490af7857/filelock-4.2.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/17/b82b537a30be67ba178fc0b0fbda8fcbaeda188fb039d6ad8a84e89353a2/dask-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
@@ -797,8 +797,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - pypi: ./
       - pypi: direct+https://github.com/rohitrango/FireANTs/archive/f8a9cc259ab9113fc43bd99797000fa8fc34eb59.tar.gz
-      - pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
+      - pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
       - pypi: https://files.pythonhosted.org/packages/00/05/76184fe08339723d643ab47887a8e4de8f2921ca4e008617ab7490af7857/filelock-4.2.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/17/b82b537a30be67ba178fc0b0fbda8fcbaeda188fb039d6ad8a84e89353a2/dask-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
@@ -940,8 +940,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2026c-h151e31d_0.conda
       - pypi: ./
       - pypi: direct+https://github.com/rohitrango/FireANTs/archive/f8a9cc259ab9113fc43bd99797000fa8fc34eb59.tar.gz
-      - pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
+      - pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
       - pypi: https://files.pythonhosted.org/packages/00/05/76184fe08339723d643ab47887a8e4de8f2921ca4e008617ab7490af7857/filelock-4.2.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/17/b82b537a30be67ba178fc0b0fbda8fcbaeda188fb039d6ad8a84e89353a2/dask-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
@@ -1077,8 +1077,8 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
       - pypi: direct+https://github.com/rohitrango/FireANTs/archive/f8a9cc259ab9113fc43bd99797000fa8fc34eb59.tar.gz
-      - pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+      - pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
+      - pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
       - pypi: https://files.pythonhosted.org/packages/00/05/76184fe08339723d643ab47887a8e4de8f2921ca4e008617ab7490af7857/filelock-4.2.9-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/17/b82b537a30be67ba178fc0b0fbda8fcbaeda188fb039d6ad8a84e89353a2/dask-2026.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/02/be/5d2d47b1fb58943194fb59dcf222f7c4e35122ec0ffe8c36e18b5d728f0b/tblib-3.2.2-py3-none-any.whl
@@ -2063,7 +2063,7 @@ packages:
   - dask==2026.6.0
   - distributed==2026.6.0
   - flatten-json==0.1.14
-  - fishspot @ git+https://github.com/GFleishman/fishspot.git@84f5b8187b
+  - fishspot @ git+https://github.com/cgoina/fishspot.git@f2a752d
   - h5py>=3.15.1
   - morphsnakes>=2.0.0
   - numcodecs>=0.16.5
@@ -2102,23 +2102,13 @@ packages:
   - pytest
   - fused-lncc ; extra == 'lite-lncc'
   requires_python: '>=3.8'
-- pypi: git+https://github.com/GFleishman/fishspot.git?rev=84f5b8187b#84f5b8187b3e294df7d4622ebfbe915481cd5129
-  name: fishspot
-  version: 0.5.0
-  requires_dist:
-  - numpy
-  - scipy
-  - scikit-image
-  - clusterwrap
-  - zarr
-  - dask
-  - dask[array]
-- pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=525e55a#525e55afcbc01985a4dfe3fdfe21a6bab864866f
+- pypi: git+https://github.com/JaneliaSciComp/zarr-tools.git?rev=5c58014#5c580142e149b31cbc5655448bba9fe4075f1efb
   name: zarr-tools
   version: 0.3.3
   requires_dist:
   - dask==2026.6.0
   - distributed==2026.6.0
+  - flatten-json
   - numpy>2,<3
   - ome-zarr-models==1.7
   - pydantic>=2.11.5,<2.13
@@ -2128,6 +2118,17 @@ packages:
   - xarray-multiscale==2.1.0
   - zarr>3,<4
   requires_python: '>=3.12'
+- pypi: git+https://github.com/cgoina/fishspot.git?rev=f2a752d#f2a752dbbde8f240ae21ea5ac2ac0ce023567b99
+  name: fishspot
+  version: 1.0.0
+  requires_dist:
+  - numpy
+  - scipy
+  - scikit-image
+  - clusterwrap
+  - zarr
+  - dask
+  - dask[array]
 - pypi: https://files.pythonhosted.org/packages/00/05/76184fe08339723d643ab47887a8e4de8f2921ca4e008617ab7490af7857/filelock-4.2.9-py3-none-any.whl
   name: filelock
   version: 4.2.9

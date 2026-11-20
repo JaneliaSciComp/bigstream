@@ -284,10 +284,12 @@ def main():
 
     if global_transform is None:
         # no global transform found -> calculate it and then apply it
-        _run_global_align(reg_inputs, args.align_config, args.compression)
+        _run_global_align(reg_inputs, args.align_config, args.compression,
+                          zarr_format=args.output_zarr_format)
     else:
         # global transform found -> just apply it
-        _apply_global_transform(reg_inputs, global_transform, args.compression)
+        _apply_global_transform(reg_inputs, global_transform, args.compression,
+                                zarr_format=args.output_zarr_format)
 
 
 if __name__ == '__main__':

@@ -152,7 +152,7 @@ def as_image_data(image_data, image_timeindex=None, image_channels=None):
         return ImageData(image_arraydata=image_data, read_attrs=False,
                          image_timeindex=image_timeindex,
                          image_channel=image_channels)
-    elif isinstance(image_data, zarr.core.Array):
+    elif isinstance(image_data, zarr.Array):
         return ImageData(image_arraydata=image_data,
                          image_attrs=image_data.attrs,
                          image_timeindex=image_timeindex,

@@ -105,10 +105,10 @@ def _define_args(local_descriptor):
                              help='Number of cpus allocated to a dask worker')
 
     args_parser.add_argument('--compression', dest='compression',
-                             default='gzip',
+                             default='zstd',
                              type=str,
-                             help='Codec used for zarr arrays. ' +
-                             'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+                             help='Codec used for zarr arrays: raw, gzip, zstd (level 3) or blosc. ' +
+                             'With --output-zarr-format 2 also lz4 and bz2.')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,

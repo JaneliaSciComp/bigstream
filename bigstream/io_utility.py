@@ -28,6 +28,7 @@ def create_dataset(
     compressor=None,
     parent_attrs={},
     zarr_format=3,
+    shard_size=None,
     **dataset_attrs,
 ):
     """
@@ -82,6 +83,10 @@ def create_dataset(
     zarr_format : int (default: 3)
         The zarr format of the new dataset, 2 or 3
 
+    shard_size : tuple of ints (default: None)
+        The shard shape (zarr 3). For now it must be None or equal to chunks;
+        see validate_shard_size.
+
     **dataset_attrs : any additional keyword arguments
         Metadata attributes for the dataset itself
 
@@ -102,6 +107,7 @@ def create_dataset(
         if _is_n5(container_path, container_ext, None):
             _raise_n5_not_supported(container_path)
         validate_compression(compressor, zarr_format)
+        validate_shard_size(shard_size, chunks)
         store = zarr.storage.LocalStore(real_container_path)
 
         # create dataset in root group at container_subpath

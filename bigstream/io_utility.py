@@ -587,6 +587,20 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
         raise e
 
 
+def _get_group_attrs(zarr_node) -> dict:
+    """
+    Return the attributes of a zarr group or array as a dict.
+    OME-Zarr 0.5 (zarr 3) keeps its metadata under an 'ome' key;
+    this content is moved to the top level, where OME-Zarr 0.4 keeps it.
+    """
+    attrs = zarr_node.attrs.asdict()
+    ome_attrs = attrs.get('ome')
+    if isinstance(ome_attrs, dict):
+        attrs = {k: v for k, v in attrs.items() if k != 'ome'}
+        attrs.update(ome_attrs)
+    return attrs
+
+
 def _is_ome_zarr(data_container_attrs: dict | None) -> bool:
     """Determine if attributes are consistent with ome-zarr spec"""
 

@@ -5,7 +5,7 @@ import psutil
 import SimpleITK as sitk
 import zarr
 
-from zarr import blosc
+from numcodecs import blosc
 
 
 logger = logging.getLogger(__name__)

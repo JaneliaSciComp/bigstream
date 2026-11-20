@@ -587,7 +587,7 @@ def nested_distributed_piecewise_alignment_pipeline(
 
     Returns
     -------
-    field : nd array or zarr.core.Array
+    field : nd array or zarr.Array
         Composition of all alignments into a single displacement vector field.
     """
 

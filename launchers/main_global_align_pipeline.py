@@ -138,7 +138,8 @@ def _align_global_data(fix_image, fix_mask,
     return affine, aligned
 
 
-def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor):
+def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor,
+                            zarr_format=3):
     (fix_image, _, mov_image, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
         fix_image.read_image()
@@ -158,6 +159,7 @@ def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor):
             mov_image.voxel_spacing,
             mov_image.voxel_downsampling,
             compressor,
+            zarr_format,
         )
     else:
         # both fix and mov volume must be valid

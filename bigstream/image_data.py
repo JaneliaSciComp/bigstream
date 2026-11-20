@@ -54,7 +54,7 @@ class ImageData:
             imgdtype = imgarray.dtype
             if convert_to_little_endian and imgdtype.byteorder == '>':
                 # Bigstream algorithms do not support big-endian data
-                self.image_ndarray = imgarray.byteswap().newbyteorder('<')
+                self.image_ndarray = imgarray.byteswap().view(imgdtype.newbyteorder('<'))
             else:
                 self.image_ndarray = imgarray
 

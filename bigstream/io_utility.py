@@ -228,7 +228,7 @@ def _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel):
             i = i + 1
 
         # log and then resize in place
-        logger.info(f'Resize {dataset.store.path}:{dataset.path} to {resized_shape}')
+        logger.info(f'Resize {dataset.store}:{dataset.path} to {resized_shape}')
         dataset.resize(resized_shape)
 
 

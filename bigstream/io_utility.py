@@ -784,12 +784,13 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
     dataset_comps = [c for c in dataset_path_arg.split('/') if c]
     dataset_comps_index = 0
 
-    # Look for the first subpath that containes .zattrs or attributes.json file
+    # Look for the first subpath that contains a .zattrs (zarr 2)
+    # or zarr.json (zarr 3) file
     while dataset_comps_index < len(dataset_comps):
         container_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         container_path = f'{data_path}/{container_subpath}'
         if (os.path.exists(f'{container_path}/.zattrs') or
-            os.path.exists(f'{container_path}/attributes.json')):
+            os.path.exists(f'{container_path}/zarr.json')):
             break
         dataset_comps_index = dataset_comps_index + 1
 

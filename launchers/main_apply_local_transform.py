@@ -212,6 +212,7 @@ def _run_apply_transform(args):
             output_chunk_size,
             fix_data.dtype,
             compressor=args.compression,
+            zarr_format=args.output_zarr_format,
             for_timeindex=args.output_timeindex,
             for_channel=args.output_channel,
             parent_attrs=output_attrs,

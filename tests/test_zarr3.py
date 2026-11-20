@@ -149,3 +149,16 @@ def test_multiscale_pyramid_needs_scales(tmp_path):
             (32, 32, 32, np.uint16), np.zeros((32, 32, 32), np.uint16),
             np.ones(3), np.ones(3), [np.eye(4)], (16, 16, 16),
             str(tmp_path / 'p.zarr'), scales=None, cluster=object())
+
+
+def test_shard_size_must_equal_chunks(tmp_path):
+    path = tmp_path / 'out.zarr'
+    io.create_dataset(str(path), 's0', DATA.shape, CHUNKS, 'u2', shard_size=CHUNKS)
+    codecs = json.loads((path / 's0' / 'zarr.json').read_text())['codecs']
+    assert 'sharding_indexed' not in [c['name'] for c in codecs]
+    with pytest.raises(ValueError, match='must equal the chunk size'):
+        io.create_dataset(str(tmp_path / 'b.zarr'), 's0', DATA.shape, CHUNKS, 'u2',
+                          shard_size=(4, 6, 8))
+    with pytest.raises(ValueError, match='must equal the chunk size'):
+        ut.create_zarr(str(tmp_path / 'c.zarr'), DATA.shape, CHUNKS, 'u2',
+                       shard_size=(4, 6, 8))

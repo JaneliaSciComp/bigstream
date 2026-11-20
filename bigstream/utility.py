@@ -6,6 +6,7 @@ import SimpleITK as sitk
 import zarr
 
 from numcodecs import blosc
+from bigstream.io_utility import validate_shard_size
 
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,7 @@ def create_zarr(
     multithreaded=False,
     client=None,
     zarr_format=3,
+    shard_size=None,
 ):
     """
     Create a new zarr array on disk
@@ -149,12 +151,17 @@ def create_zarr(
     zarr_format : int (default: 3)
         The zarr format of the new array, 2 or 3
 
+    shard_size : tuple of ints (default: None)
+        The shard shape (zarr 3). For now it must be None or equal to chunks;
+        see bigstream.io_utility.validate_shard_size.
+
     Returns
     -------
     zarr_array : zarr array
         Reference to the newly created zarr array on disk
     """
 
+    validate_shard_size(shard_size, chunks)
     if multithreaded:
         blosc.use_threads = True
     zarr_disk = zarr.open(

@@ -27,6 +27,7 @@ def create_dataset(
     for_channel=None,
     compressor=None,
     parent_attrs={},
+    zarr_format=3,
     **dataset_attrs,
 ):
     """
@@ -70,8 +71,16 @@ def create_dataset(
         be able to provide one channel. With this parameter we can ensure the time
         axis is large enough to accommodate the full time series.
 
+    compressor : string (default: None)
+        Compression codec name. For zarr 3: 'raw', 'gzip', 'zstd' or 'blosc'.
+        For zarr 2 also any numcodecs codec id, e.g. 'lz4' or 'bz2'.
+        None or 'raw' means no compression. 'zstd' uses level 3.
+
     parent_attrs : dict (default: {})
         Metadata attributes for the group that will contain the dataset
+
+    zarr_format : int (default: 3)
+        The zarr format of the new dataset, 2 or 3
 
     **dataset_attrs : any additional keyword arguments
         Metadata attributes for the dataset itself
@@ -89,11 +98,9 @@ def create_dataset(
         path_comps = os.path.splitext(container_path)
         container_ext = path_comps[1]
 
-        # create the correct store
-        if container_ext == '.zarr':
-            store = zarr.DirectoryStore(real_container_path, dimension_separator='/')
-        else:
-            store = zarr.N5Store(real_container_path)
+        # create the zarr store
+        validate_compression(compressor, zarr_format)
+        store = zarr.storage.LocalStore(real_container_path)
 
         # create dataset in root group at container_subpath
         if container_subpath:
@@ -105,44 +112,54 @@ def create_dataset(
                 f'parent attrs: {parent_attrs} '
                 f'{dataset_attrs} '
             ))
-            root_group = zarr.open_group(store=store, mode='a')
-            codec = (None if compressor is None 
-                     else codecs.get_codec(dict(id=compressor)))
+            root_group = zarr.open_group(store=store, mode='a',
+                                         zarr_format=zarr_format)
+            create_kwargs = {
+                'chunks': chunks,
+                'compressors': _get_compressors(compressor, zarr_format),
+            }
+            if zarr_format == 2:
+                # keep '/' as chunk key separator, as with zarr-python 2
+                create_kwargs['chunk_key_encoding'] = {'name': 'v2', 'separator': '/'}
 
             # total replacement with empty container
             if data is None and overwrite:
                 dataset_shape = shape
-                dataset = root_group.create_dataset(    # XXX ZARR API says should replace with group.create_array
+                dataset = root_group.create_array(
                     container_subpath,
                     shape=shape,
-                    chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
-                    compressor=codec,    # XXX ZARR API prefers using compressors keyword
-                    data=data)
+                    **create_kwargs)
 
             # we have initialization data and/or the dataset already exists
             else:
 
-                # get dataset shape, either from given data or existing dataset
+                # existing dataset: return it, data is not written
                 if container_subpath in root_group:
                     dataset_shape = root_group[container_subpath].shape
                     logger.info((
                         f'Dataset {container_path}:{container_subpath} '
                         f'already exists with shape {dataset_shape} '
                     ))
+                    dataset = root_group.require_array(
+                        container_subpath,
+                        shape=dataset_shape,
+                        dtype=dtype)
+                # new dataset, filled with data if data is given
+                elif data is not None:
+                    dataset = root_group.create_array(
+                        container_subpath,
+                        data=data,
+                        **create_kwargs)
+                    dataset_shape = dataset.shape
                 else:
                     dataset_shape = shape
-
-                # return dataset, with possibility it already exists
-                dataset = root_group.require_dataset(    # XXX ZARR API says should replace with group.require_array
-                    container_subpath,
-                    shape=dataset_shape,
-                    chunks=chunks,
-                    dtype=dtype,
-                    overwrite=overwrite,
-                    compressor=codec,    # XXX ZARR API prefers using compressors keyword
-                    data=data)
+                    dataset = root_group.create_array(
+                        container_subpath,
+                        shape=shape,
+                        dtype=dtype,
+                        **create_kwargs)
 
             # ensure time and channel axes are sufficient length
             _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel)

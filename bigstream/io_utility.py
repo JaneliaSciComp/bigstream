@@ -779,12 +779,6 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
     the container paths always contains a .attrs file
     """
 
-    # N5 already conforms to desired requirement
-    if data_store_name == 'n5' or data_path.endswith('.n5') or data_path.endswith('.N5'):
-        # N5 container path is the same as the data_path
-        # and the subpath is the dataset path
-        return data_path, data_subpath
-
     # extract components of dataset path (data_subpath)
     dataset_path_arg = data_subpath if data_subpath is not None else ''
     dataset_comps = [c for c in dataset_path_arg.split('/') if c]

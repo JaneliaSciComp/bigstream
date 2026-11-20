@@ -558,7 +558,7 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
                data_timeindex=None, data_channels=None,
                block_coords=None):
     """
-    Open a zarr/n5 container, optionally read a region into memory
+    Open a zarr container (zarr 2 or zarr 3), optionally read a region into memory
     """
 
     # "There is no try, only do" -Yoda :D

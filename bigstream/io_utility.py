@@ -803,11 +803,11 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
 
 
 def _get_data_store(data_path, data_store_name):
-    """Choose the correct zarr.Store type, N5 or Directory/Zarr"""
-    if data_store_name is None or data_store_name == 'n5':
-        return zarr.N5Store(data_path)
-    else:
-        return zarr.DirectoryStore(data_path, dimension_separator='/')
+    """
+    Return a read-only store for a zarr container on local disk.
+    zarr.open detects the zarr format (2 or 3) from the stored metadata.
+    """
+    return zarr.storage.LocalStore(data_path, read_only=True)
 
 
 def _is_n5(container_path, container_ext, container_type):

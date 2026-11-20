@@ -829,6 +829,14 @@ def _is_n5(container_path, container_ext, container_type):
             or os.path.exists(f'{container_path}/attributes.json'))
 
 
+def _raise_n5_not_supported(container_path):
+    """N5 containers are not supported with zarr-python 3"""
+    message = (f'N5 is not supported in this version of bigstream: {container_path}. '
+               'Convert the data to zarr (version 2 or 3).')
+    logger.error(message)
+    raise ValueError(message)
+
+
 
 def _read_tiff(input_path, block_coords=None):
     "Return tiff data as zarr array, slice at block_coords, include metadata"

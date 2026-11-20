@@ -286,6 +286,25 @@ def validate_compression(compressor, zarr_format):
             f'Use one of {", ".join(ZARR3_COMPRESSIONS)}, or choose zarr format 2.')
 
 
+def validate_shard_size(shard_size, chunks):
+    """
+    Raise a ValueError if shard_size is not None and not equal to chunks.
+
+    A zarr 3 shard is one file that holds several chunks. bigstream writes
+    in parallel with one task per chunk, so two tasks could write the same
+    shard file at the same time, and one task's data would be lost.
+    Until the parallel processing is rewritten so that each task writes
+    whole shards, the shard size must equal the chunk size. The array is
+    then written with plain chunks, without the sharding codec.
+    """
+    if shard_size is None:
+        return
+    if tuple(shard_size) != tuple(chunks):
+        raise ValueError(
+            f'shard_size {tuple(shard_size)} must equal the chunk size {tuple(chunks)}: '
+            'sharding with several chunks per shard is not supported yet')
+
+
 def _get_compressors(compressor, zarr_format):
     """Return the value for the 'compressors' argument of zarr create_array"""
     if compressor is None or compressor.lower() == 'raw':

@@ -568,7 +568,7 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
         data_store = _get_data_store(zarr_container_path, data_store_name)
         data_container = zarr.open(store=data_store, mode='r')
-        data_container_attrs = data_container.attrs.asdict()
+        data_container_attrs = _get_group_attrs(data_container)
 
         # if ome-zarr parse appropriately, otherwise apply subpath and block_coords and return
         if _is_ome_zarr(data_container_attrs):

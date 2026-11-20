@@ -142,23 +142,24 @@ def create_zarr(
     array_path : path within the zarr array
         Array within the zarr store to store the data
 
+    multithreaded : bool (default: False)
+        If True, blosc compression uses multiple threads
+
     Returns
     -------
     zarr_array : zarr array
         Reference to the newly created zarr array on disk
     """
 
-    synchronizer = None
     if multithreaded:
         blosc.use_threads = True
-        synchronizer = zarr.ThreadSynchronizer()
     zarr_disk = zarr.open(
-        path, 'a',
+        store=path,
+        mode='a',
         shape=shape,
         chunks=chunks,
         dtype=dtype,
         path=array_path,
-        synchronizer=synchronizer,
     )
     return zarr_disk
 

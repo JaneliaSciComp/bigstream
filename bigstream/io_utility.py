@@ -780,7 +780,7 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         data_container = zarr.open(store=data_store, mode='r')
         data_container_attrs = _get_group_attrs(data_container)
 
-        if _is_ome_zarr(data_container_attrs):
+        if _has_ome_metadata(data_container, data_container_attrs, zarr_subpath):
             a, dataset_attrs = _open_ome_zarr(data_container, zarr_subpath)
             dataset_attrs.update(a.attrs.asdict())
         else:

@@ -430,7 +430,7 @@ def prepare_parent_group_attrs(container_path,
 
 def read_attributes(container_path, subpath, container_type=None):
     """
-    A generalized attribute reader that supports nrrd, tiff, n5, and zarr
+    A generalized attribute reader that supports nrrd, tiff, and zarr
     containers. Maps to the appropriate format specific attributes reader.
 
     Parameters
@@ -443,7 +443,8 @@ def read_attributes(container_path, subpath, container_type=None):
 
     container_type : string (default: None)
         Explicit identifier of container type. Options include:
-        'nrrd', 'tif', 'n5', and 'zarr'.
+        'nrrd', 'tif', and 'zarr'. 'n5' raises a ValueError,
+        because N5 is not supported.
         If None, we attempt to infer the container type from the container_path
         extension, which is not always reliable.
 
@@ -463,10 +464,8 @@ def read_attributes(container_path, subpath, container_type=None):
     if container_ext == '.nrrd' or container_type == 'nrrd':
         logger.info(f'Read nrrd attrs {container_path} ({real_container_path})')
         return _read_nrrd_attrs(container_path)
-    elif (container_ext == '.n5' or os.path.exists(f'{container_path}/attributes.json')
-          or container_type == 'n5'):
-        logger.info(f'Read N5 attrs {container_path} ({real_container_path})')
-        return _open_zarr_attrs(real_container_path, subpath, data_store_name='n5')
+    elif _is_n5(container_path, container_ext, container_type):
+        _raise_n5_not_supported(container_path)
     elif container_ext == '.zarr' or container_type == 'zarr':
         logger.info(f'Read Zarr attrs {container_path} ({real_container_path})')
         return _open_zarr_attrs(real_container_path, subpath, data_store_name='zarr')

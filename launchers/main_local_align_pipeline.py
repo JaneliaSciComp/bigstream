@@ -147,6 +147,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          worker_cpus=0,
                          logging_config=None,
                          compressor=None,
+                         zarr_format=3,
                          verbose=False,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
@@ -268,6 +269,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             inv_use_root,
             cluster_client,
             compressor,
+            zarr_format,
         )
     finally:
         cluster_client.close()

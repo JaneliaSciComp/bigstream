@@ -436,7 +436,7 @@ def distributed_alignment_pipeline(
 
     Returns
     -------
-    field : nd array or zarr.core.Array
+    field : nd array or zarr.Array
         Local affines stitched together into a displacement field
         Shape is `fix.shape` + (3,) as the last dimension contains
         the displacement vector.

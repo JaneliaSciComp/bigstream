@@ -27,6 +27,8 @@ def create_dataset(
     for_channel=None,
     compressor=None,
     parent_attrs={},
+    zarr_format=3,
+    shard_size=None,
     **dataset_attrs,
 ):
     """
@@ -70,8 +72,20 @@ def create_dataset(
         be able to provide one channel. With this parameter we can ensure the time
         axis is large enough to accommodate the full time series.
 
+    compressor : string (default: None)
+        Compression codec name. For zarr 3: 'raw', 'gzip', 'zstd' or 'blosc'.
+        For zarr 2 also any numcodecs codec id, e.g. 'lz4' or 'bz2'.
+        None or 'raw' means no compression. 'zstd' uses level 3.
+
     parent_attrs : dict (default: {})
         Metadata attributes for the group that will contain the dataset
+
+    zarr_format : int (default: 3)
+        The zarr format of the new dataset, 2 or 3
+
+    shard_size : tuple of ints (default: None)
+        The shard shape (zarr 3). For now it must be None or equal to chunks;
+        see validate_shard_size.
 
     **dataset_attrs : any additional keyword arguments
         Metadata attributes for the dataset itself
@@ -89,11 +103,12 @@ def create_dataset(
         path_comps = os.path.splitext(container_path)
         container_ext = path_comps[1]
 
-        # create the correct store
-        if container_ext == '.zarr':
-            store = zarr.DirectoryStore(real_container_path, dimension_separator='/')
-        else:
-            store = zarr.N5Store(real_container_path)
+        # N5 is not supported; all other containers are zarr
+        if _is_n5(container_path, container_ext, None):
+            _raise_n5_not_supported(container_path)
+        validate_compression(compressor, zarr_format)
+        validate_shard_size(shard_size, chunks)
+        store = zarr.storage.LocalStore(real_container_path)
 
         # create dataset in root group at container_subpath
         if container_subpath:
@@ -105,44 +120,54 @@ def create_dataset(
                 f'parent attrs: {parent_attrs} '
                 f'{dataset_attrs} '
             ))
-            root_group = zarr.open_group(store=store, mode='a')
-            codec = (None if compressor is None 
-                     else codecs.get_codec(dict(id=compressor)))
+            root_group = zarr.open_group(store=store, mode='a',
+                                         zarr_format=zarr_format)
+            create_kwargs = {
+                'chunks': chunks,
+                'compressors': _get_compressors(compressor, zarr_format),
+            }
+            if zarr_format == 2:
+                # keep '/' as chunk key separator, as with zarr-python 2
+                create_kwargs['chunk_key_encoding'] = {'name': 'v2', 'separator': '/'}
 
             # total replacement with empty container
             if data is None and overwrite:
                 dataset_shape = shape
-                dataset = root_group.create_dataset(    # XXX ZARR API says should replace with group.create_array
+                dataset = root_group.create_array(
                     container_subpath,
                     shape=shape,
-                    chunks=chunks,
                     dtype=dtype,
                     overwrite=overwrite,
-                    compressor=codec,    # XXX ZARR API prefers using compressors keyword
-                    data=data)
+                    **create_kwargs)
 
             # we have initialization data and/or the dataset already exists
             else:
 
-                # get dataset shape, either from given data or existing dataset
+                # existing dataset: return it, data is not written
                 if container_subpath in root_group:
                     dataset_shape = root_group[container_subpath].shape
                     logger.info((
                         f'Dataset {container_path}:{container_subpath} '
                         f'already exists with shape {dataset_shape} '
                     ))
+                    dataset = root_group.require_array(
+                        container_subpath,
+                        shape=dataset_shape,
+                        dtype=dtype)
+                # new dataset, filled with data if data is given
+                elif data is not None:
+                    dataset = root_group.create_array(
+                        container_subpath,
+                        data=data,
+                        **create_kwargs)
+                    dataset_shape = dataset.shape
                 else:
                     dataset_shape = shape
-
-                # return dataset, with possibility it already exists
-                dataset = root_group.require_dataset(    # XXX ZARR API says should replace with group.require_array
-                    container_subpath,
-                    shape=dataset_shape,
-                    chunks=chunks,
-                    dtype=dtype,
-                    overwrite=overwrite,
-                    compressor=codec,    # XXX ZARR API prefers using compressors keyword
-                    data=data)
+                    dataset = root_group.create_array(
+                        container_subpath,
+                        shape=shape,
+                        dtype=dtype,
+                        **create_kwargs)
 
             # ensure time and channel axes are sufficient length
             _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel)
@@ -209,7 +234,7 @@ def _resize_dataset(dataset, dataset_shape, for_timeindex, for_channel):
             i = i + 1
 
         # log and then resize in place
-        logger.info(f'Resize {dataset.store.path}:{dataset.path} to {resized_shape}')
+        logger.info(f'Resize {dataset.store}:{dataset.path} to {resized_shape}')
         dataset.resize(resized_shape)
 
 
@@ -228,8 +253,80 @@ def _update_dataset_attrs(root_container, dataset,
         parent_container = root_container
 
     # write the parent (group) metadata and the dataset metadata
+    if dataset.metadata.zarr_format == 3:
+        parent_attrs = _to_ome_zarr_05(parent_attrs)
     parent_container.attrs.update(parent_attrs)
     dataset.attrs.update(dataset_attrs)
+
+
+def _to_ome_zarr_05(attrs):
+    """
+    Move OME-Zarr 0.4 'multiscales' metadata under the 'ome' key,
+    as OME-Zarr 0.5 (the OME-Zarr version for zarr 3) requires.
+    In 0.5 the version is set once in 'ome', not in each multiscale.
+    """
+    if not attrs or 'multiscales' not in attrs:
+        return attrs
+    multiscales = [{k: v for k, v in ms.items() if k != 'version'}
+                   for ms in attrs['multiscales']]
+    ome_attrs = {k: v for k, v in attrs.items() if k != 'multiscales'}
+    ome_attrs['ome'] = {'version': '0.5', 'multiscales': multiscales}
+    return ome_attrs
+
+
+# compression codecs that the zarr 3 specification defines
+ZARR3_COMPRESSIONS = ('raw', 'gzip', 'zstd', 'blosc')
+
+
+def validate_compression(compressor, zarr_format):
+    """
+    Raise a ValueError if the compressor cannot be used with zarr_format.
+    Call it before long computations, so a bad choice fails at once.
+    """
+    if zarr_format not in (2, 3):
+        raise ValueError(f'zarr_format must be 2 or 3, not {zarr_format}')
+    if (zarr_format == 3 and compressor is not None
+            and compressor.lower() not in ZARR3_COMPRESSIONS):
+        raise ValueError(
+            f'{compressor} is not a standard zarr 3 codec. '
+            f'Use one of {", ".join(ZARR3_COMPRESSIONS)}, or choose zarr format 2.')
+
+
+def validate_shard_size(shard_size, chunks):
+    """
+    Raise a ValueError if shard_size is not None and not equal to chunks.
+
+    A zarr 3 shard is one file that holds several chunks. bigstream writes
+    in parallel with one task per chunk, so two tasks could write the same
+    shard file at the same time, and one task's data would be lost.
+    Until the parallel processing is rewritten so that each task writes
+    whole shards, the shard size must equal the chunk size. The array is
+    then written with plain chunks, without the sharding codec.
+    """
+    if shard_size is None:
+        return
+    if tuple(shard_size) != tuple(chunks):
+        raise ValueError(
+            f'shard_size {tuple(shard_size)} must equal the chunk size {tuple(chunks)}: '
+            'sharding with several chunks per shard is not supported yet')
+
+
+def _get_compressors(compressor, zarr_format):
+    """Return the value for the 'compressors' argument of zarr create_array"""
+    if compressor is None or compressor.lower() == 'raw':
+        return None
+    name = compressor.lower()
+    if zarr_format == 3:
+        zarr3_codecs = {
+            'gzip': zarr.codecs.GzipCodec,
+            'zstd': lambda: zarr.codecs.ZstdCodec(level=3),
+            'blosc': zarr.codecs.BloscCodec,
+        }
+        return (zarr3_codecs[name](),)
+    config = {'id': name}
+    if name == 'zstd':
+        config['level'] = 3
+    return codecs.get_codec(config)
 
 
 def get_voxel_spacing(attrs: dict):
@@ -282,7 +379,7 @@ def open(container_path, subpath,
          data_timeindex=None, data_channels=None,
          block_coords=None, container_type=None):
     """
-    A generalized open function that supports nrrd, tiff, npy, n5, and zarr
+    A generalized open function that supports nrrd, tiff, npy, and zarr
     containers. Maps to the appropriate format specific open function.
 
     Parameters
@@ -307,7 +404,8 @@ def open(container_path, subpath,
 
     container_type : string (default: None)
         Explicit identifier of container type. Options include:
-        'nrrd', 'tif', 'npy', 'n5', and 'zarr'.
+        'nrrd', 'tif', 'npy', and 'zarr'. 'n5' raises a ValueError,
+        because N5 is not supported.
         If None, we attempt to infer the container type from the container_path
         extension, which is not always reliable.
 
@@ -336,15 +434,8 @@ def open(container_path, subpath,
         im = np.load(real_container_path)
         bim = im[block_coords] if block_coords is not None else im
         return bim, {}
-    elif (container_ext == '.n5'
-          or os.path.exists(f'{real_container_path}/attributes.json')
-          or container_type == 'n5'):
-        logger.info(f'Open N5 {container_path} ({real_container_path})')
-        return _open_zarr(real_container_path, subpath,
-                          data_timeindex=data_timeindex,
-                          data_channels=data_channels,
-                          data_store_name='n5',
-                          block_coords=block_coords)
+    elif _is_n5(container_path, container_ext, container_type):
+        _raise_n5_not_supported(container_path)
     elif container_ext == '.zarr' or container_type == 'zarr':
         logger.info(f'Open Zarr {container_path} ({real_container_path})')
         return _open_zarr(real_container_path, subpath,
@@ -436,7 +527,7 @@ def prepare_parent_group_attrs(container_path,
 
 def read_attributes(container_path, subpath, container_type=None):
     """
-    A generalized attribute reader that supports nrrd, tiff, n5, and zarr
+    A generalized attribute reader that supports nrrd, tiff, and zarr
     containers. Maps to the appropriate format specific attributes reader.
 
     Parameters
@@ -449,7 +540,8 @@ def read_attributes(container_path, subpath, container_type=None):
 
     container_type : string (default: None)
         Explicit identifier of container type. Options include:
-        'nrrd', 'tif', 'n5', and 'zarr'.
+        'nrrd', 'tif', and 'zarr'. 'n5' raises a ValueError,
+        because N5 is not supported.
         If None, we attempt to infer the container type from the container_path
         extension, which is not always reliable.
 
@@ -469,10 +561,8 @@ def read_attributes(container_path, subpath, container_type=None):
     if container_ext == '.nrrd' or container_type == 'nrrd':
         logger.info(f'Read nrrd attrs {container_path} ({real_container_path})')
         return _read_nrrd_attrs(container_path)
-    elif (container_ext == '.n5' or os.path.exists(f'{container_path}/attributes.json')
-          or container_type == 'n5'):
-        logger.info(f'Read N5 attrs {container_path} ({real_container_path})')
-        return _open_zarr_attrs(real_container_path, subpath, data_store_name='n5')
+    elif _is_n5(container_path, container_ext, container_type):
+        _raise_n5_not_supported(container_path)
     elif container_ext == '.zarr' or container_type == 'zarr':
         logger.info(f'Read Zarr attrs {container_path} ({real_container_path})')
         return _open_zarr_attrs(real_container_path, subpath, data_store_name='zarr')
@@ -565,7 +655,7 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
                data_timeindex=None, data_channels=None,
                block_coords=None):
     """
-    Open a zarr/n5 container, optionally read a region into memory
+    Open a zarr container (zarr 2 or zarr 3), optionally read a region into memory
     """
 
     # "There is no try, only do" -Yoda :D
@@ -575,10 +665,10 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
         data_store = _get_data_store(zarr_container_path, data_store_name)
         data_container = zarr.open(store=data_store, mode='r')
-        data_container_attrs = data_container.attrs.asdict()
+        data_container_attrs = _get_group_attrs(data_container)
 
         # if ome-zarr parse appropriately, otherwise apply subpath and block_coords and return
-        if _is_ome_zarr(data_container_attrs):
+        if _has_ome_metadata(data_container, data_container_attrs, zarr_subpath):
             return _open_ome_zarr(data_container, zarr_subpath,
                                   data_timeindex=data_timeindex,
                                   data_channels=data_channels,
@@ -592,6 +682,20 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
     except Exception as e:
         logger.exception(f'Error opening {data_path} : {data_subpath}')
         raise e
+
+
+def _get_group_attrs(zarr_node) -> dict:
+    """
+    Return the attributes of a zarr group or array as a dict.
+    OME-Zarr 0.5 (zarr 3) keeps its metadata under an 'ome' key;
+    this content is moved to the top level, where OME-Zarr 0.4 keeps it.
+    """
+    attrs = zarr_node.attrs.asdict()
+    ome_attrs = attrs.get('ome')
+    if isinstance(ome_attrs, dict):
+        attrs = {k: v for k, v in attrs.items() if k != 'ome'}
+        attrs.update(ome_attrs)
+    return attrs
 
 
 def _is_ome_zarr(data_container_attrs: dict | None) -> bool:
@@ -608,6 +712,18 @@ def _is_ome_zarr(data_container_attrs: dict | None) -> bool:
     return bioformats_layout == 3 or not (multiscales == [])
 
 
+def _has_ome_metadata(data_container, data_container_attrs, data_subpath) -> bool:
+    """
+    True if the container root, or a group along data_subpath, has OME metadata.
+    zarr-python 3 writes a metadata file for every group, so the container root
+    can be a plain group with the OME group below it.
+    """
+    if _is_ome_zarr(data_container_attrs):
+        return True
+    multiscales_group, _, _ = _find_ome_multiscales(data_container, data_subpath)
+    return multiscales_group is not None
+
+
 def _find_ome_multiscales(data_container, data_subpath):
     logger.info(f'Find OME multiscales group within {data_subpath}')
     dataset_subpath_arg = data_subpath if data_subpath is not None else ''
@@ -617,7 +733,7 @@ def _find_ome_multiscales(data_container, data_subpath):
     while dataset_comps_index < len(dataset_comps):
         group_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         dataset_item = data_container[group_subpath]
-        dataset_item_attrs = dataset_item.attrs.asdict()
+        dataset_item_attrs = _get_group_attrs(dataset_item)
         if dataset_item_attrs.get('multiscales', []) == []:
             dataset_comps_index = dataset_comps_index + 1
         else:
@@ -625,7 +741,7 @@ def _find_ome_multiscales(data_container, data_subpath):
             # found a group that has attributes which contain multiscales list
             return dataset_item, '/'.join(dataset_comps[dataset_comps_index:]), dataset_item_attrs
 
-    data_container_attrs = data_container.attrs.asdict()
+    data_container_attrs = _get_group_attrs(data_container)
     if data_container_attrs.get('multiscales', []) == []:
         return None, None, {}
     else:
@@ -759,9 +875,9 @@ def _open_zarr_attrs(data_path, data_subpath, data_store_name=None):
         zarr_container_path, zarr_subpath = _adjust_data_paths(data_path, data_subpath, data_store_name)
         data_store = _get_data_store(zarr_container_path, data_store_name)
         data_container = zarr.open(store=data_store, mode='r')
-        data_container_attrs = data_container.attrs.asdict()
+        data_container_attrs = _get_group_attrs(data_container)
 
-        if _is_ome_zarr(data_container_attrs):
+        if _has_ome_metadata(data_container, data_container_attrs, zarr_subpath):
             a, dataset_attrs = _open_ome_zarr(data_container, zarr_subpath)
             dataset_attrs.update(a.attrs.asdict())
         else:
@@ -786,23 +902,18 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
     the container paths always contains a .attrs file
     """
 
-    # N5 already conforms to desired requirement
-    if data_store_name == 'n5' or data_path.endswith('.n5') or data_path.endswith('.N5'):
-        # N5 container path is the same as the data_path
-        # and the subpath is the dataset path
-        return data_path, data_subpath
-
     # extract components of dataset path (data_subpath)
     dataset_path_arg = data_subpath if data_subpath is not None else ''
     dataset_comps = [c for c in dataset_path_arg.split('/') if c]
     dataset_comps_index = 0
 
-    # Look for the first subpath that containes .zattrs or attributes.json file
+    # Look for the first subpath that contains a .zattrs (zarr 2)
+    # or zarr.json (zarr 3) file
     while dataset_comps_index < len(dataset_comps):
         container_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         container_path = f'{data_path}/{container_subpath}'
         if (os.path.exists(f'{container_path}/.zattrs') or
-            os.path.exists(f'{container_path}/attributes.json')):
+            os.path.exists(f'{container_path}/zarr.json')):
             break
         dataset_comps_index = dataset_comps_index + 1
 
@@ -815,11 +926,26 @@ def _adjust_data_paths(data_path, data_subpath, data_store_name):
 
 
 def _get_data_store(data_path, data_store_name):
-    """Choose the correct zarr.Store type, N5 or Directory/Zarr"""
-    if data_store_name is None or data_store_name == 'n5':
-        return zarr.N5Store(data_path)
-    else:
-        return zarr.DirectoryStore(data_path, dimension_separator='/')
+    """
+    Return a read-only store for a zarr container on local disk.
+    zarr.open detects the zarr format (2 or 3) from the stored metadata.
+    """
+    return zarr.storage.LocalStore(data_path, read_only=True)
+
+
+def _is_n5(container_path, container_ext, container_type):
+    """Return True if the container looks like an N5 container"""
+    return (container_ext.lower() == '.n5'
+            or container_type == 'n5'
+            or os.path.exists(f'{container_path}/attributes.json'))
+
+
+def _raise_n5_not_supported(container_path):
+    """N5 containers are not supported with zarr-python 3"""
+    message = (f'N5 is not supported in this version of bigstream: {container_path}. '
+               'Convert the data to zarr (version 2 or 3).')
+    logger.error(message)
+    raise ValueError(message)
 
 
 

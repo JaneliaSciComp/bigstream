@@ -105,10 +105,16 @@ def _define_args(local_descriptor):
                              help='Number of cpus allocated to a dask worker')
 
     args_parser.add_argument('--compression', dest='compression',
-                             default='gzip',
+                             default='zstd',
                              type=str,
-                             help='Codec used for zarr arrays. ' +
-                             'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+                             help='Codec used for zarr arrays: raw, gzip, zstd (level 3) or blosc. ' +
+                             'With --output-zarr-format 2 also lz4 and bz2.')
+
+    args_parser.add_argument('--output-zarr-format', dest='output_zarr_format',
+                             default=3,
+                             type=int,
+                             choices=[2, 3],
+                             help='Zarr format of the output arrays: 3 (default) or 2')
 
     args_parser.add_argument('--logging-config', dest='logging_config',
                              type=str,
@@ -141,6 +147,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
                          worker_cpus=0,
                          logging_config=None,
                          compressor=None,
+                         zarr_format=3,
                          verbose=False,
                          ):
     local_steps, local_config = extract_align_pipeline(align_config,
@@ -262,6 +269,7 @@ def _run_local_alignment(reg_args: RegistrationInputs,
             inv_use_root,
             cluster_client,
             compressor,
+            zarr_format,
         )
     finally:
         cluster_client.close()
@@ -295,7 +303,8 @@ def _align_local_data(fix_image: ImageData,
                       inv_pad,
                       inv_use_root,
                       cluster_client,
-                      compressor):
+                      compressor,
+                      zarr_format=3):
     logger.info(f'Align moving data {mov_image} to reference {fix_image} ' +
                 f'using {ut.get_number_of_cores()} cpus')
 
@@ -341,6 +350,7 @@ def _align_local_data(fix_image: ImageData,
             np.float32,
             overwrite=True,
             compressor=compressor,
+            zarr_format=zarr_format,
             parent_attrs=transform_attrs,
             pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
                                                             transform_downsampling),
@@ -398,6 +408,7 @@ def _align_local_data(fix_image: ImageData,
             np.float32,
             overwrite=True,
             compressor=compressor,
+            zarr_format=zarr_format,
             parent_attrs=inv_transform_attrs,
             pixelResolution=calc_full_voxel_resolution_attr(transform_voxel_spacing,
                                                             transform_downsampling),
@@ -453,6 +464,7 @@ def _align_local_data(fix_image: ImageData,
             fix_image.dtype,
             overwrite=False,
             compressor=compressor,
+            zarr_format=zarr_format,
             for_timeindex=align_timeindex,
             for_channel=align_channel,
             parent_attrs=align_attrs,
@@ -494,6 +506,11 @@ def main():
     local_descriptor = CliArgsHelper('local')
     args_parser = _define_args(local_descriptor)
     args = args_parser.parse_args()
+    # fail before any compute if the codec does not fit the zarr format
+    try:
+        io_utility.validate_compression(args.compression, args.output_zarr_format)
+    except ValueError as e:
+        args_parser.error(str(e))
     # prepare logging
     global logger
     logger = configure_logging(args.logging_config, args.verbose)
@@ -531,6 +548,7 @@ def main():
         worker_cpus=args.worker_cpus,
         logging_config=args.logging_config,
         compressor=args.compression,
+        zarr_format=args.output_zarr_format,
         verbose=args.verbose,
     )
 

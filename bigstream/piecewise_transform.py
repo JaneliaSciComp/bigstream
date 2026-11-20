@@ -7,22 +7,23 @@ from ClusterWrap.decorator import cluster
 import zarr
 import bigstream.transform as bs_transform
 from dask.distributed import as_completed
-from pydantic_zarr.v2 import ArraySpec
-from ome_zarr_models.v04.axes import Axis
-from ome_zarr_models.v04.image import Image
+import bigstream.io_utility as io_utility
 
 
 logger = logging.getLogger(__name__)
 
 
+@cluster
 def distributed_apply_transform_to_multiscale_pyramid(
     fix_zarr, mov_zarr,
     fix_spacing, mov_spacing,
     transform_list,
     top_scale_blocksize,
     write_path,
-    scales=None,
-    subpath_prefix=None,
+    scales,
+    subpath_prefix='s',
+    compressor=None,
+    zarr_format=3,
     cluster=None,
     cluster_kwargs={},
     **kwargs,
@@ -62,22 +63,24 @@ def distributed_apply_transform_to_multiscale_pyramid(
     write_path : string (default: None)
         Location on disk that will be the root directory of the pyramid
 
-    scales : str, list of int, or list of tuple of int (default: None)
-        Some presets are available:
-            'to-isotropic-then-exhaustive' : resampled axes anisotropically until
-                voxel spacing is as close to isotropic as possible, then resample
-                axes evenly by factors of 2 until this cannot occur any more.
-                This is what occurs if scales is None.
-        If a list of ints, each int correspond to a downsampling factor. Typically the
-        first element of the list is a 1 to indicate a full resolution scale.
-        If a list of tuple of int then each resample scale can have different factors
-        for each axis.
+    scales : list of int, or list of tuple of int
+        The downsampling factor of each scale level, relative to the fixed image.
+        If a list of ints, each int is the factor for all axes. If a list of
+        tuples, each tuple has one factor per axis. Typically the first element
+        is 1 (or (1, 1, 1)) for a full resolution level.
 
-    subpath_prefix : str (default: None)
-        A prefix for the scale array subpaths. All arrays in the container will have
-        this subpath with an integer appended to the end indicating the scale level.
-        An example is subpath_prefix='/c0/s' which would indicate channel 0 and
-        s for scale level.
+    subpath_prefix : str (default: 's')
+        A prefix for the scale array subpaths. Each array subpath is this prefix
+        with the scale level index appended, e.g. 's0', 's1'. A prefix such as
+        'c0/s' puts the levels in the group 'c0'. The OME-Zarr metadata is
+        written to the group that holds the levels.
+
+    compressor : string (default: None)
+        Compression codec name, see bigstream.io_utility.create_dataset
+
+    zarr_format : int (default: 3)
+        The zarr format of the pyramid, 2 or 3. Zarr 3 gets OME-Zarr 0.5
+        metadata, zarr 2 gets OME-Zarr 0.4 metadata.
 
     cluster : ClusterWrap.cluster object (default: None)
         Only set if you have constructed your own static cluster. The default behavior
@@ -96,72 +99,75 @@ def distributed_apply_transform_to_multiscale_pyramid(
 
     Returns
     -------
-    pyramid : zarr.hierarchy.Group
+    pyramid : zarr.Group
         The root group of the pyramid
     """
 
     # extract fix reference parameters
     if not isinstance(fix_zarr, tuple):
         fix_zarr = fix_zarr.shape + (fix_zarr.dtype,)
+    fix_shape, dtype = fix_zarr[:-1], fix_zarr[-1]
+    ndim = len(fix_shape)
 
-    # determine scales
-    if scales is None: scales = 'to-isotropic-then-exhaustive'
-    if isinstance(scales, str):
-        if scales == 'to-isotropic-then-exhaustive':
-            # TODO calculate scale levels
-            pass
+    # scale levels must be given explicitly
+    if scales is None or isinstance(scales, str) or len(scales) == 0:
+        raise ValueError('scales must be a list of downsampling factors, '
+                         'e.g. [(1, 1, 1), (2, 2, 2)]')
+    scales = [np.array((s,) * ndim if np.isscalar(s) else s, dtype=float)
+              for s in scales]
 
-    ### create zarr container for all scales ###
-    # contant axis label for all scales
-    axes = [
-        Axis(name='z', type='space', unit='micrometer'),
-        Axis(name='y', type='space', unit='micrometer'),
-        Axis(name='x', type='space', unit='micrometer'),
-    ]
-
-    # determine array specs, dataset paths, translation and spacings for all scales
-    array_specs, subpaths, translations, spacings, blocksizes = [], [], [], [], []
+    # shape, chunk size, subpath and voxel spacing of each scale level
+    levels = []
     for iii, scale in enumerate(scales):
-        shape = tuple(round(x / y) for x, y in zip(fix_zarr[:-1], scale))
+        levels.append({
+            'shape': tuple(int(round(x / y)) for x, y in zip(fix_shape, scale)),
+            'blocksize': tuple(max(2, int(round(x / y)))
+                               for x, y in zip(top_scale_blocksize, scale)),
+            'subpath': f'{subpath_prefix}{iii}',
+            'spacing': np.array(fix_spacing) * scale,
+        })
 
-        blocksize = tuple(max(2, round(x / y)) for x, y in zip(top_scale_blocksize, scale))
-        blocksizes.append(blocksize)
+    # create one array per level
+    for level in levels:
+        level['array'] = io_utility.create_dataset(
+            write_path, level['subpath'], level['shape'], level['blocksize'], dtype,
+            overwrite=True, compressor=compressor, zarr_format=zarr_format,
+        )
 
-        array_specs.append(ArraySpec(shape=shape, chunks=blocksizes[-1], dtype=fix_zarr[-1]))
-        subpaths.append(f'{subpath_prefix}{iii}')
-        translations.append(spacings[-1] * 0.5 if spacings else (0,)*len(shape))
-        spacings.append(fix_spacing * scale)
+    # OME-Zarr metadata for the group that holds the levels.
+    # The warp samples voxel j of each level at j * spacing, so the
+    # translation is 0 for every level and is not written.
+    group_path = os.path.dirname(levels[0]['subpath'].strip('/'))
+    multiscales_attrs = {'multiscales': [{
+        'version': '0.4',
+        'name': os.path.basename(os.path.normpath(write_path)),
+        'axes': [{'name': n, 'type': 'space', 'unit': 'micrometer'}
+                 for n in 'zyx'[-ndim:]],
+        'datasets': [{
+            'path': os.path.basename(level['subpath'].strip('/')),
+            'coordinateTransformations': [
+                {'type': 'scale', 'scale': [float(x) for x in level['spacing']]}],
+        } for level in levels],
+    }]}
+    if zarr_format == 3:
+        multiscales_attrs = io_utility._to_ome_zarr_05(multiscales_attrs)
+    pyramid = zarr.open_group(write_path, mode='r+')
+    group = pyramid[group_path] if group_path else pyramid
+    group.attrs.update(multiscales_attrs)
 
-    # generate the container and write it to disk
-    pyramid = Image.new(
-        array_specs=array_specs,
-        paths=subpaths,
-        axes=axes,
-        translations=translations,
-        scales=spacings,
-        name='/',
-        metadata={},
-        multiscale_type='/',
-    )
-    store = zarr.DirectoryStore(path=write_path)
-    pyramid.to_zarr(store=store, path='/')
-    pyramid = zarr.open(write_path, 'r+')
-
-    ### Loop over scales and resample for each one ###
-    cluster_type = cluster_kwargs['cluster_type']
-    for array_spec, subpath, spacing, blocksize in zip(array_specs, subpaths, spacings, blocksizes):
+    # resample each level, all levels on the same cluster
+    for level in levels:
         distributed_apply_transform(
-            array_spec.shape + (fix_zarr[-1],),
+            level['shape'] + (dtype,),
             mov_zarr,
-            spacing,
+            level['spacing'],
             mov_spacing,
             transform_list=transform_list,
-            blocksize=blocksize,
-            write_path=pyramid[subpath],
-            cluster_kwargs=cluster_kwargs,
+            blocksize=level['blocksize'],
+            write_path=level['array'],
+            cluster=cluster,
             **kwargs,
         )
-        cluster_kwargs['cluster_type'] = cluster_type
     return pyramid
 
 
@@ -280,7 +286,7 @@ def distributed_apply_transform(
             fix_zarr[-1],
             array_path=dataset_path,
         )
-    if isinstance(write_path, zarr.core.Array):
+    if isinstance(write_path, zarr.Array):
         output_zarr = write_path
 
     # ensure transform spacing is set explicitly

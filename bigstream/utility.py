@@ -5,7 +5,8 @@ import psutil
 import SimpleITK as sitk
 import zarr
 
-from zarr import blosc
+from numcodecs import blosc
+from bigstream.io_utility import validate_shard_size
 
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,8 @@ def create_zarr(
     array_path=None,
     multithreaded=False,
     client=None,
+    zarr_format=3,
+    shard_size=None,
 ):
     """
     Create a new zarr array on disk
@@ -142,28 +145,38 @@ def create_zarr(
     array_path : path within the zarr array
         Array within the zarr store to store the data
 
+    multithreaded : bool (default: False)
+        If True, blosc compression uses multiple threads
+
+    zarr_format : int (default: 3)
+        The zarr format of the new array, 2 or 3
+
+    shard_size : tuple of ints (default: None)
+        The shard shape (zarr 3). For now it must be None or equal to chunks;
+        see bigstream.io_utility.validate_shard_size.
+
     Returns
     -------
     zarr_array : zarr array
         Reference to the newly created zarr array on disk
     """
 
-    synchronizer = None
+    validate_shard_size(shard_size, chunks)
     if multithreaded:
         blosc.use_threads = True
-        synchronizer = zarr.ThreadSynchronizer()
     zarr_disk = zarr.open(
-        path, 'a',
+        store=path,
+        mode='a',
         shape=shape,
         chunks=chunks,
         dtype=dtype,
         path=array_path,
-        synchronizer=synchronizer,
+        zarr_format=zarr_format,
     )
     return zarr_disk
 
 
-def numpy_to_zarr(array, chunks, path):
+def numpy_to_zarr(array, chunks, path, zarr_format=3):
     """
     Convert a numpy array to a zarr array on disk
 
@@ -178,6 +191,9 @@ def numpy_to_zarr(array, chunks, path):
     path : string
         On disk location to create the zarr array
 
+    zarr_format : int (default: 3)
+        The zarr format of the new array, 2 or 3
+
     Returns
     -------
     zarr_array : zarr array
@@ -185,7 +201,8 @@ def numpy_to_zarr(array, chunks, path):
     """
 
     if not isinstance(array, zarr.Array):
-        zarr_disk = create_zarr(path, array.shape, chunks, array.dtype)
+        zarr_disk = create_zarr(path, array.shape, chunks, array.dtype,
+                                zarr_format=zarr_format)
         zarr_disk[...] = array
         return zarr_disk
     else:

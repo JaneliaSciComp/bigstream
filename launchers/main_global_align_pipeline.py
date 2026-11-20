@@ -36,10 +36,16 @@ def _define_args(args_descriptor):
                              help='Do not recompute global transform if found')
 
     args_parser.add_argument('--compression', dest='compression',
-                             default='gzip',
+                             default='zstd',
                              type=str,
-                             help='Codec used for zarr arrays. ' +
-                             'Valid values are: raw,lz4,gzip,bz2,blosc,zstd')
+                             help='Codec used for zarr arrays: raw, gzip, zstd (level 3) or blosc. ' +
+                             'With --output-zarr-format 2 also lz4 and bz2.')
+
+    args_parser.add_argument('--output-zarr-format', dest='output_zarr_format',
+                             default=3,
+                             type=int,
+                             choices=[2, 3],
+                             help='Zarr format of the output arrays: 3 (default) or 2')
 
     args_parser.add_argument('--cpus', dest='cpus',
                              type=int, default=0,
@@ -56,7 +62,8 @@ def _define_args(args_descriptor):
     return args_parser
 
 
-def _run_global_align(regArgs:RegistrationInputs, align_config, compressor):
+def _run_global_align(regArgs:RegistrationInputs, align_config, compressor,
+                      zarr_format=3):
     global_steps, _ = extract_align_pipeline(align_config,
                                              'global_align',
                                              regArgs.registration_steps)
@@ -82,6 +89,7 @@ def _run_global_align(regArgs:RegistrationInputs, align_config, compressor):
             mov.voxel_spacing,
             mov.voxel_downsampling,
             compressor,
+            zarr_format,
         )
     else:
         logger.info('Skip global alignment - both fix and moving image are needed')
@@ -130,7 +138,8 @@ def _align_global_data(fix_image, fix_mask,
     return affine, aligned
 
 
-def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor):
+def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor,
+                            zarr_format=3):
     (fix_image, _, mov_image, _) = get_input_images(reg_args)
     if fix_image.has_data() and mov_image.has_data():
         fix_image.read_image()
@@ -150,6 +159,7 @@ def _apply_global_transform(reg_args:RegistrationInputs, affine, compressor):
             mov_image.voxel_spacing,
             mov_image.voxel_downsampling,
             compressor,
+            zarr_format,
         )
     else:
         # both fix and mov volume must be valid
@@ -186,7 +196,8 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          coordinateTransformations,
                          voxel_resolution,
                          downsampling,
-                         compressor):
+                         compressor,
+                         zarr_format=3):
     align_path = reg_args.align_path()
     if align_path:
         align_attrs = io_utility.prepare_parent_group_attrs(
@@ -230,6 +241,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             data=aligned_array,
             overwrite=False,
             compressor=compressor,
+            zarr_format=zarr_format,
             for_timeindex=reg_args.align_timeindex,
             for_channel=reg_args.align_channel,
             parent_attrs=align_attrs,
@@ -246,6 +258,11 @@ def main():
     global_descriptor = CliArgsHelper('global')
     args_parser = _define_args(global_descriptor)
     args = args_parser.parse_args()
+    # fail before any compute if the codec does not fit the zarr format
+    try:
+        io_utility.validate_compression(args.compression, args.output_zarr_format)
+    except ValueError as e:
+        args_parser.error(str(e))
     # prepare logging
     global logger
     logger = configure_logging(args.logging_config, args.verbose)
@@ -267,10 +284,12 @@ def main():
 
     if global_transform is None:
         # no global transform found -> calculate it and then apply it
-        _run_global_align(reg_inputs, args.align_config, args.compression)
+        _run_global_align(reg_inputs, args.align_config, args.compression,
+                          zarr_format=args.output_zarr_format)
     else:
         # global transform found -> just apply it
-        _apply_global_transform(reg_inputs, global_transform, args.compression)
+        _apply_global_transform(reg_inputs, global_transform, args.compression,
+                                zarr_format=args.output_zarr_format)
 
 
 if __name__ == '__main__':

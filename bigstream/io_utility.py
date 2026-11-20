@@ -247,6 +247,8 @@ def _update_dataset_attrs(root_container, dataset,
         parent_container = root_container
 
     # write the parent (group) metadata and the dataset metadata
+    if dataset.metadata.zarr_format == 3:
+        parent_attrs = _to_ome_zarr_05(parent_attrs)
     parent_container.attrs.update(parent_attrs)
     dataset.attrs.update(dataset_attrs)
 

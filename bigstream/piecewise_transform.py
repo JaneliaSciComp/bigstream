@@ -280,7 +280,7 @@ def distributed_apply_transform(
             fix_zarr[-1],
             array_path=dataset_path,
         )
-    if isinstance(write_path, zarr.core.Array):
+    if isinstance(write_path, zarr.Array):
         output_zarr = write_path
 
     # ensure transform spacing is set explicitly

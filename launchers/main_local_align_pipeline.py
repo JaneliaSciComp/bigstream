@@ -548,6 +548,7 @@ def main():
         worker_cpus=args.worker_cpus,
         logging_config=args.logging_config,
         compressor=args.compression,
+        zarr_format=args.output_zarr_format,
         verbose=args.verbose,
     )
 

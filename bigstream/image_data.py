@@ -53,8 +53,12 @@ class ImageData:
             )
             imgdtype = imgarray.dtype
             if convert_to_little_endian and imgdtype.byteorder == '>':
-                # Bigstream algorithms do not support big-endian data
-                self.image_ndarray = imgarray.byteswap().view(imgdtype.newbyteorder('<'))
+                # Bigstream algorithms do not support big-endian data.
+                # Read into memory (the file is not changed), swap the bytes
+                # in place to avoid a second copy, then relabel as little-endian
+                data = np.asarray(imgarray[...])
+                data.byteswap(inplace=True)
+                self.image_ndarray = data.view(imgdtype.newbyteorder('<'))
             else:
                 self.image_ndarray = imgarray
 

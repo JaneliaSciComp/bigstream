@@ -258,6 +258,11 @@ def main():
     global_descriptor = CliArgsHelper('global')
     args_parser = _define_args(global_descriptor)
     args = args_parser.parse_args()
+    # fail before any compute if the codec does not fit the zarr format
+    try:
+        io_utility.validate_compression(args.compression, args.output_zarr_format)
+    except ValueError as e:
+        args_parser.error(str(e))
     # prepare logging
     global logger
     logger = configure_logging(args.logging_config, args.verbose)

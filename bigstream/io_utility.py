@@ -98,7 +98,9 @@ def create_dataset(
         path_comps = os.path.splitext(container_path)
         container_ext = path_comps[1]
 
-        # create the zarr store
+        # N5 is not supported; all other containers are zarr
+        if _is_n5(container_path, container_ext, None):
+            _raise_n5_not_supported(container_path)
         validate_compression(compressor, zarr_format)
         store = zarr.storage.LocalStore(real_container_path)
 

@@ -251,6 +251,21 @@ def _update_dataset_attrs(root_container, dataset,
     dataset.attrs.update(dataset_attrs)
 
 
+def _to_ome_zarr_05(attrs):
+    """
+    Move OME-Zarr 0.4 'multiscales' metadata under the 'ome' key,
+    as OME-Zarr 0.5 (the OME-Zarr version for zarr 3) requires.
+    In 0.5 the version is set once in 'ome', not in each multiscale.
+    """
+    if not attrs or 'multiscales' not in attrs:
+        return attrs
+    multiscales = [{k: v for k, v in ms.items() if k != 'version'}
+                   for ms in attrs['multiscales']]
+    ome_attrs = {k: v for k, v in attrs.items() if k != 'multiscales'}
+    ome_attrs['ome'] = {'version': '0.5', 'multiscales': multiscales}
+    return ome_attrs
+
+
 # compression codecs that the zarr 3 specification defines
 ZARR3_COMPRESSIONS = ('raw', 'gzip', 'zstd', 'blosc')
 

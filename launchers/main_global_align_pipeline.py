@@ -62,7 +62,8 @@ def _define_args(args_descriptor):
     return args_parser
 
 
-def _run_global_align(regArgs:RegistrationInputs, align_config, compressor):
+def _run_global_align(regArgs:RegistrationInputs, align_config, compressor,
+                      zarr_format=3):
     global_steps, _ = extract_align_pipeline(align_config,
                                              'global_align',
                                              regArgs.registration_steps)
@@ -88,6 +89,7 @@ def _run_global_align(regArgs:RegistrationInputs, align_config, compressor):
             mov.voxel_spacing,
             mov.voxel_downsampling,
             compressor,
+            zarr_format,
         )
     else:
         logger.info('Skip global alignment - both fix and moving image are needed')

@@ -250,6 +250,24 @@ def validate_compression(compressor, zarr_format):
             f'Use one of {", ".join(ZARR3_COMPRESSIONS)}, or choose zarr format 2.')
 
 
+def _get_compressors(compressor, zarr_format):
+    """Return the value for the 'compressors' argument of zarr create_array"""
+    if compressor is None or compressor.lower() == 'raw':
+        return None
+    name = compressor.lower()
+    if zarr_format == 3:
+        zarr3_codecs = {
+            'gzip': zarr.codecs.GzipCodec,
+            'zstd': lambda: zarr.codecs.ZstdCodec(level=3),
+            'blosc': zarr.codecs.BloscCodec,
+        }
+        return (zarr3_codecs[name](),)
+    config = {'id': name}
+    if name == 'zstd':
+        config['level'] = 3
+    return codecs.get_codec(config)
+
+
 def get_voxel_spacing(attrs: dict):
     """
     Parse an attributes dictionary and return voxel spacing.

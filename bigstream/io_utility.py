@@ -571,7 +571,7 @@ def _open_zarr(data_path, data_subpath, data_store_name=None,
         data_container_attrs = _get_group_attrs(data_container)
 
         # if ome-zarr parse appropriately, otherwise apply subpath and block_coords and return
-        if _is_ome_zarr(data_container_attrs):
+        if _has_ome_metadata(data_container, data_container_attrs, zarr_subpath):
             return _open_ome_zarr(data_container, zarr_subpath,
                                   data_timeindex=data_timeindex,
                                   data_channels=data_channels,

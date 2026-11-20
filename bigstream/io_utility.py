@@ -615,6 +615,18 @@ def _is_ome_zarr(data_container_attrs: dict | None) -> bool:
     return bioformats_layout == 3 or not (multiscales == [])
 
 
+def _has_ome_metadata(data_container, data_container_attrs, data_subpath) -> bool:
+    """
+    True if the container root, or a group along data_subpath, has OME metadata.
+    zarr-python 3 writes a metadata file for every group, so the container root
+    can be a plain group with the OME group below it.
+    """
+    if _is_ome_zarr(data_container_attrs):
+        return True
+    multiscales_group, _, _ = _find_ome_multiscales(data_container, data_subpath)
+    return multiscales_group is not None
+
+
 def _find_ome_multiscales(data_container, data_subpath):
     logger.info(f'Find OME multiscales group within {data_subpath}')
     dataset_subpath_arg = data_subpath if data_subpath is not None else ''

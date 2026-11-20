@@ -232,6 +232,24 @@ def _update_dataset_attrs(root_container, dataset,
     dataset.attrs.update(dataset_attrs)
 
 
+# compression codecs that the zarr 3 specification defines
+ZARR3_COMPRESSIONS = ('raw', 'gzip', 'zstd', 'blosc')
+
+
+def validate_compression(compressor, zarr_format):
+    """
+    Raise a ValueError if the compressor cannot be used with zarr_format.
+    Call it before long computations, so a bad choice fails at once.
+    """
+    if zarr_format not in (2, 3):
+        raise ValueError(f'zarr_format must be 2 or 3, not {zarr_format}')
+    if (zarr_format == 3 and compressor is not None
+            and compressor.lower() not in ZARR3_COMPRESSIONS):
+        raise ValueError(
+            f'{compressor} is not a standard zarr 3 codec. '
+            f'Use one of {", ".join(ZARR3_COMPRESSIONS)}, or choose zarr format 2.')
+
+
 def get_voxel_spacing(attrs: dict):
     """
     Parse an attributes dictionary and return voxel spacing.

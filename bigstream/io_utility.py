@@ -624,7 +624,7 @@ def _find_ome_multiscales(data_container, data_subpath):
     while dataset_comps_index < len(dataset_comps):
         group_subpath = '/'.join(dataset_comps[0:dataset_comps_index])
         dataset_item = data_container[group_subpath]
-        dataset_item_attrs = dataset_item.attrs.asdict()
+        dataset_item_attrs = _get_group_attrs(dataset_item)
         if dataset_item_attrs.get('multiscales', []) == []:
             dataset_comps_index = dataset_comps_index + 1
         else:
@@ -632,7 +632,7 @@ def _find_ome_multiscales(data_container, data_subpath):
             # found a group that has attributes which contain multiscales list
             return dataset_item, '/'.join(dataset_comps[dataset_comps_index:]), dataset_item_attrs
 
-    data_container_attrs = data_container.attrs.asdict()
+    data_container_attrs = _get_group_attrs(data_container)
     if data_container_attrs.get('multiscales', []) == []:
         return None, None, {}
     else:

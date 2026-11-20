@@ -172,6 +172,7 @@ def _run_compute_inverse(args):
         local_deform_field.dtype,
         overwrite=True,
         compressor=args.compression,
+        zarr_format=args.output_zarr_format,
         parent_attrs=inv_transform_attrs,
         pixelResolution=calc_full_voxel_resolution_attr(local_deform_field.voxel_spacing,
                                                         local_deform_field.voxel_downsampling),

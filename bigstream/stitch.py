@@ -5,7 +5,7 @@ from bigstream.align import affine_align
 from bigstream.transform import apply_transform
 from scipy.ndimage import zoom
 import zarr
-from zarr import blosc
+from numcodecs import blosc
 from aicsimageio.readers import CziReader
 from xml.etree import ElementTree
 from itertools import product

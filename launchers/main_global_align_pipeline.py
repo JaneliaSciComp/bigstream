@@ -41,6 +41,12 @@ def _define_args(args_descriptor):
                              help='Codec used for zarr arrays: raw, gzip, zstd (level 3) or blosc. ' +
                              'With --output-zarr-format 2 also lz4 and bz2.')
 
+    args_parser.add_argument('--output-zarr-format', dest='output_zarr_format',
+                             default=3,
+                             type=int,
+                             choices=[2, 3],
+                             help='Zarr format of the output arrays: 3 (default) or 2')
+
     args_parser.add_argument('--cpus', dest='cpus',
                              type=int, default=0,
                              help='Number of cpus allocated')

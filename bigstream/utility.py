@@ -169,7 +169,7 @@ def create_zarr(
     return zarr_disk
 
 
-def numpy_to_zarr(array, chunks, path):
+def numpy_to_zarr(array, chunks, path, zarr_format=3):
     """
     Convert a numpy array to a zarr array on disk
 
@@ -184,6 +184,9 @@ def numpy_to_zarr(array, chunks, path):
     path : string
         On disk location to create the zarr array
 
+    zarr_format : int (default: 3)
+        The zarr format of the new array, 2 or 3
+
     Returns
     -------
     zarr_array : zarr array
@@ -191,7 +194,8 @@ def numpy_to_zarr(array, chunks, path):
     """
 
     if not isinstance(array, zarr.Array):
-        zarr_disk = create_zarr(path, array.shape, chunks, array.dtype)
+        zarr_disk = create_zarr(path, array.shape, chunks, array.dtype,
+                                zarr_format=zarr_format)
         zarr_disk[...] = array
         return zarr_disk
     else:

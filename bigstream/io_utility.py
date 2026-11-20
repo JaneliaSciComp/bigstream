@@ -822,6 +822,13 @@ def _get_data_store(data_path, data_store_name):
         return zarr.DirectoryStore(data_path, dimension_separator='/')
 
 
+def _is_n5(container_path, container_ext, container_type):
+    """Return True if the container looks like an N5 container"""
+    return (container_ext.lower() == '.n5'
+            or container_type == 'n5'
+            or os.path.exists(f'{container_path}/attributes.json'))
+
+
 
 def _read_tiff(input_path, block_coords=None):
     "Return tiff data as zarr array, slice at block_coords, include metadata"

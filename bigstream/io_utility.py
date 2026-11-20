@@ -282,7 +282,7 @@ def open(container_path, subpath,
          data_timeindex=None, data_channels=None,
          block_coords=None, container_type=None):
     """
-    A generalized open function that supports nrrd, tiff, npy, n5, and zarr
+    A generalized open function that supports nrrd, tiff, npy, and zarr
     containers. Maps to the appropriate format specific open function.
 
     Parameters
@@ -307,7 +307,8 @@ def open(container_path, subpath,
 
     container_type : string (default: None)
         Explicit identifier of container type. Options include:
-        'nrrd', 'tif', 'npy', 'n5', and 'zarr'.
+        'nrrd', 'tif', 'npy', and 'zarr'. 'n5' raises a ValueError,
+        because N5 is not supported.
         If None, we attempt to infer the container type from the container_path
         extension, which is not always reliable.
 
@@ -336,15 +337,8 @@ def open(container_path, subpath,
         im = np.load(real_container_path)
         bim = im[block_coords] if block_coords is not None else im
         return bim, {}
-    elif (container_ext == '.n5'
-          or os.path.exists(f'{real_container_path}/attributes.json')
-          or container_type == 'n5'):
-        logger.info(f'Open N5 {container_path} ({real_container_path})')
-        return _open_zarr(real_container_path, subpath,
-                          data_timeindex=data_timeindex,
-                          data_channels=data_channels,
-                          data_store_name='n5',
-                          block_coords=block_coords)
+    elif _is_n5(container_path, container_ext, container_type):
+        _raise_n5_not_supported(container_path)
     elif container_ext == '.zarr' or container_type == 'zarr':
         logger.info(f'Open Zarr {container_path} ({real_container_path})')
         return _open_zarr(real_container_path, subpath,

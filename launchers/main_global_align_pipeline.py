@@ -192,7 +192,8 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
                          coordinateTransformations,
                          voxel_resolution,
                          downsampling,
-                         compressor):
+                         compressor,
+                         zarr_format=3):
     align_path = reg_args.align_path()
     if align_path:
         align_attrs = io_utility.prepare_parent_group_attrs(
@@ -236,6 +237,7 @@ def _save_aligned_volume(reg_args:RegistrationInputs,
             data=aligned_array,
             overwrite=False,
             compressor=compressor,
+            zarr_format=zarr_format,
             for_timeindex=reg_args.align_timeindex,
             for_channel=reg_args.align_channel,
             parent_attrs=align_attrs,

@@ -121,6 +121,7 @@ def create_zarr(
     array_path=None,
     multithreaded=False,
     client=None,
+    zarr_format=3,
 ):
     """
     Create a new zarr array on disk
@@ -145,6 +146,9 @@ def create_zarr(
     multithreaded : bool (default: False)
         If True, blosc compression uses multiple threads
 
+    zarr_format : int (default: 3)
+        The zarr format of the new array, 2 or 3
+
     Returns
     -------
     zarr_array : zarr array
@@ -160,6 +164,7 @@ def create_zarr(
         chunks=chunks,
         dtype=dtype,
         path=array_path,
+        zarr_format=zarr_format,
     )
     return zarr_disk
 
